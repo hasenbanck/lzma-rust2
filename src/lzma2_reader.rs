@@ -61,7 +61,7 @@ impl<R> LZMA2Reader<R> {
     }
 }
 
-impl<R: Read + ByteReader> LZMA2Reader<R> {
+impl<R: Read> LZMA2Reader<R> {
     /// Create a new LZMA2 reader.
     /// `inner` is the reader to read compressed data from.
     /// `dict_size` is the dictionary size in bytes.

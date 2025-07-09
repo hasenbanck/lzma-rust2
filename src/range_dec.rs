@@ -108,7 +108,6 @@ impl<R: ByteReader> RangeDecoder<R> {
     }
 }
 
-// TODO: NHA This really looks like a BufRead
 pub(crate) struct RangeDecoderBuffer {
     buf: Vec<u8>,
     pos: usize,
@@ -163,34 +162,38 @@ impl ByteReader for RangeDecoderBuffer {
     }
 
     fn next_u16_le(&mut self) -> std::io::Result<u16> {
-        unimplemented!()
+        let b = u16::from_le_bytes(self.buf[self.pos..self.pos + 2].try_into().unwrap());
+        self.pos += 2;
+        Ok(b)
     }
 
     fn next_u16_be(&mut self) -> std::io::Result<u16> {
-        unimplemented!()
+        let b = u16::from_be_bytes(self.buf[self.pos..self.pos + 2].try_into().unwrap());
+        self.pos += 2;
+        Ok(b)
     }
 
     fn next_u32_le(&mut self) -> std::io::Result<u32> {
-        unimplemented!()
+        let b = u32::from_le_bytes(self.buf[self.pos..self.pos + 4].try_into().unwrap());
+        self.pos += 4;
+        Ok(b)
     }
 
     fn next_u32_be(&mut self) -> std::io::Result<u32> {
-        let buf = [
-            self.buf[self.pos],
-            self.buf[self.pos + 1],
-            self.buf[self.pos + 2],
-            self.buf[self.pos + 3],
-        ];
-        let b = u32::from_be_bytes(buf);
+        let b = u32::from_be_bytes(self.buf[self.pos..self.pos + 4].try_into().unwrap());
         self.pos += 4;
         Ok(b)
     }
 
     fn next_u64_le(&mut self) -> std::io::Result<u64> {
-        unimplemented!()
+        let b = u64::from_le_bytes(self.buf[self.pos..self.pos + 8].try_into().unwrap());
+        self.pos += 8;
+        Ok(b)
     }
 
     fn next_u64_be(&mut self) -> std::io::Result<u64> {
-        unimplemented!()
+        let b = u64::from_be_bytes(self.buf[self.pos..self.pos + 8].try_into().unwrap());
+        self.pos += 8;
+        Ok(b)
     }
 }
