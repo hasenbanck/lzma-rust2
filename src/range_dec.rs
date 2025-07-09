@@ -20,14 +20,14 @@ impl RangeDecoder<RangeDecoderBuffer> {
 
 impl<R: ByteReader> RangeDecoder<R> {
     pub(crate) fn new_stream(mut inner: R) -> std::io::Result<Self> {
-        let b = inner.next_u8()?;
+        let b = inner.read_u8()?;
         if b != 0x00 {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
                 "range decoder first byte is 0",
             ));
         }
-        let code = inner.next_u32_be()?;
+        let code = inner.read_u32_be()?;
         Ok(Self {
             inner,
             code,
@@ -43,7 +43,7 @@ impl<R: ByteReader> RangeDecoder<R> {
 impl<R: ByteReader> RangeDecoder<R> {
     pub(crate) fn normalize(&mut self) -> std::io::Result<()> {
         if self.range < 0x0100_0000 {
-            let b = self.inner.next_u8()? as u32;
+            let b = self.inner.read_u8()? as u32;
             let code = ((self.code) << SHIFT_BITS) | b;
             self.code = code;
             let range = (self.range) << SHIFT_BITS;
@@ -122,14 +122,14 @@ impl RangeDecoder<RangeDecoderBuffer> {
             ));
         }
 
-        let b = reader.next_u8()?;
+        let b = reader.read_u8()?;
         if b != 0x00 {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
                 "first byte is 0",
             ));
         }
-        self.code = reader.next_u32_be()?;
+        self.code = reader.read_u32_be()?;
 
         self.range = 0xFFFFFFFFu32;
         let len = len - 5;
@@ -155,43 +155,43 @@ impl RangeDecoderBuffer {
 }
 
 impl ByteReader for RangeDecoderBuffer {
-    fn next_u8(&mut self) -> std::io::Result<u8> {
+    fn read_u8(&mut self) -> std::io::Result<u8> {
         let b = self.buf[self.pos];
         self.pos += 1;
         Ok(b)
     }
 
-    fn next_u16_le(&mut self) -> std::io::Result<u16> {
+    fn read_u16_le(&mut self) -> std::io::Result<u16> {
         let b = u16::from_le_bytes(self.buf[self.pos..self.pos + 2].try_into().unwrap());
         self.pos += 2;
         Ok(b)
     }
 
-    fn next_u16_be(&mut self) -> std::io::Result<u16> {
+    fn read_u16_be(&mut self) -> std::io::Result<u16> {
         let b = u16::from_be_bytes(self.buf[self.pos..self.pos + 2].try_into().unwrap());
         self.pos += 2;
         Ok(b)
     }
 
-    fn next_u32_le(&mut self) -> std::io::Result<u32> {
+    fn read_u32_le(&mut self) -> std::io::Result<u32> {
         let b = u32::from_le_bytes(self.buf[self.pos..self.pos + 4].try_into().unwrap());
         self.pos += 4;
         Ok(b)
     }
 
-    fn next_u32_be(&mut self) -> std::io::Result<u32> {
+    fn read_u32_be(&mut self) -> std::io::Result<u32> {
         let b = u32::from_be_bytes(self.buf[self.pos..self.pos + 4].try_into().unwrap());
         self.pos += 4;
         Ok(b)
     }
 
-    fn next_u64_le(&mut self) -> std::io::Result<u64> {
+    fn read_u64_le(&mut self) -> std::io::Result<u64> {
         let b = u64::from_le_bytes(self.buf[self.pos..self.pos + 8].try_into().unwrap());
         self.pos += 8;
         Ok(b)
     }
 
-    fn next_u64_be(&mut self) -> std::io::Result<u64> {
+    fn read_u64_be(&mut self) -> std::io::Result<u64> {
         let b = u64::from_be_bytes(self.buf[self.pos..self.pos + 8].try_into().unwrap());
         self.pos += 8;
         Ok(b)
