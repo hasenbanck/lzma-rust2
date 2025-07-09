@@ -18,16 +18,16 @@ const PRICES: &[u32] = &[
     0x2, 0x2, 0x2, 0x1, 0x1, 0x1, 0x1, 0x1,
 ];
 
-pub struct RangeEncoder<W> {
+pub(crate) struct RangeEncoder<W> {
     low: u64,
     range: u32,
     cache_size: u32,
     cache: u8,
-    pub(crate) inner: W,
+    inner: W,
 }
 
 impl<W: Write> RangeEncoder<W> {
-    pub fn new(inner: W) -> Self {
+    pub(crate) fn new(inner: W) -> Self {
         let mut e = Self {
             low: 0,
             range: 0,
@@ -40,18 +40,22 @@ impl<W: Write> RangeEncoder<W> {
     }
 
     #[inline]
-    pub fn inner(&mut self) -> &mut W {
+    pub(crate) fn inner(&mut self) -> &mut W {
         &mut self.inner
     }
 
-    pub fn reset(&mut self) {
+    pub(crate) fn into_inner(self) -> W {
+        self.inner
+    }
+
+    pub(crate) fn reset(&mut self) {
         self.low = 0;
         self.range = 0xFFFFFFFFu32;
         self.cache = 0;
         self.cache_size = 1;
     }
 
-    pub fn finish(&mut self) -> std::io::Result<Option<usize>> {
+    pub(crate) fn finish(&mut self) -> std::io::Result<Option<usize>> {
         for _i in 0..5 {
             self.shift_low()?;
         }
@@ -82,7 +86,12 @@ impl<W: Write> RangeEncoder<W> {
         Ok(())
     }
 
-    pub fn encode_bit(&mut self, probs: &mut [u16], index: usize, bit: u32) -> std::io::Result<()> {
+    pub(crate) fn encode_bit(
+        &mut self,
+        probs: &mut [u16],
+        index: usize,
+        bit: u32,
+    ) -> std::io::Result<()> {
         let prob = &mut probs[index];
         let bound = (self.range >> BIT_MODEL_TOTAL_BITS) * (*prob as u32);
         if bit == 0 {
@@ -100,7 +109,11 @@ impl<W: Write> RangeEncoder<W> {
         Ok(())
     }
 
-    pub fn encode_bit_tree(&mut self, probs: &mut [u16], symbol: u32) -> std::io::Result<()> {
+    pub(crate) fn encode_bit_tree(
+        &mut self,
+        probs: &mut [u16],
+        symbol: u32,
+    ) -> std::io::Result<()> {
         let mut index = 1;
         let mut mask = probs.len() as u32;
         loop {
@@ -119,7 +132,7 @@ impl<W: Write> RangeEncoder<W> {
         Ok(())
     }
 
-    pub fn encode_reverse_bit_tree(
+    pub(crate) fn encode_reverse_bit_tree(
         &mut self,
         probs: &mut [u16],
         symbol: u32,
@@ -138,7 +151,7 @@ impl<W: Write> RangeEncoder<W> {
         Ok(())
     }
 
-    pub fn encode_direct_bits(&mut self, value: u32, mut count: u32) -> std::io::Result<()> {
+    pub(crate) fn encode_direct_bits(&mut self, value: u32, mut count: u32) -> std::io::Result<()> {
         loop {
             self.range >>= 1;
             count -= 1;
@@ -158,12 +171,12 @@ impl<W: Write> RangeEncoder<W> {
 }
 
 impl RangeEncoder<()> {
-    pub fn get_bit_price(prob: u32, bit: i32) -> u32 {
+    pub(crate) fn get_bit_price(prob: u32, bit: i32) -> u32 {
         assert!(bit == 0 || bit == 1);
         let i = (prob ^ ((-bit) as u32 & (BIT_MODEL_TOTAL - 1))) >> MOVE_REDUCING_BITS;
         PRICES[i as usize]
     }
-    pub fn get_bit_tree_price(probs: &mut [u16], symbol: u32) -> u32 {
+    pub(crate) fn get_bit_tree_price(probs: &mut [u16], symbol: u32) -> u32 {
         let mut price = 0;
         let mut symbol = symbol | probs.len() as u32;
         loop {
@@ -176,7 +189,7 @@ impl RangeEncoder<()> {
         }
         price
     }
-    pub fn get_reverse_bit_tree_price(probs: &mut [u16], symbol: u32) -> u32 {
+    pub(crate) fn get_reverse_bit_tree_price(probs: &mut [u16], symbol: u32) -> u32 {
         let mut price = 0;
         let mut index = 1u32;
         let mut symbol = symbol | probs.len() as u32;
@@ -192,51 +205,51 @@ impl RangeEncoder<()> {
         price
     }
 
-    pub fn get_direct_bits_price(count: u32) -> u32 {
+    pub(crate) fn get_direct_bits_price(count: u32) -> u32 {
         count << BIT_PRICE_SHIFT_BITS
     }
 }
 
 impl RangeEncoder<RangeEncoderBuffer> {
-    pub fn write_to<W: Write>(&self, out: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write_to<W: Write>(&self, out: &mut W) -> std::io::Result<()> {
         self.inner.write_to(out)
     }
 
-    pub fn finish_buffer(&mut self) -> std::io::Result<Option<usize>> {
+    pub(crate) fn finish_buffer(&mut self) -> std::io::Result<Option<usize>> {
         self.finish()?;
         Ok(Some(self.inner.pos))
     }
 
-    pub fn new_buffer(buf_size: usize) -> Self {
+    pub(crate) fn new_buffer(buf_size: usize) -> Self {
         Self::new(RangeEncoderBuffer::new(buf_size))
     }
 
-    pub fn reset_buffer(&mut self) {
+    pub(crate) fn reset_buffer(&mut self) {
         self.reset();
         self.inner.pos = 0;
     }
 
     #[inline]
-    pub fn get_pending_size(&self) -> u32 {
+    pub(crate) fn get_pending_size(&self) -> u32 {
         let w = &self.inner;
         w.pos as u32 + self.cache_size + 5 - 1
     }
 }
 
-pub struct RangeEncoderBuffer {
+pub(crate) struct RangeEncoderBuffer {
     buf: Vec<u8>,
     pos: usize,
 }
 
 impl RangeEncoderBuffer {
-    pub fn new(size: usize) -> Self {
+    pub(crate) fn new(size: usize) -> Self {
         Self {
             buf: vec![0; size],
             pos: 0,
         }
     }
 
-    pub fn write_to<W: Write>(&self, out: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write_to<W: Write>(&self, out: &mut W) -> std::io::Result<()> {
         out.write_all(&self.buf[..self.pos])
     }
 }

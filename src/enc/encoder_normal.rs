@@ -5,7 +5,7 @@ use super::{
     MATCH_LEN_MAX, MATCH_LEN_MIN, REPS,
 };
 
-pub struct NormalEncoderMode {
+pub(crate) struct NormalEncoderMode {
     opts: Vec<Optimum>,
     opt_cur: usize,
     opt_end: usize,
@@ -13,9 +13,12 @@ pub struct NormalEncoderMode {
 
 impl NormalEncoderMode {
     const OPTS: u32 = 4096;
-    pub const EXTRA_SIZE_BEFORE: u32 = Self::OPTS;
-    pub const EXTRA_SIZE_AFTER: u32 = Self::OPTS;
-    pub fn get_memory_usage(dict_size: u32, extra_size_before: u32, mf: MFType) -> u32 {
+
+    pub(crate) const EXTRA_SIZE_BEFORE: u32 = Self::OPTS;
+
+    pub(crate) const EXTRA_SIZE_AFTER: u32 = Self::OPTS;
+
+    pub(crate) fn get_memory_usage(dict_size: u32, extra_size_before: u32, mf: MFType) -> u32 {
         LZEncoder::get_memory_usage(
             dict_size,
             extra_size_before.max(Self::EXTRA_SIZE_BEFORE),
@@ -25,7 +28,7 @@ impl NormalEncoderMode {
         ) + Self::OPTS * 64 / 1024
     }
 
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             opts: vec![Optimum::default(); Self::OPTS as usize],
             opt_cur: 0,
@@ -197,7 +200,7 @@ impl NormalEncoderMode {
             if len >= MATCH_LEN_MIN as u32 {
                 next_state.set(self.opts[self.opt_cur].state);
                 next_state.update_literal();
-                let next_pos_state = (pos + 1) & encoder.pos_mask;
+                let next_pos_state = (pos + 1) & encoder.coder.pos_mask;
                 let price = literal_price
                     + encoder.get_long_rep_and_len_price(0, len, &next_state, next_pos_state);
 
@@ -291,7 +294,7 @@ impl NormalEncoderMode {
                 next_state.update_literal();
 
                 // Rep0
-                let next_pos_state = (pos + len as u32 + 1) & encoder.pos_mask;
+                let next_pos_state = (pos + len as u32 + 1) & encoder.coder.pos_mask;
                 price += encoder.get_long_rep_and_len_price(0, len2, &next_state, next_pos_state);
 
                 let i = self.opt_cur + len + 1 + len2 as usize;
@@ -391,7 +394,7 @@ impl NormalEncoderMode {
                 next_state.update_literal();
 
                 // Rep0
-                let next_pos_state = (pos + len + 1) & encoder.pos_mask;
+                let next_pos_state = (pos + len + 1) & encoder.coder.pos_mask;
                 price += encoder.get_long_rep_and_len_price(0, len2, &next_state, next_pos_state);
 
                 let i = self.opt_cur + len as usize + 1 + len2 as usize;
@@ -447,7 +450,7 @@ impl LZMAEncoderTrait for NormalEncoderMode {
         let mut rep_best = 0;
         let mut rep_lens = [0; REPS];
         for rep in 0..REPS {
-            rep_lens[rep] = encoder.lz.get_match_len(encoder.reps[rep], avail) as i32;
+            rep_lens[rep] = encoder.lz.get_match_len(encoder.coder.reps[rep], avail) as i32;
 
             if rep_lens[rep] < MATCH_LEN_MIN as i32 {
                 rep_lens[rep] = 0;
@@ -484,7 +487,7 @@ impl LZMAEncoderTrait for NormalEncoderMode {
         }
 
         let cur_byte = encoder.lz.get_byte_backward(0) as u32;
-        let match_byte = encoder.lz.get_byte_backward(encoder.reps[0] + 1) as u32;
+        let match_byte = encoder.lz.get_byte_backward(encoder.coder.reps[0] + 1) as u32;
 
         // If the match finder found no matches and this byte cannot be
         // encoded as a repeated match (short or long), we must be return
@@ -497,26 +500,26 @@ impl LZMAEncoderTrait for NormalEncoderMode {
         }
 
         let mut pos = encoder.lz.get_pos() as u32;
-        let mut pos_state = pos & encoder.pos_mask;
+        let mut pos_state = pos & encoder.coder.pos_mask;
 
         // Calculate the price of encoding the current byte as a literal.
         {
             let prev_byte = encoder.lz.get_byte_backward(1) as u32;
-            let state = encoder.state;
+            let state = encoder.coder.state;
             let literal_price = encoder
                 .literal_encoder
                 .get_price(encoder, cur_byte, match_byte, prev_byte, pos, &state);
             self.opts[1].set1(literal_price, 0, -1);
         }
 
-        let mut any_match_price = encoder.get_any_match_price(&encoder.state, pos_state);
-        let mut any_rep_price = encoder.get_any_rep_price(any_match_price, &encoder.state);
+        let mut any_match_price = encoder.get_any_match_price(&encoder.coder.state, pos_state);
+        let mut any_rep_price = encoder.get_any_rep_price(any_match_price, &encoder.coder.state);
 
         // If it is possible to encode this byte as a short rep, see if
         // it is cheaper than encoding it as a literal.
         if match_byte == cur_byte {
             let short_rep_price =
-                encoder.get_short_rep_price(any_rep_price, &encoder.state, pos_state);
+                encoder.get_short_rep_price(any_rep_price, &encoder.coder.state, pos_state);
             if short_rep_price < self.opts[1].price {
                 self.opts[1].set1(short_rep_price, 0, 0);
             }
@@ -539,8 +542,8 @@ impl LZMAEncoderTrait for NormalEncoderMode {
         // Initialize the state and reps of this position in opts[].
         // updateOptStateAndReps() will need these to get the new
         // state and reps for the next byte.
-        self.opts[0].state.set(encoder.state);
-        self.opts[0].reps = encoder.reps;
+        self.opts[0].state.set(encoder.coder.state);
+        self.opts[0].reps = encoder.coder.reps;
 
         // Initialize the prices for latter opts that will be used below.
         for i in (MATCH_LEN_MIN..=self.opt_end).rev() {
@@ -552,8 +555,12 @@ impl LZMAEncoderTrait for NormalEncoderMode {
             if rep_len < MATCH_LEN_MIN as i32 {
                 continue;
             }
-            let long_rep_price =
-                encoder.get_long_rep_price(any_rep_price, rep as _, &encoder.state, pos_state);
+            let long_rep_price = encoder.get_long_rep_price(
+                any_rep_price,
+                rep as _,
+                &encoder.coder.state,
+                pos_state,
+            );
             let mut rep_len = rep_len as usize;
             loop {
                 let price = long_rep_price
@@ -575,7 +582,7 @@ impl LZMAEncoderTrait for NormalEncoderMode {
             let mut len = i32::max(rep_lens[0] + 1, MATCH_LEN_MIN as i32);
             if len <= main_len as i32 {
                 let normal_match_price =
-                    encoder.get_normal_match_price(any_match_price, &encoder.state);
+                    encoder.get_normal_match_price(any_match_price, &encoder.coder.state);
 
                 // Set i to the index of the shortest match that is
                 // at least len bytes long.
@@ -625,7 +632,7 @@ impl LZMAEncoderTrait for NormalEncoderMode {
 
             avail -= 1;
             pos += 1;
-            pos_state = pos & encoder.pos_mask;
+            pos_state = pos & encoder.coder.pos_mask;
 
             self.update_opt_state_and_reps();
             any_match_price = self.opts[self.opt_cur].price
@@ -677,6 +684,7 @@ struct Optimum {
 
 impl Optimum {
     const INFINITY_PRICE: u32 = 1 << 30;
+
     fn reset(&mut self) {
         self.price = Self::INFINITY_PRICE;
     }

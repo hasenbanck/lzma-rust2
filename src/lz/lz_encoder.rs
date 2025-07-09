@@ -2,12 +2,12 @@ use std::{io::Write, ops::Deref};
 
 use super::{bt4::BT4, hc4::HC4};
 
-pub trait MatchFind {
+pub(crate) trait MatchFind {
     fn find_matches(&mut self, encoder: &mut LZEncoderData, matches: &mut Matches);
     fn skip(&mut self, encoder: &mut LZEncoderData, len: usize);
 }
 
-pub enum MatchFinders {
+pub(crate) enum MatchFinders {
     HC4(HC4),
     BT4(BT4),
 }
@@ -39,6 +39,7 @@ impl Default for MFType {
         Self::HC4
     }
 }
+
 impl MFType {
     #[inline]
     fn get_memory_usage(self, dict_size: u32) -> u32 {
@@ -49,13 +50,13 @@ impl MFType {
     }
 }
 
-pub struct LZEncoder {
+pub(crate) struct LZEncoder {
     pub(crate) data: LZEncoderData,
     pub(crate) matches: Matches,
     pub(crate) match_finder: MatchFinders,
 }
 
-pub struct LZEncoderData {
+pub(crate) struct LZEncoderData {
     pub(crate) keep_size_before: u32,
     pub(crate) keep_size_after: u32,
     pub(crate) match_len_max: u32,
@@ -69,14 +70,14 @@ pub struct LZEncoderData {
     pub(crate) pending_size: u32,
 }
 
-pub struct Matches {
-    pub len: Vec<u32>,
-    pub dist: Vec<i32>,
-    pub count: u32,
+pub(crate) struct Matches {
+    pub(crate) len: Vec<u32>,
+    pub(crate) dist: Vec<i32>,
+    pub(crate) count: u32,
 }
 
 impl Matches {
-    pub fn new(count_max: usize) -> Self {
+    pub(crate) fn new(count_max: usize) -> Self {
         Self {
             len: vec![0; count_max],
             dist: vec![0; count_max],
@@ -86,7 +87,7 @@ impl Matches {
 }
 
 impl LZEncoder {
-    pub fn get_memory_usage(
+    pub(crate) fn get_memory_usage(
         dict_size: u32,
         extra_size_before: u32,
         extra_size_after: u32,
@@ -101,7 +102,7 @@ impl LZEncoder {
         ) + mf.get_memory_usage(dict_size)
     }
 
-    pub fn new_hc4(
+    pub(crate) fn new_hc4(
         dict_size: u32,
         extra_size_before: u32,
         extra_size_after: u32,
@@ -119,7 +120,7 @@ impl LZEncoder {
         )
     }
 
-    pub fn new_bt4(
+    pub(crate) fn new_bt4(
         dict_size: u32,
         extra_size_before: u32,
         extra_size_after: u32,
@@ -174,7 +175,7 @@ impl LZEncoder {
         }
     }
 
-    pub(super) fn normalize(positions: &mut [i32], norm_offset: i32) {
+    pub(crate) fn normalize(positions: &mut [i32], norm_offset: i32) {
         for p in positions {
             if *p <= norm_offset {
                 *p = 0;
@@ -184,47 +185,47 @@ impl LZEncoder {
         }
     }
 
-    pub fn find_matches(&mut self) {
+    pub(crate) fn find_matches(&mut self) {
         self.match_finder
             .find_matches(&mut self.data, &mut self.matches)
     }
 
-    pub fn matches(&mut self) -> &mut Matches {
+    pub(crate) fn matches(&mut self) -> &mut Matches {
         &mut self.matches
     }
 
-    pub fn skip(&mut self, len: usize) {
+    pub(crate) fn skip(&mut self, len: usize) {
         self.match_finder.skip(&mut self.data, len)
     }
 
-    pub fn set_preset_dict(&mut self, dict_size: u32, preset_dict: &[u8]) {
+    pub(crate) fn set_preset_dict(&mut self, dict_size: u32, preset_dict: &[u8]) {
         self.data
             .set_preset_dict(dict_size, preset_dict, &mut self.match_finder)
     }
 
-    pub fn set_finishing(&mut self) {
+    pub(crate) fn set_finishing(&mut self) {
         self.data.set_finishing(&mut self.match_finder)
     }
 
-    pub fn fill_window(&mut self, input: &[u8]) -> usize {
+    pub(crate) fn fill_window(&mut self, input: &[u8]) -> usize {
         self.data.fill_window(input, &mut self.match_finder)
     }
 
-    pub fn set_flushing(&mut self) {
+    pub(crate) fn set_flushing(&mut self) {
         self.data.set_flushing(&mut self.match_finder)
     }
 
-    pub fn verify_matches(&self) -> bool {
+    pub(crate) fn verify_matches(&self) -> bool {
         self.data.verify_matches(&self.matches)
     }
 }
 
 impl LZEncoderData {
-    pub fn is_started(&self) -> bool {
+    pub(crate) fn is_started(&self) -> bool {
         self.read_pos != -1
     }
 
-    pub(super) fn buf(&mut self) -> &[u8] {
+    pub(crate) fn buf(&mut self) -> &[u8] {
         &self.buf[self.read_pos as usize..]
     }
 
@@ -302,7 +303,7 @@ impl LZEncoderData {
         self.read_pos - already_read_len < self.read_limit
     }
 
-    pub fn copy_uncompressed<W: Write>(
+    pub(crate) fn copy_uncompressed<W: Write>(
         &self,
         out: &mut W,
         backward: i32,
@@ -312,29 +313,29 @@ impl LZEncoderData {
         out.write_all(&self.buf[start..(start + len)])
     }
 
-    pub fn get_avail(&self) -> i32 {
+    pub(crate) fn get_avail(&self) -> i32 {
         assert_ne!(self.read_pos, -1);
         self.write_pos - self.read_pos
     }
 
-    pub fn get_pos(&self) -> i32 {
+    pub(crate) fn get_pos(&self) -> i32 {
         self.read_pos
     }
 
-    pub fn get_byte(&self, forward: i32, backward: i32) -> u8 {
+    pub(crate) fn get_byte(&self, forward: i32, backward: i32) -> u8 {
         let start = self.read_pos + forward - backward;
         self.buf[start as usize]
     }
 
-    pub fn get_byte_backward(&self, backward: i32) -> u8 {
+    pub(crate) fn get_byte_backward(&self, backward: i32) -> u8 {
         self.buf[(self.read_pos - backward) as usize]
     }
 
-    pub fn get_current_byte(&self) -> u8 {
+    pub(crate) fn get_current_byte(&self) -> u8 {
         self.buf[self.read_pos as usize]
     }
 
-    pub fn get_match_len(&self, dist: i32, len_limit: i32) -> usize {
+    pub(crate) fn get_match_len(&self, dist: i32, len_limit: i32) -> usize {
         let back_pos = self.read_pos - dist - 1;
         let mut len = 0;
 
@@ -347,7 +348,7 @@ impl LZEncoderData {
         len as usize
     }
 
-    pub fn get_match_len2(&self, forward: i32, dist: i32, len_limit: i32) -> u32 {
+    pub(crate) fn get_match_len2(&self, forward: i32, dist: i32, len_limit: i32) -> u32 {
         let cur_pos = (self.read_pos + forward) as usize;
         let back_pos = cur_pos - dist as usize - 1;
         let mut len = 0;
@@ -370,7 +371,7 @@ impl LZEncoderData {
         true
     }
 
-    pub(super) fn move_pos(
+    pub(crate) fn move_pos(
         &mut self,
         required_for_flushing: i32,
         required_for_finishing: i32,
@@ -385,6 +386,7 @@ impl LZEncoderData {
         avail
     }
 }
+
 impl Deref for LZEncoder {
     type Target = LZEncoderData;
 

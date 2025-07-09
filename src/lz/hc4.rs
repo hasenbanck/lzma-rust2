@@ -6,7 +6,7 @@ use super::{
     LZEncoderData,
 };
 
-pub struct HC4 {
+pub(crate) struct HC4 {
     hash: Hash234,
     chain: Vec<i32>,
     depth_limit: i32,
@@ -16,11 +16,11 @@ pub struct HC4 {
 }
 
 impl HC4 {
-    pub fn get_mem_usage(dict_size: u32) -> u32 {
+    pub(crate) fn get_mem_usage(dict_size: u32) -> u32 {
         Hash234::get_mem_usage(dict_size) + dict_size / (1024 / 4) + 10
     }
 
-    pub fn new(dict_size: u32, nice_len: u32, depth_limit: i32) -> Self {
+    pub(crate) fn new(dict_size: u32, nice_len: u32, depth_limit: i32) -> Self {
         Self {
             hash: Hash234::new(dict_size),
             chain: vec![0; dict_size as usize + 1],

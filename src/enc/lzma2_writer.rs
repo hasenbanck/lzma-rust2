@@ -29,11 +29,17 @@ impl Default for LZMA2Options {
 
 impl LZMA2Options {
     pub const LC_DEFAULT: u32 = 3;
+
     pub const LP_DEFAULT: u32 = 0;
+
     pub const PB_DEFAULT: u32 = 2;
+
     pub const NICE_LEN_MAX: u32 = 273;
+
     pub const NICE_LEN_MIN: u32 = 8;
+
     pub const DICT_SIZE_DEFAULT: u32 = 8 << 20;
+
     const PRESET_TO_DICT_SIZE: &'static [u32] = &[
         1 << 18,
         1 << 20,
@@ -46,6 +52,7 @@ impl LZMA2Options {
         1 << 25,
         1 << 26,
     ];
+
     const PRESET_TO_DEPTH_LIMIT: &'static [i32] = &[4, 8, 24, 48];
 
     #[allow(clippy::too_many_arguments)]

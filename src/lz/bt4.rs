@@ -1,6 +1,6 @@
 use super::{hash234::Hash234, LZEncoder, MatchFind, Matches};
 
-pub struct BT4 {
+pub(crate) struct BT4 {
     hash: Hash234,
     tree: Vec<i32>,
     depth_limit: i32,
@@ -18,7 +18,7 @@ fn sh_left(i: i32) -> i32 {
 }
 
 impl BT4 {
-    pub fn new(dict_size: u32, nice_len: u32, depth_limit: i32) -> Self {
+    pub(crate) fn new(dict_size: u32, nice_len: u32, depth_limit: i32) -> Self {
         let cyclic_size = dict_size as i32 + 1;
         Self {
             hash: Hash234::new(dict_size),
@@ -34,7 +34,7 @@ impl BT4 {
         }
     }
 
-    pub fn get_mem_usage(dict_size: u32) -> u32 {
+    pub(crate) fn get_mem_usage(dict_size: u32) -> u32 {
         Hash234::get_mem_usage(dict_size) + dict_size / (1024 / 8) + 10
     }
 

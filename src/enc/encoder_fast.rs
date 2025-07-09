@@ -5,13 +5,13 @@ use super::{
 };
 
 #[derive(Default)]
-pub struct FashEncoderMode {}
+pub(crate) struct FastEncoderMode {}
 
-impl FashEncoderMode {
-    pub const EXTRA_SIZE_BEFORE: u32 = 1;
-    pub const EXTRA_SIZE_AFTER: u32 = MATCH_LEN_MAX as u32 - 1;
+impl FastEncoderMode {
+    pub(crate) const EXTRA_SIZE_BEFORE: u32 = 1;
+    pub(crate) const EXTRA_SIZE_AFTER: u32 = MATCH_LEN_MAX as u32 - 1;
 
-    pub fn get_memory_usage(dict_size: u32, extra_size_before: u32, mf: MFType) -> u32 {
+    pub(crate) fn get_memory_usage(dict_size: u32, extra_size_before: u32, mf: MFType) -> u32 {
         LZEncoder::get_memory_usage(
             dict_size,
             extra_size_before.max(Self::EXTRA_SIZE_BEFORE),
@@ -21,10 +21,12 @@ impl FashEncoderMode {
         )
     }
 }
+
 fn change_pair(small_dist: u32, big_dist: u32) -> bool {
     small_dist < (big_dist >> 7)
 }
-impl LZMAEncoderTrait for FashEncoderMode {
+
+impl LZMAEncoderTrait for FastEncoderMode {
     fn get_next_symbol(&mut self, encoder: &mut super::encoder::LZMAEncoder) -> u32 {
         if encoder.data.read_ahead == -1 {
             encoder.find_matches();
@@ -38,7 +40,10 @@ impl LZMAEncoderTrait for FashEncoderMode {
         let mut best_rep_len = 0;
         let mut best_rep_index = 0;
         for rep in 0..REPS {
-            let len = encoder.lz.data.get_match_len(encoder.reps[rep], avail);
+            let len = encoder
+                .lz
+                .data
+                .get_match_len(encoder.coder.reps[rep], avail);
             if len < MATCH_LEN_MIN {
                 continue;
             }
@@ -117,7 +122,11 @@ impl LZMAEncoderTrait for FashEncoderMode {
 
         let limit = (main_len - 1).max(MATCH_LEN_MIN as _);
         for rep in 0..REPS {
-            if encoder.lz.get_match_len(encoder.reps[rep], limit as i32) == limit as _ {
+            if encoder
+                .lz
+                .get_match_len(encoder.coder.reps[rep], limit as i32)
+                == limit as _
+            {
                 return 1;
             }
         }

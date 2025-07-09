@@ -14,6 +14,7 @@ mod enc;
 
 #[cfg(feature = "encoder")]
 pub use enc::*;
+pub use lz::MFType;
 pub use lzma2_reader::{get_memory_usage as lzma2_get_memory_usage, LZMA2Reader};
 pub use lzma_reader::{
     get_memory_usage as lzma_get_memory_usage,
@@ -22,6 +23,7 @@ pub use lzma_reader::{
 use state::*;
 
 pub const DICT_SIZE_MIN: u32 = 4096;
+
 pub const DICT_SIZE_MAX: u32 = u32::MAX & !15_u32;
 
 const LOW_SYMBOLS: usize = 1 << 3;
@@ -53,7 +55,7 @@ const MOVE_BITS: u32 = 5;
 const DIST_SPECIAL_INDEX: [usize; 10] = [0, 2, 4, 8, 12, 20, 28, 44, 60, 92];
 const DIST_SPECIAL_END: [usize; 10] = [2, 4, 8, 12, 20, 28, 44, 60, 92, 124];
 
-pub struct LZMACoder {
+pub(crate) struct LZMACoder {
     pub(crate) pos_mask: u32,
     pub(crate) reps: [i32; REPS],
     pub(crate) state: State,
@@ -85,7 +87,7 @@ pub(crate) fn get_dist_state(len: u32) -> u32 {
 }
 
 impl LZMACoder {
-    pub fn new(pb: usize) -> Self {
+    pub(crate) fn new(pb: usize) -> Self {
         let mut c = Self {
             pos_mask: (1 << pb) - 1,
             reps: Default::default(),
@@ -104,7 +106,7 @@ impl LZMACoder {
         c
     }
 
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.reps = [0; REPS];
         self.state.reset();
         for ele in self.is_match.iter_mut() {
@@ -126,7 +128,7 @@ impl LZMACoder {
     }
 
     #[inline(always)]
-    pub fn get_dist_special(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn get_dist_special(&mut self, i: usize) -> &mut [u16] {
         &mut self.dist_special[DIST_SPECIAL_INDEX[i]..DIST_SPECIAL_END[i]]
     }
 }
@@ -142,11 +144,11 @@ pub(crate) struct LiteralCoder {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct LiteralSubcoder {
+pub(crate) struct LiteralSubCoder {
     probs: [u16; 0x300],
 }
 
-impl LiteralSubcoder {
+impl LiteralSubCoder {
     pub fn new() -> Self {
         let probs = [PROB_INIT; 0x300];
         Self { probs }

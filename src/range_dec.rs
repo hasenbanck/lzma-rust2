@@ -4,8 +4,9 @@ use byteorder::{BigEndian, ReadBytesExt};
 
 use super::*;
 
-pub trait RangeSource {
+pub(crate) trait RangeSource {
     fn next_byte(&mut self) -> std::io::Result<u8>;
+
     fn next_u32(&mut self) -> std::io::Result<u32>;
 }
 
@@ -13,19 +14,20 @@ impl<T: Read> RangeSource for T {
     fn next_byte(&mut self) -> std::io::Result<u8> {
         self.read_u8()
     }
+
     fn next_u32(&mut self) -> std::io::Result<u32> {
         self.read_u32::<BigEndian>()
     }
 }
 
-pub struct RangeDecoder<R> {
+pub(crate) struct RangeDecoder<R> {
     inner: R,
     range: u32,
     code: u32,
 }
 
 impl RangeDecoder<RangeDecoderBuffer> {
-    pub fn new_buffer(len: usize) -> Self {
+    pub(crate) fn new_buffer(len: usize) -> Self {
         Self {
             inner: RangeDecoderBuffer::new(len - 5),
             code: 0,
@@ -35,7 +37,7 @@ impl RangeDecoder<RangeDecoderBuffer> {
 }
 
 impl<R: RangeSource> RangeDecoder<R> {
-    pub fn new_stream(mut inner: R) -> std::io::Result<Self> {
+    pub(crate) fn new_stream(mut inner: R) -> std::io::Result<Self> {
         let b = inner.next_byte()?;
         if b != 0x00 {
             return Err(std::io::Error::new(
@@ -51,13 +53,13 @@ impl<R: RangeSource> RangeDecoder<R> {
         })
     }
 
-    pub fn is_stream_finished(&self) -> bool {
+    pub(crate) fn is_stream_finished(&self) -> bool {
         self.code == 0
     }
 }
 
 impl<R: RangeSource> RangeDecoder<R> {
-    pub fn normalize(&mut self) -> std::io::Result<()> {
+    pub(crate) fn normalize(&mut self) -> std::io::Result<()> {
         if self.range < 0x0100_0000 {
             let b = self.inner.next_byte()? as u32;
             let code = ((self.code) << SHIFT_BITS) | b;
@@ -68,7 +70,7 @@ impl<R: RangeSource> RangeDecoder<R> {
         Ok(())
     }
 
-    pub fn decode_bit(&mut self, prob: &mut u16) -> std::io::Result<i32> {
+    pub(crate) fn decode_bit(&mut self, prob: &mut u16) -> std::io::Result<i32> {
         self.normalize()?;
         let bound = (self.range >> (BIT_MODEL_TOTAL_BITS as i32)) * (*prob as u32);
 
@@ -84,7 +86,7 @@ impl<R: RangeSource> RangeDecoder<R> {
         }
     }
 
-    pub fn decode_bit_tree(&mut self, probs: &mut [u16]) -> std::io::Result<i32> {
+    pub(crate) fn decode_bit_tree(&mut self, probs: &mut [u16]) -> std::io::Result<i32> {
         let mut symbol = 1;
         loop {
             symbol = (symbol << 1) | self.decode_bit(&mut probs[symbol as usize])?;
@@ -95,7 +97,7 @@ impl<R: RangeSource> RangeDecoder<R> {
         Ok(symbol - probs.len() as i32)
     }
 
-    pub fn decode_reverse_bit_tree(&mut self, probs: &mut [u16]) -> std::io::Result<i32> {
+    pub(crate) fn decode_reverse_bit_tree(&mut self, probs: &mut [u16]) -> std::io::Result<i32> {
         let mut symbol = 1;
         let mut i = 0;
         let mut result = 0;
@@ -111,7 +113,7 @@ impl<R: RangeSource> RangeDecoder<R> {
         Ok(result)
     }
 
-    pub fn decode_direct_bits(&mut self, count: u32) -> std::io::Result<i32> {
+    pub(crate) fn decode_direct_bits(&mut self, count: u32) -> std::io::Result<i32> {
         let mut result = 0;
         for _ in 0..count {
             self.normalize()?;
@@ -124,13 +126,13 @@ impl<R: RangeSource> RangeDecoder<R> {
     }
 }
 
-pub struct RangeDecoderBuffer {
+pub(crate) struct RangeDecoderBuffer {
     buf: Vec<u8>,
     pos: usize,
 }
 
 impl RangeDecoder<RangeDecoderBuffer> {
-    pub fn prepare<R: Read>(&mut self, mut reader: R, len: usize) -> std::io::Result<()> {
+    pub(crate) fn prepare<R: Read>(&mut self, mut reader: R, len: usize) -> std::io::Result<()> {
         if len < 5 {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
@@ -156,13 +158,13 @@ impl RangeDecoder<RangeDecoderBuffer> {
     }
 
     #[inline]
-    pub fn is_finished(&self) -> bool {
+    pub(crate) fn is_finished(&self) -> bool {
         self.inner.pos == self.inner.buf.len() && self.code == 0
     }
 }
 
 impl RangeDecoderBuffer {
-    pub fn new(len: usize) -> Self {
+    pub(crate) fn new(len: usize) -> Self {
         Self {
             buf: vec![0; len],
             pos: len,

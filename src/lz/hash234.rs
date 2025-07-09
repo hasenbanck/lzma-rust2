@@ -31,11 +31,11 @@ impl Hash234 {
         h + 1
     }
 
-    pub fn get_mem_usage(dict_size: u32) -> u32 {
+    pub(crate) fn get_mem_usage(dict_size: u32) -> u32 {
         (HASH2_MASK + HASH2_SIZE + Self::get_hash4_size(dict_size)) / (1024 / 4) + 4
     }
 
-    pub fn new(dict_size: u32) -> Self {
+    pub(crate) fn new(dict_size: u32) -> Self {
         let hash2_table = vec![0; HASH2_SIZE as _];
         let hash3_table = vec![0; HASH3_SIZE as _];
         let hash4_size = Self::get_hash4_size(dict_size);
@@ -53,7 +53,7 @@ impl Hash234 {
         }
     }
 
-    pub fn calc_hashes(&mut self, buf: &[u8]) {
+    pub(crate) fn calc_hashes(&mut self, buf: &[u8]) {
         let tmp = CRC_TABLE[buf[0] as usize] ^ (buf[1] as u32);
         self.hash2_value = (tmp & HASH2_MASK) as i32;
         let tmp = tmp ^ ((buf[2] as u32) << 8);
@@ -62,25 +62,25 @@ impl Hash234 {
         self.hash4_value = (tmp & self.hash4_mask) as i32;
     }
 
-    pub fn get_hash2_pos(&self) -> i32 {
+    pub(crate) fn get_hash2_pos(&self) -> i32 {
         self.hash2_table[self.hash2_value as usize]
     }
 
-    pub fn get_hash3_pos(&self) -> i32 {
+    pub(crate) fn get_hash3_pos(&self) -> i32 {
         self.hash3_table[self.hash3_value as usize]
     }
 
-    pub fn get_hash4_pos(&self) -> i32 {
+    pub(crate) fn get_hash4_pos(&self) -> i32 {
         self.hash4_table[self.hash4_value as usize]
     }
 
-    pub fn update_tables(&mut self, pos: i32) {
+    pub(crate) fn update_tables(&mut self, pos: i32) {
         self.hash2_table[self.hash2_value as usize] = pos;
         self.hash3_table[self.hash3_value as usize] = pos;
         self.hash4_table[self.hash4_value as usize] = pos;
     }
 
-    pub fn normalize(&mut self, offset: i32) {
+    pub(crate) fn normalize(&mut self, offset: i32) {
         LZEncoder::normalize(&mut self.hash2_table, offset);
         LZEncoder::normalize(&mut self.hash3_table, offset);
         let hash4_size = self.hash4_size as usize;

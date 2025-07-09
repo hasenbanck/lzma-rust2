@@ -137,9 +137,9 @@ impl<W: Write> LZMAWriter<W> {
         }
         self.rc.finish()?;
 
-        let RangeEncoder { inner, .. } = self.rc;
+        let Self { rc, .. } = self;
 
-        Ok(inner)
+        Ok(rc.into_inner())
     }
 }
 

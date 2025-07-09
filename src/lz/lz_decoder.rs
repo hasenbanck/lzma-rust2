@@ -1,7 +1,7 @@
 use std::io::{ErrorKind, Read};
 
 #[derive(Default)]
-pub struct LZDecoder {
+pub(crate) struct LZDecoder {
     buf: Vec<u8>,
     buf_size: usize,
     start: usize,
@@ -13,7 +13,7 @@ pub struct LZDecoder {
 }
 
 impl LZDecoder {
-    pub fn new(dict_size: usize, preset_dict: Option<&[u8]>) -> Self {
+    pub(crate) fn new(dict_size: usize, preset_dict: Option<&[u8]>) -> Self {
         let mut buf = vec![0; dict_size];
         let mut pos = 0;
         let mut full = 0;
@@ -35,7 +35,7 @@ impl LZDecoder {
         }
     }
 
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.start = 0;
         self.pos = 0;
         self.full = 0;
@@ -43,23 +43,23 @@ impl LZDecoder {
         self.buf[self.buf_size - 1] = 0;
     }
 
-    pub fn set_limit(&mut self, out_max: usize) {
+    pub(crate) fn set_limit(&mut self, out_max: usize) {
         self.limit = (out_max + self.pos).min(self.buf_size);
     }
 
-    pub fn has_space(&self) -> bool {
+    pub(crate) fn has_space(&self) -> bool {
         self.pos < self.limit
     }
 
-    pub fn has_pending(&self) -> bool {
+    pub(crate) fn has_pending(&self) -> bool {
         self.pending_len > 0
     }
 
-    pub fn get_pos(&self) -> usize {
+    pub(crate) fn get_pos(&self) -> usize {
         self.pos
     }
 
-    pub fn get_byte(&self, dist: usize) -> u8 {
+    pub(crate) fn get_byte(&self, dist: usize) -> u8 {
         let offset = if dist >= self.pos {
             self.buf_size + self.pos - dist - 1
         } else {
@@ -68,7 +68,7 @@ impl LZDecoder {
         self.buf[offset]
     }
 
-    pub fn put_byte(&mut self, b: u8) {
+    pub(crate) fn put_byte(&mut self, b: u8) {
         self.buf[self.pos] = b;
         self.pos += 1;
         if self.full < self.pos {
@@ -76,7 +76,7 @@ impl LZDecoder {
         }
     }
 
-    pub fn repeat(&mut self, dist: usize, len: usize) -> std::io::Result<()> {
+    pub(crate) fn repeat(&mut self, dist: usize, len: usize) -> std::io::Result<()> {
         if dist >= self.full {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
@@ -126,14 +126,14 @@ impl LZDecoder {
         Ok(())
     }
 
-    pub fn repeat_pending(&mut self) -> std::io::Result<()> {
+    pub(crate) fn repeat_pending(&mut self) -> std::io::Result<()> {
         if self.pending_len > 0 {
             self.repeat(self.pending_dist, self.pending_len)?;
         }
         Ok(())
     }
 
-    pub fn copy_uncompressed<R: Read>(
+    pub(crate) fn copy_uncompressed<R: Read>(
         &mut self,
         mut in_data: R,
         len: usize,
@@ -148,7 +148,7 @@ impl LZDecoder {
         Ok(())
     }
 
-    pub fn flush(&mut self, out: &mut [u8], out_off: usize) -> usize {
+    pub(crate) fn flush(&mut self, out: &mut [u8], out_off: usize) -> usize {
         let copy_size = self.pos - self.start;
         if self.pos == self.buf_size {
             self.pos = 0;
@@ -160,6 +160,3 @@ impl LZDecoder {
         copy_size
     }
 }
-
-#[cfg(test)]
-mod tests {}
