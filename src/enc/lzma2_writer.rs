@@ -99,9 +99,8 @@ impl LZMA2Options {
 
     /// preset: [0..9]
     pub fn set_preset(&mut self, preset: u32) {
-        if preset > 9 {
-            return;
-        }
+        let preset = preset.min(9);
+
         self.lc = Self::LC_DEFAULT;
         self.lp = Self::LP_DEFAULT;
         self.pb = Self::PB_DEFAULT;
