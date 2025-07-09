@@ -51,3 +51,7 @@ r.read_exact( & mut s2).unwrap();
 println!("{:?}", &out[..]);
 assert_eq!(s, &s2[..]);
 ````
+
+## License
+
+Licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
