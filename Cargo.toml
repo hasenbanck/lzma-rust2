@@ -15,6 +15,13 @@ encoder = []
 
 [dependencies]
 
+[dev-dependencies]
+criterion = { version = "0.6", features = ["html_reports"] }
+
+[[bench]]
+name = "lzma2"
+harness = false
+
 [package.metadata.docs.rs]
 features = ["encoder"]
 rustdoc-args = ["--cfg", "docsrs"]
