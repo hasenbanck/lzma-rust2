@@ -1,12 +1,11 @@
 use std::io::{ErrorKind, Read};
 
-use byteorder::{self, BigEndian, ReadBytesExt};
-
 use super::{
     decoder::LZMADecoder,
     lz::LZDecoder,
     range_dec::{RangeDecoder, RangeDecoderBuffer},
 };
+use crate::ByteReader;
 
 pub const COMPRESSED_SIZE_MAX: u32 = 1 << 16;
 
@@ -62,7 +61,7 @@ impl<R> LZMA2Reader<R> {
     }
 }
 
-impl<R: Read> LZMA2Reader<R> {
+impl<R: Read + ByteReader> LZMA2Reader<R> {
     /// Create a new LZMA2 reader.
     /// `inner` is the reader to read compressed data from.
     /// `dict_size` is the dictionary size in bytes.
@@ -85,7 +84,7 @@ impl<R: Read> LZMA2Reader<R> {
     }
 
     fn decode_chunk_header(&mut self) -> std::io::Result<()> {
-        let control = self.inner.read_u8()?;
+        let control = self.inner.next_u8()?;
         if control == 0x00 {
             self.end_reached = true;
             return Ok(());
@@ -104,8 +103,8 @@ impl<R: Read> LZMA2Reader<R> {
         if control >= 0x80 {
             self.is_lzma_chunk = true;
             self.uncompressed_size = ((control & 0x1F) as usize) << 16;
-            self.uncompressed_size += self.inner.read_u16::<BigEndian>()? as usize + 1;
-            let compressed_size = self.inner.read_u16::<BigEndian>()? as usize + 1;
+            self.uncompressed_size += self.inner.next_u16_be()? as usize + 1;
+            let compressed_size = self.inner.next_u16_be()? as usize + 1;
             if control >= 0xC0 {
                 self.need_props = false;
                 self.decode_props()?;
@@ -127,13 +126,13 @@ impl<R: Read> LZMA2Reader<R> {
             ));
         } else {
             self.is_lzma_chunk = false;
-            self.uncompressed_size = (self.inner.read_u16::<BigEndian>()? + 1) as _;
+            self.uncompressed_size = (self.inner.next_u16_be()? + 1) as _;
         }
         Ok(())
     }
 
     fn decode_props(&mut self) -> std::io::Result<()> {
-        let props = self.inner.read_u8()?;
+        let props = self.inner.next_u8()?;
         if props > (4 * 5 + 4) * 9 + 8 {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,

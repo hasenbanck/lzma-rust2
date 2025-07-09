@@ -1,7 +1,5 @@
 use std::io::Write;
 
-use byteorder::WriteBytesExt;
-
 use super::{
     encoder::{LZMAEncoder, LZMAEncoderModes},
     range_enc::RangeEncoder,
@@ -65,15 +63,15 @@ impl<W: Write> LZMAWriter<W> {
 
         let props = options.get_props();
         if use_header {
-            out.write_u8(props as _)?;
+            out.write_all(&[props])?;
             let mut dict_size = options.dict_size;
             for _i in 0..4 {
-                out.write_u8((dict_size & 0xFF) as u8)?;
+                out.write_all(&[(dict_size & 0xFF) as u8])?;
                 dict_size >>= 8;
             }
             let expected_compressed_size = expected_uncompressed_size.unwrap_or(u64::MAX);
             for i in 0..8 {
-                out.write_u8(((expected_compressed_size >> (i * 8)) & 0xFF) as u8)?;
+                out.write_all(&[((expected_compressed_size >> (i * 8)) & 0xFF) as u8])?;
             }
         }
 

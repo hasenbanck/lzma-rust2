@@ -12,6 +12,8 @@ mod state;
 #[cfg(feature = "encoder")]
 mod enc;
 
+use std::io::Read;
+
 #[cfg(feature = "encoder")]
 pub use enc::*;
 pub use lz::MFType;
@@ -200,5 +202,66 @@ impl LengthCoder {
             init_probs(ele);
         }
         init_probs(&mut self.high);
+    }
+}
+
+// TODO NHA should be able te remove this from public interface!
+pub trait ByteReader {
+    fn next_u8(&mut self) -> std::io::Result<u8>;
+
+    fn next_u16_le(&mut self) -> std::io::Result<u16>;
+
+    fn next_u16_be(&mut self) -> std::io::Result<u16>;
+
+    fn next_u32_le(&mut self) -> std::io::Result<u32>;
+
+    fn next_u32_be(&mut self) -> std::io::Result<u32>;
+
+    fn next_u64_le(&mut self) -> std::io::Result<u64>;
+
+    fn next_u64_be(&mut self) -> std::io::Result<u64>;
+}
+
+impl<T: Read> ByteReader for T {
+    fn next_u8(&mut self) -> std::io::Result<u8> {
+        let mut buf = [0; 1];
+        self.read_exact(&mut buf)?;
+        Ok(buf[0])
+    }
+
+    fn next_u16_le(&mut self) -> std::io::Result<u16> {
+        let mut buf = [0; 2];
+        self.read_exact(buf.as_mut())?;
+        Ok(u16::from_le_bytes(buf))
+    }
+
+    fn next_u16_be(&mut self) -> std::io::Result<u16> {
+        let mut buf = [0; 2];
+        self.read_exact(buf.as_mut())?;
+        Ok(u16::from_be_bytes(buf))
+    }
+
+    fn next_u32_le(&mut self) -> std::io::Result<u32> {
+        let mut buf = [0; 4];
+        self.read_exact(buf.as_mut())?;
+        Ok(u32::from_le_bytes(buf))
+    }
+
+    fn next_u32_be(&mut self) -> std::io::Result<u32> {
+        let mut buf = [0; 4];
+        self.read_exact(buf.as_mut())?;
+        Ok(u32::from_be_bytes(buf))
+    }
+
+    fn next_u64_le(&mut self) -> std::io::Result<u64> {
+        let mut buf = [0; 8];
+        self.read_exact(buf.as_mut())?;
+        Ok(u64::from_le_bytes(buf))
+    }
+
+    fn next_u64_be(&mut self) -> std::io::Result<u64> {
+        let mut buf = [0; 8];
+        self.read_exact(buf.as_mut())?;
+        Ok(u64::from_be_bytes(buf))
     }
 }

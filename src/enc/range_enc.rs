@@ -1,7 +1,5 @@
 use std::io::Write;
 
-use byteorder::WriteBytesExt;
-
 use crate::{BIT_MODEL_TOTAL, BIT_MODEL_TOTAL_BITS, MOVE_BITS, SHIFT_BITS, TOP_MASK};
 
 const MOVE_REDUCING_BITS: usize = 4;
@@ -63,7 +61,7 @@ impl<W: Write> RangeEncoder<W> {
     }
 
     fn write_byte(&mut self, b: u8) -> std::io::Result<()> {
-        self.inner.write_u8(b)
+        self.inner.write_all(&[b])
     }
 
     fn shift_low(&mut self) -> std::io::Result<()> {

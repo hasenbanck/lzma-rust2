@@ -1,7 +1,5 @@
 use std::io::Write;
 
-use byteorder::WriteBytesExt;
-
 use super::{
     encoder::{EncodeMode, LZMAEncoder, LZMAEncoderModes},
     lz::MFType,
@@ -287,7 +285,7 @@ impl<W: Write> LZMA2Writer<W> {
             self.write_chunk()?;
         }
 
-        self.inner.write_u8(0x00)?;
+        self.inner.write_all(&[0x00])?;
 
         Ok(self.inner)
     }

@@ -1,7 +1,6 @@
 use std::io::Result;
 
 use super::{lz::LZDecoder, range_dec::RangeDecoder, *};
-use crate::range_dec::RangeSource;
 
 pub(crate) struct LZMADecoder {
     coder: LZMACoder,
@@ -43,7 +42,7 @@ impl LZMADecoder {
         self.coder.reps[0] == -1
     }
 
-    pub(crate) fn decode<R: RangeSource>(
+    pub(crate) fn decode<R: ByteReader>(
         &mut self,
         lz: &mut LZDecoder,
         rc: &mut RangeDecoder<R>,
@@ -70,7 +69,7 @@ impl LZMADecoder {
         Ok(())
     }
 
-    fn decode_match<R: RangeSource>(
+    fn decode_match<R: ByteReader>(
         &mut self,
         pos_state: u32,
         rc: &mut RangeDecoder<R>,
@@ -104,7 +103,7 @@ impl LZMADecoder {
         Ok(len as _)
     }
 
-    fn decode_rep_match<R: RangeSource>(
+    fn decode_rep_match<R: ByteReader>(
         &mut self,
         pos_state: u32,
         rc: &mut RangeDecoder<R>,
@@ -143,13 +142,13 @@ impl LZMADecoder {
 
 pub(crate) struct LiteralDecoder {
     coder: LiteralCoder,
-    sub_decoders: Vec<LiteralSubdecoder>,
+    sub_decoders: Vec<LiteralSubDecoder>,
 }
 
 impl LiteralDecoder {
     fn new(lc: u32, lp: u32) -> Self {
         let coder = LiteralCoder::new(lc, lp);
-        let sub_decoders = vec![LiteralSubdecoder::new(); (1 << (lc + lp)) as _];
+        let sub_decoders = vec![LiteralSubDecoder::new(); (1 << (lc + lp)) as _];
 
         Self {
             coder,
@@ -163,7 +162,7 @@ impl LiteralDecoder {
         }
     }
 
-    fn decode<R: RangeSource>(
+    fn decode<R: ByteReader>(
         &mut self,
         coder: &mut LZMACoder,
         lz: &mut LZDecoder,
@@ -178,18 +177,18 @@ impl LiteralDecoder {
 }
 
 #[derive(Clone)]
-struct LiteralSubdecoder {
+struct LiteralSubDecoder {
     coder: LiteralSubCoder,
 }
 
-impl LiteralSubdecoder {
+impl LiteralSubDecoder {
     fn new() -> Self {
         Self {
             coder: LiteralSubCoder::new(),
         }
     }
 
-    pub(crate) fn decode<R: RangeSource>(
+    pub(crate) fn decode<R: ByteReader>(
         &mut self,
         coder: &mut LZMACoder,
         lz: &mut LZDecoder,
@@ -232,11 +231,7 @@ impl LiteralSubdecoder {
 }
 
 impl LengthCoder {
-    fn decode<R: RangeSource>(
-        &mut self,
-        pos_state: usize,
-        rc: &mut RangeDecoder<R>,
-    ) -> Result<i32> {
+    fn decode<R: ByteReader>(&mut self, pos_state: usize, rc: &mut RangeDecoder<R>) -> Result<i32> {
         if rc.decode_bit(&mut self.choice[0])? == 0 {
             return Ok(rc
                 .decode_bit_tree(&mut self.low[pos_state])?
