@@ -1,3 +1,8 @@
+//! LZMA/LZMA2 codec ported from [tukaani xz for java](https://tukaani.org/xz/java.html).
+//!
+//! This is a fork of the original, unmaintained lzma-rust crate to continue the development and
+//! maintenance.
+
 // TODO: There is a lot of code left that only the "encode" feature uses.
 #![allow(dead_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -56,6 +61,10 @@ const PROB_INIT: u16 = (BIT_MODEL_TOTAL / 2) as u16;
 const MOVE_BITS: u32 = 5;
 const DIST_SPECIAL_INDEX: [usize; 10] = [0, 2, 4, 8, 12, 20, 28, 44, 60, 92];
 const DIST_SPECIAL_END: [usize; 10] = [2, 4, 8, 12, 20, 28, 44, 60, 92, 124];
+const TOP_VALUE: u32 = 0x0100_0000;
+const RC_BIT_MODEL_OFFSET: u32 = (1u32 << MOVE_BITS)
+    .wrapping_sub(1)
+    .wrapping_sub(BIT_MODEL_TOTAL);
 
 pub(crate) struct LZMACoder {
     pub(crate) pos_mask: u32,
@@ -222,42 +231,49 @@ trait ByteReader {
 }
 
 impl<T: Read> ByteReader for T {
+    #[inline(always)]
     fn read_u8(&mut self) -> std::io::Result<u8> {
         let mut buf = [0; 1];
         self.read_exact(&mut buf)?;
         Ok(buf[0])
     }
 
+    #[inline(always)]
     fn read_u16_le(&mut self) -> std::io::Result<u16> {
         let mut buf = [0; 2];
         self.read_exact(buf.as_mut())?;
         Ok(u16::from_le_bytes(buf))
     }
 
+    #[inline(always)]
     fn read_u16_be(&mut self) -> std::io::Result<u16> {
         let mut buf = [0; 2];
         self.read_exact(buf.as_mut())?;
         Ok(u16::from_be_bytes(buf))
     }
 
+    #[inline(always)]
     fn read_u32_le(&mut self) -> std::io::Result<u32> {
         let mut buf = [0; 4];
         self.read_exact(buf.as_mut())?;
         Ok(u32::from_le_bytes(buf))
     }
 
+    #[inline(always)]
     fn read_u32_be(&mut self) -> std::io::Result<u32> {
         let mut buf = [0; 4];
         self.read_exact(buf.as_mut())?;
         Ok(u32::from_be_bytes(buf))
     }
 
+    #[inline(always)]
     fn read_u64_le(&mut self) -> std::io::Result<u64> {
         let mut buf = [0; 8];
         self.read_exact(buf.as_mut())?;
         Ok(u64::from_le_bytes(buf))
     }
 
+    #[inline(always)]
     fn read_u64_be(&mut self) -> std::io::Result<u64> {
         let mut buf = [0; 8];
         self.read_exact(buf.as_mut())?;

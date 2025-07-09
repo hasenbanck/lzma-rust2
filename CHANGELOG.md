@@ -9,8 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Updated
 
+- Increased the decoding performance without using unsafe code. On aarch64 (Apple Silicon M4) we are
+  faster than liblzma. On x86-64 liblzma is faster, since it has custom ASM code for x86-64.
 - Removed LZMACoder from public interface.
 - Add EncodeMode and MFType enums to public interface.
+
+### Removed
+
+- Remove byteorder dependency.
 
 ## 0.2.2 - 2025-06-28
 

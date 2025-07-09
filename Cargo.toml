@@ -17,9 +17,10 @@ encoder = []
 
 [dev-dependencies]
 criterion = { version = "0.6", features = ["html_reports"] }
+liblzma = "0.4"
 
 [[bench]]
-name = "lzma2"
+name = "comparison"
 harness = false
 
 [package.metadata.docs.rs]

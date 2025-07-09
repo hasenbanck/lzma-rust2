@@ -102,6 +102,7 @@ impl LZDecoder {
             if left == 0 {
                 return Ok(());
             }
+
             back
         } else {
             self.pos - dist - 1
@@ -110,13 +111,20 @@ impl LZDecoder {
         assert!(back < self.pos);
         assert!(left > 0);
 
-        loop {
-            let copy_size = left.min(self.pos - back);
-            self.buf.copy_within(back..back + copy_size, self.pos);
-            self.pos += copy_size;
-            left -= copy_size;
-            if left == 0 {
-                break;
+        if dist >= left {
+            // No overlap possible. We can copy directly.
+            let (src_part, dst_part) = self.buf.split_at_mut(self.pos);
+            dst_part[..left].copy_from_slice(&src_part[back..back + left]);
+            self.pos += left;
+        } else {
+            loop {
+                let copy_size = left.min(self.pos - back);
+                self.buf.copy_within(back..back + copy_size, self.pos);
+                self.pos += copy_size;
+                left -= copy_size;
+                if left == 0 {
+                    break;
+                }
             }
         }
 

@@ -41,31 +41,32 @@ impl<R: ByteReader> RangeDecoder<R> {
 }
 
 impl<R: ByteReader> RangeDecoder<R> {
+    #[inline(always)]
     pub(crate) fn normalize(&mut self) -> std::io::Result<()> {
         if self.range < 0x0100_0000 {
             let b = self.inner.read_u8()? as u32;
-            let code = ((self.code) << SHIFT_BITS) | b;
-            self.code = code;
-            let range = (self.range) << SHIFT_BITS;
-            self.range = range;
+            self.code = (self.code << SHIFT_BITS) | b;
+            self.range <<= SHIFT_BITS;
         }
         Ok(())
     }
 
+    #[inline(always)]
     pub(crate) fn decode_bit(&mut self, prob: &mut u16) -> std::io::Result<i32> {
         self.normalize()?;
-        let bound = (self.range >> (BIT_MODEL_TOTAL_BITS as i32)) * (*prob as u32);
+        let bound = (self.range >> BIT_MODEL_TOTAL_BITS) * (*prob as u32);
 
-        if self.code < bound {
-            self.range = bound;
-            *prob += (BIT_MODEL_TOTAL as u16 - *prob) >> (MOVE_BITS as u16);
-            Ok(0)
-        } else {
-            self.range -= bound;
-            self.code -= bound;
-            *prob -= *prob >> (MOVE_BITS as u16);
-            Ok(1)
-        }
+        // This mask will be 0 for bit 0, and 0xFFFFFFFF for bit 1.
+        let mask = 0u32.wrapping_sub((self.code >= bound) as u32);
+
+        self.range = (bound & !mask) | ((self.range - bound) & mask);
+        self.code -= bound & mask;
+
+        let p = *prob as u32;
+        let offset = RC_BIT_MODEL_OFFSET & !mask;
+        *prob = (p - ((p + offset) >> MOVE_BITS)) as u16;
+
+        Ok((mask & 1) as i32)
     }
 
     pub(crate) fn decode_bit_tree(&mut self, probs: &mut [u16]) -> std::io::Result<i32> {
@@ -155,42 +156,55 @@ impl RangeDecoderBuffer {
 }
 
 impl ByteReader for RangeDecoderBuffer {
+    #[inline(always)]
     fn read_u8(&mut self) -> std::io::Result<u8> {
-        let b = self.buf[self.pos];
+        // Out of bound reads return an 0, which is fine, since a
+        // well-implemented decoder will not go out of bound.
+        // Not returning an error results in code that can be better
+        // optimized in the hot path and overall 10% better decoding
+        // performance.
+        let byte = *self.buf.get(self.pos).unwrap_or(&0);
         self.pos += 1;
-        Ok(b)
+
+        Ok(byte)
     }
 
+    #[inline(always)]
     fn read_u16_le(&mut self) -> std::io::Result<u16> {
         let b = u16::from_le_bytes(self.buf[self.pos..self.pos + 2].try_into().unwrap());
         self.pos += 2;
         Ok(b)
     }
 
+    #[inline(always)]
     fn read_u16_be(&mut self) -> std::io::Result<u16> {
         let b = u16::from_be_bytes(self.buf[self.pos..self.pos + 2].try_into().unwrap());
         self.pos += 2;
         Ok(b)
     }
 
+    #[inline(always)]
     fn read_u32_le(&mut self) -> std::io::Result<u32> {
         let b = u32::from_le_bytes(self.buf[self.pos..self.pos + 4].try_into().unwrap());
         self.pos += 4;
         Ok(b)
     }
 
+    #[inline(always)]
     fn read_u32_be(&mut self) -> std::io::Result<u32> {
         let b = u32::from_be_bytes(self.buf[self.pos..self.pos + 4].try_into().unwrap());
         self.pos += 4;
         Ok(b)
     }
 
+    #[inline(always)]
     fn read_u64_le(&mut self) -> std::io::Result<u64> {
         let b = u64::from_le_bytes(self.buf[self.pos..self.pos + 8].try_into().unwrap());
         self.pos += 8;
         Ok(b)
     }
 
+    #[inline(always)]
     fn read_u64_be(&mut self) -> std::io::Result<u64> {
         let b = u64::from_be_bytes(self.buf[self.pos..self.pos + 8].try_into().unwrap());
         self.pos += 8;
