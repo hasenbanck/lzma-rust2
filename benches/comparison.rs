@@ -141,5 +141,6 @@ fn bench_decompression(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_compression, bench_decompression);
+//criterion_group!(benches, bench_compression, bench_decompression);
+criterion_group!(benches, bench_decompression);
 criterion_main!(benches);

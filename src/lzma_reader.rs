@@ -138,9 +138,9 @@ impl<R: Read> LZMAReader<R> {
         preset_dict: Option<&[u8]>,
     ) -> std::io::Result<Self> {
         let props = reader.read_u8()?;
-        let dict_size = reader.read_u32_le()?;
+        let dict_size = reader.read_u32()?;
 
-        let uncomp_size = reader.read_u64_le()?;
+        let uncomp_size = reader.read_u64()?;
         let need_mem = get_memory_usage_by_props(dict_size, props)?;
         if mem_limit_kb < need_mem {
             return Err(Error::new(

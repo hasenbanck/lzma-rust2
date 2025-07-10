@@ -18,7 +18,7 @@ impl RangeDecoder<RangeDecoderBuffer> {
     }
 }
 
-impl<R: ByteReader> RangeDecoder<R> {
+impl<R: RangeReader> RangeDecoder<R> {
     pub(crate) fn new_stream(mut inner: R) -> std::io::Result<Self> {
         let b = inner.read_u8()?;
         if b != 0x00 {
@@ -40,7 +40,7 @@ impl<R: ByteReader> RangeDecoder<R> {
     }
 }
 
-impl<R: ByteReader> RangeDecoder<R> {
+impl<R: RangeReader> RangeDecoder<R> {
     #[inline(always)]
     pub(crate) fn normalize(&mut self) -> std::io::Result<()> {
         if self.range < 0x0100_0000 {
@@ -115,7 +115,11 @@ pub(crate) struct RangeDecoderBuffer {
 }
 
 impl RangeDecoder<RangeDecoderBuffer> {
-    pub(crate) fn prepare<R: Read>(&mut self, mut reader: R, len: usize) -> std::io::Result<()> {
+    pub(crate) fn prepare<R: Read + RangeReader>(
+        &mut self,
+        mut reader: R,
+        len: usize,
+    ) -> std::io::Result<()> {
         if len < 5 {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
@@ -155,7 +159,28 @@ impl RangeDecoderBuffer {
     }
 }
 
-impl ByteReader for RangeDecoderBuffer {
+pub(crate) trait RangeReader {
+    fn read_u8(&mut self) -> std::io::Result<u8>;
+    fn read_u32_be(&mut self) -> std::io::Result<u32>;
+}
+
+impl<T: Read> RangeReader for T {
+    #[inline(always)]
+    fn read_u8(&mut self) -> std::io::Result<u8> {
+        let mut buf = [0; 1];
+        self.read_exact(&mut buf)?;
+        Ok(buf[0])
+    }
+
+    #[inline(always)]
+    fn read_u32_be(&mut self) -> std::io::Result<u32> {
+        let mut buf = [0; 4];
+        self.read_exact(buf.as_mut())?;
+        Ok(u32::from_be_bytes(buf))
+    }
+}
+
+impl RangeReader for RangeDecoderBuffer {
     #[inline(always)]
     fn read_u8(&mut self) -> std::io::Result<u8> {
         // Out of bound reads return an 0, which is fine, since a
@@ -170,44 +195,9 @@ impl ByteReader for RangeDecoderBuffer {
     }
 
     #[inline(always)]
-    fn read_u16_le(&mut self) -> std::io::Result<u16> {
-        let b = u16::from_le_bytes(self.buf[self.pos..self.pos + 2].try_into().unwrap());
-        self.pos += 2;
-        Ok(b)
-    }
-
-    #[inline(always)]
-    fn read_u16_be(&mut self) -> std::io::Result<u16> {
-        let b = u16::from_be_bytes(self.buf[self.pos..self.pos + 2].try_into().unwrap());
-        self.pos += 2;
-        Ok(b)
-    }
-
-    #[inline(always)]
-    fn read_u32_le(&mut self) -> std::io::Result<u32> {
-        let b = u32::from_le_bytes(self.buf[self.pos..self.pos + 4].try_into().unwrap());
-        self.pos += 4;
-        Ok(b)
-    }
-
-    #[inline(always)]
     fn read_u32_be(&mut self) -> std::io::Result<u32> {
         let b = u32::from_be_bytes(self.buf[self.pos..self.pos + 4].try_into().unwrap());
         self.pos += 4;
-        Ok(b)
-    }
-
-    #[inline(always)]
-    fn read_u64_le(&mut self) -> std::io::Result<u64> {
-        let b = u64::from_le_bytes(self.buf[self.pos..self.pos + 8].try_into().unwrap());
-        self.pos += 8;
-        Ok(b)
-    }
-
-    #[inline(always)]
-    fn read_u64_be(&mut self) -> std::io::Result<u64> {
-        let b = u64::from_be_bytes(self.buf[self.pos..self.pos + 8].try_into().unwrap());
-        self.pos += 8;
         Ok(b)
     }
 }

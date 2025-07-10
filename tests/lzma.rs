@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 
-use lzma_rust2::{LZMA2Options, LZMA2Reader, LZMA2Writer, LZMAReader, LZMAWriter};
+use lzma_rust2::{LZMA2Options, LZMAReader, LZMAWriter};
 
 static APACHE2: &str = include_str!("data/apache2.txt");
 static PG100: &str = include_str!("data/pg100.txt");

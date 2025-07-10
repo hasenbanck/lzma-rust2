@@ -1,6 +1,7 @@
 use std::io::Result;
 
 use super::{lz::LZDecoder, range_dec::RangeDecoder, *};
+use crate::range_dec::RangeReader;
 
 pub(crate) struct LZMADecoder {
     coder: LZMACoder,
@@ -42,7 +43,7 @@ impl LZMADecoder {
         self.coder.reps[0] == -1
     }
 
-    pub(crate) fn decode<R: ByteReader>(
+    pub(crate) fn decode<R: RangeReader>(
         &mut self,
         lz: &mut LZDecoder,
         rc: &mut RangeDecoder<R>,
@@ -69,7 +70,7 @@ impl LZMADecoder {
         Ok(())
     }
 
-    fn decode_match<R: ByteReader>(
+    fn decode_match<R: RangeReader>(
         &mut self,
         pos_state: u32,
         rc: &mut RangeDecoder<R>,
@@ -103,7 +104,7 @@ impl LZMADecoder {
         Ok(len as _)
     }
 
-    fn decode_rep_match<R: ByteReader>(
+    fn decode_rep_match<R: RangeReader>(
         &mut self,
         pos_state: u32,
         rc: &mut RangeDecoder<R>,
@@ -162,7 +163,7 @@ impl LiteralDecoder {
         }
     }
 
-    fn decode<R: ByteReader>(
+    fn decode<R: RangeReader>(
         &mut self,
         coder: &mut LZMACoder,
         lz: &mut LZDecoder,
@@ -188,7 +189,7 @@ impl LiteralSubDecoder {
         }
     }
 
-    pub(crate) fn decode<R: ByteReader>(
+    pub(crate) fn decode<R: RangeReader>(
         &mut self,
         coder: &mut LZMACoder,
         lz: &mut LZDecoder,
@@ -231,7 +232,11 @@ impl LiteralSubDecoder {
 }
 
 impl LengthCoder {
-    fn decode<R: ByteReader>(&mut self, pos_state: usize, rc: &mut RangeDecoder<R>) -> Result<i32> {
+    fn decode<R: RangeReader>(
+        &mut self,
+        pos_state: usize,
+        rc: &mut RangeDecoder<R>,
+    ) -> Result<i32> {
         if rc.decode_bit(&mut self.choice[0])? == 0 {
             return Ok(rc
                 .decode_bit_tree(&mut self.low[pos_state])?
