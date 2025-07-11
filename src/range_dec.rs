@@ -237,7 +237,7 @@ impl<R: RangeReader> RangeDecoder<R> {
 
             // We clamp to the size of the buffer because `pos == buf.len()` signals
             // that there is nothing more to read.
-            self.inner.set_pos(pos.min(limit));
+            self.inner.set_pos(pos.min(buf.len()));
 
             result
         }

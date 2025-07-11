@@ -9,14 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Updated
 
-- Increased the decoding performance without using unsafe code. On aarch64 (Apple Silicon M4) we are
-  faster than liblzma. On x86-64 liblzma is faster, since it has custom ASM code for x86-64.
-- Removed LZMACoder from public interface.
-- Add EncodeMode and MFType enums to public interface.
+- Increased the decoding performance while using only safe Rust.
+  Have a look at the "Performance" section of the README.md for mor details.
+- Added feature flag "asm" which is activated at default
+  which increases the decoding speed by an additional 2% on aarch64 and 4% on x86_64.
+- Add EncodeMode and MFType enums to public interface (used for the encoder options).
 
 ### Removed
 
 - Remove byteorder dependency.
+- Remove internal types from public interface.
 
 ## 0.2.2 - 2025-06-28
 
