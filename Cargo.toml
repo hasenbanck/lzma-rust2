@@ -10,7 +10,8 @@ keywords = ["lzma"]
 license = "Apache-2.0"
 
 [features]
-default = ["encoder"]
+default = ["asm", "encoder"]
+asm = []
 encoder = []
 
 [dependencies]

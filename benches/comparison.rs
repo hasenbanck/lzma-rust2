@@ -4,6 +4,7 @@ use std::{
 };
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use liblzma::bufread;
 use lzma_rust2::{LZMA2Options, LZMA2Reader, LZMA2Writer, LZMAReader, LZMAWriter};
 
 static PG100: &str = include_str!("../tests/data/pg100.txt");
@@ -20,7 +21,8 @@ fn bench_compression(c: &mut Criterion) {
 
             b.iter(|| {
                 let mut compressed = Vec::new();
-                let mut writer = LZMAWriter::new_no_header(&mut compressed, &option, true).unwrap();
+                let mut writer =
+                    LZMAWriter::new_no_header(black_box(&mut compressed), &option, true).unwrap();
                 writer.write_all(black_box(text_bytes)).unwrap();
                 writer.finish().unwrap();
                 black_box(compressed)
@@ -32,7 +34,7 @@ fn bench_compression(c: &mut Criterion) {
 
             b.iter(|| {
                 let mut compressed = Vec::new();
-                let mut writer = LZMA2Writer::new(&mut compressed, &option);
+                let mut writer = LZMA2Writer::new(black_box(&mut compressed), &option);
                 writer.write_all(black_box(text_bytes)).unwrap();
                 writer.finish().unwrap();
                 black_box(compressed)
@@ -41,7 +43,9 @@ fn bench_compression(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("liblzma", level), &level, |b, &level| {
             b.iter(|| {
-                let compressed = liblzma::encode_all(black_box(text_bytes), level).unwrap();
+                let mut compressed = Vec::new();
+                let mut r = bufread::XzEncoder::new(black_box(text_bytes), level);
+                r.read_to_end(black_box(&mut compressed)).unwrap();
                 black_box(compressed)
             });
         });
@@ -59,7 +63,7 @@ fn bench_decompression(c: &mut Criterion) {
     let mut lzma2_data = Vec::new();
     let mut liblzma_data = Vec::new();
 
-    for level in 0..=9 {
+    for level in 6..=6 {
         let option = LZMA2Options::with_preset(level);
 
         {
@@ -79,7 +83,9 @@ fn bench_decompression(c: &mut Criterion) {
         }
 
         {
-            let compressed = liblzma::encode_all(PG100.as_bytes(), level).unwrap();
+            let mut compressed = Vec::new();
+            let mut r = bufread::XzEncoder::new(PG100.as_bytes(), level);
+            r.read_to_end(black_box(&mut compressed)).unwrap();
             liblzma_data.push((level, compressed));
         }
     }
@@ -101,7 +107,7 @@ fn bench_decompression(c: &mut Criterion) {
                         option.preset_dict.as_ref().map(|dict| dict.as_ref()),
                     )
                     .unwrap();
-                    reader.read_to_end(&mut uncompressed).unwrap();
+                    reader.read_to_end(black_box(&mut uncompressed)).unwrap();
                     black_box(uncompressed)
                 });
             },
@@ -117,7 +123,7 @@ fn bench_decompression(c: &mut Criterion) {
                     let mut uncompressed = Vec::new();
                     let mut reader =
                         LZMA2Reader::new(black_box(compressed.as_slice()), option.dict_size, None);
-                    reader.read_to_end(&mut uncompressed).unwrap();
+                    reader.read_to_end(black_box(&mut uncompressed)).unwrap();
                     black_box(uncompressed)
                 });
             },
@@ -130,8 +136,9 @@ fn bench_decompression(c: &mut Criterion) {
             &compressed,
             |b, compressed| {
                 b.iter(|| {
-                    let uncompressed =
-                        liblzma::decode_all(black_box(compressed.as_slice())).unwrap();
+                    let mut uncompressed = Vec::new();
+                    let mut r = bufread::XzDecoder::new(black_box(compressed.as_slice()));
+                    r.read_to_end(black_box(&mut uncompressed)).unwrap();
                     black_box(uncompressed)
                 });
             },

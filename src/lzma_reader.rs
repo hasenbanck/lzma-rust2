@@ -211,7 +211,7 @@ impl<R: Read> LZMAReader<R> {
                         return Err(e);
                     }
                     self.end_reached = true;
-                    self.rc.normalize()?;
+                    self.rc.normalize();
                 }
             }
 
