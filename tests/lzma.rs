@@ -40,52 +40,52 @@ fn test_round_trip(text: &str, level: u32) {
 }
 
 #[test]
-fn round_apache2_0() {
+fn round_trip_apache2_0() {
     test_round_trip(APACHE2, 0);
 }
 
 #[test]
-fn round_apache2_1() {
+fn round_trip_apache2_1() {
     test_round_trip(APACHE2, 1);
 }
 
 #[test]
-fn round_apache2_2() {
+fn round_trip_apache2_2() {
     test_round_trip(APACHE2, 2);
 }
 
 #[test]
-fn round_apache2_3() {
+fn round_trip_apache2_3() {
     test_round_trip(APACHE2, 3);
 }
 
 #[test]
-fn round_apache2_4() {
+fn round_trip_apache2_4() {
     test_round_trip(APACHE2, 4);
 }
 
 #[test]
-fn round_apache2_5() {
+fn round_trip_apache2_5() {
     test_round_trip(APACHE2, 5);
 }
 
 #[test]
-fn round_apache2_6() {
+fn round_trip_apache2_6() {
     test_round_trip(APACHE2, 6);
 }
 
 #[test]
-fn round_apache2_7() {
+fn round_trip_apache2_7() {
     test_round_trip(APACHE2, 7);
 }
 
 #[test]
-fn round_apache2_8() {
+fn round_trip_apache2_8() {
     test_round_trip(APACHE2, 8);
 }
 
 #[test]
-fn round_apache2_9() {
+fn round_trip_apache2_9() {
     test_round_trip(APACHE2, 9);
 }
 
