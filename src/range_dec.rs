@@ -133,11 +133,11 @@ impl<R: RangeReader> RangeDecoder<R> {
         let mut result = 0;
         let mut count = count;
 
-        loop {
+        'outer: loop {
             // Fast Path
             while self.range >= 0x0100_0000 {
                 if count == 0 {
-                    return result as i32;
+                    break 'outer;
                 }
                 count -= 1;
 
@@ -148,7 +148,7 @@ impl<R: RangeReader> RangeDecoder<R> {
             }
 
             if count == 0 {
-                break;
+                break 'outer;
             }
 
             // Slow Path
@@ -163,6 +163,9 @@ impl<R: RangeReader> RangeDecoder<R> {
     #[cfg(all(feature = "asm", target_arch = "aarch64"))]
     #[inline(always)]
     fn decode_direct_bits_aarch64(&mut self, count: u32) -> i32 {
+        // Safety: It is critical that we clamp the reading from the buffer inside it bounds.
+        // We also give the "nostack, readonly, pure" guarantees that we must not (and are not)
+        // violate.
         unsafe {
             let mut result: i32 = 0;
             let mut pos = self.inner.pos();
@@ -232,7 +235,9 @@ impl<R: RangeReader> RangeDecoder<R> {
                 options(nostack, readonly, pure)
             );
 
-            self.inner.set_pos(pos);
+            // We clamp to the size of the buffer because `pos == buf.len()` signals
+            // that there is nothing more to read.
+            self.inner.set_pos(pos.min(limit));
 
             result
         }
@@ -241,6 +246,9 @@ impl<R: RangeReader> RangeDecoder<R> {
     #[cfg(all(feature = "asm", target_arch = "x86_64"))]
     #[inline(always)]
     fn decode_direct_bits_x86_64(&mut self, count: u32) -> i32 {
+        // Safety: It is critical that we clamp the reading from the buffer inside it bounds.
+        // We also give the "nostack, readonly, pure" guarantees that we must not (and are not)
+        // violate.
         unsafe {
             let mut result: i32 = 0;
             let mut pos = self.inner.pos();
@@ -269,7 +277,7 @@ impl<R: RangeReader> RangeDecoder<R> {
                     cmovg  {clamped_pos}, {limit}
 
                     // Read byte and update code
-                    movzx  {tmp_byte:e}, byte ptr [{buf_ptr} + {pos}]
+                    movzx  {tmp_byte:e}, byte ptr [{buf_ptr} + {clamped_pos}]
                     or     {code:e}, {tmp_byte:e}
                     inc    {pos}
 
@@ -309,7 +317,9 @@ impl<R: RangeReader> RangeDecoder<R> {
                 options(nostack, readonly, pure)
             );
 
-            self.inner.set_pos(pos);
+            // We clamp to the size of the buffer because `pos == buf.len()` signals
+            // that there is nothing more to read.
+            self.inner.set_pos(pos.min(buf.len()));
 
             result
         }
