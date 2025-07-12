@@ -96,15 +96,15 @@ impl BT4 {
             let pair = sh_left(pair);
             let mut len = len0.min(len1);
 
-            if encoder.buf[encoder.read_pos as usize + len - delta as usize]
-                == encoder.buf[encoder.read_pos as usize + len]
+            if encoder.get_byte_by_pos(encoder.read_pos + len - delta)
+                == encoder.get_byte_by_pos(encoder.read_pos + len)
             {
                 // No need to look for longer matches than niceLenLimit
                 // because we only are updating the tree, not returning
                 // matches found to the caller.
                 loop {
                     len += 1;
-                    if len == nice_len_limit as usize {
+                    if len == nice_len_limit {
                         self.tree[ptr1 as usize] = self.tree[pair as usize];
                         self.tree[ptr0 as usize] = self.tree[pair as usize + 1];
                         return;

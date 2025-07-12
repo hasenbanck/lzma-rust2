@@ -63,6 +63,7 @@ pub(crate) struct LZEncoderData {
     pub(crate) nice_len: u32,
     pub(crate) buf: Vec<u8>,
     pub(crate) buf_size: u32,
+    pub(crate) buf_limit: usize,
     pub(crate) read_pos: i32,
     pub(crate) read_limit: i32,
     pub(crate) finishing: bool,
@@ -153,9 +154,11 @@ impl LZEncoder {
             match_len_max,
         );
         let buf = vec![0; buf_size as usize];
+        let buf_limit = buf_size.checked_sub(1).unwrap() as usize;
 
         let keep_size_before = extra_size_before + dict_size;
         let keep_size_after = extra_size_after + match_len_max;
+
         Self {
             data: LZEncoderData {
                 keep_size_before,
@@ -164,6 +167,7 @@ impl LZEncoder {
                 nice_len,
                 buf,
                 buf_size,
+                buf_limit,
                 read_pos: -1,
                 read_limit: -1,
                 finishing: false,
@@ -322,9 +326,22 @@ impl LZEncoderData {
         self.read_pos
     }
 
+    #[inline(always)]
     pub(crate) fn get_byte(&self, forward: i32, backward: i32) -> u8 {
-        let start = self.read_pos + forward - backward;
-        self.buf[start as usize]
+        let pos = (self.read_pos + forward - backward) as usize;
+        debug_assert!(pos <= self.buf_limit);
+        let clamped = pos.min(self.buf_limit);
+        // Safety: Safe because we clamped it into the buffer range.
+        unsafe { *self.buf.get_unchecked(clamped) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn get_byte_by_pos(&self, pos: i32) -> u8 {
+        let pos = pos as usize;
+        debug_assert!(pos <= self.buf_limit);
+        let clamped = pos.min(self.buf_limit);
+        // Safety: Safe because we clamped it into the buffer range.
+        unsafe { *self.buf.get_unchecked(clamped) }
     }
 
     pub(crate) fn get_byte_backward(&self, backward: i32) -> u8 {
@@ -364,7 +381,7 @@ impl LZEncoderData {
     fn verify_matches(&self, matches: &Matches) -> bool {
         let len_limit = self.get_avail().min(self.match_len_max as i32);
         for i in 0..matches.count as usize {
-            if self.get_match_len(matches.dist[i], len_limit) != matches.len[i] as _ {
+            if self.get_match_len(matches.dist[i], len_limit) != matches.len[i] as usize {
                 return false;
             }
         }

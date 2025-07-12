@@ -81,8 +81,8 @@ impl MatchFind for HC4 {
         let mut len_best = 0;
 
         if delta2 < self.cyclic_size
-            && encoder.buf[encoder.read_pos as usize - delta2 as usize]
-                == encoder.buf[encoder.read_pos as usize]
+            && encoder.get_byte_by_pos(encoder.read_pos - delta2)
+                == encoder.get_byte_by_pos(encoder.read_pos)
         {
             len_best = 2;
             matches.len[0] = 2;

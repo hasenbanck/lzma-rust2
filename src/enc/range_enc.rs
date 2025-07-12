@@ -170,7 +170,7 @@ impl<W: Write> RangeEncoder<W> {
 
 impl RangeEncoder<()> {
     pub(crate) fn get_bit_price(prob: u32, bit: i32) -> u32 {
-        assert!(bit == 0 || bit == 1);
+        debug_assert!(bit == 0 || bit == 1);
         let i = (prob ^ ((-bit) as u32 & (BIT_MODEL_TOTAL - 1))) >> MOVE_REDUCING_BITS;
         PRICES[i as usize]
     }

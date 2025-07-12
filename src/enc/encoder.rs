@@ -246,7 +246,7 @@ impl LZMAEncoder {
     }
 
     fn encode_init<W: Write>(&mut self, rc: &mut RangeEncoder<W>) -> std::io::Result<bool> {
-        assert_eq!(self.data.read_ahead, -1);
+        debug_assert_eq!(self.data.read_ahead, -1);
         if !self.lz.has_enough_data(0) {
             return Ok(false);
         }
@@ -256,9 +256,9 @@ impl LZMAEncoder {
         self.literal_encoder
             .encode_init(&self.lz, &self.data, &mut self.coder, rc)?;
         self.data.read_ahead -= 1;
-        assert_eq!(self.data.read_ahead, -1);
+        debug_assert_eq!(self.data.read_ahead, -1);
         self.data.uncompressed_size += 1;
-        assert_eq!(self.data.uncompressed_size, 1);
+        debug_assert_eq!(self.data.uncompressed_size, 1);
         Ok(true)
     }
 
@@ -272,11 +272,11 @@ impl LZMAEncoder {
         }
         let len = mode.get_next_symbol(self);
 
-        assert!(self.data.read_ahead >= 0);
+        debug_assert!(self.data.read_ahead >= 0);
         let pos_state = (self.lz.get_pos() - self.data.read_ahead) as u32 & self.coder.pos_mask;
 
         if self.data.back == -1 {
-            assert_eq!(len, 1);
+            debug_assert_eq!(len, 1);
             let state = self.coder.state.get() as usize;
             rc.encode_bit(&mut self.coder.is_match[state], pos_state as _, 0)?;
             self.literal_encoder
@@ -292,8 +292,8 @@ impl LZMAEncoder {
                 );
 
                 let start = (self.lz.read_pos - 20).max(0) as usize;
-                let end = (self.lz.read_pos as usize + 20).min(self.lz.buf.len() - 1);
-                assert_eq!(
+                let end = (self.lz.read_pos as usize + 20).min(self.lz.buf_limit);
+                debug_assert_eq!(
                     match_len2,
                     len,
                     "read_ahead={},back={},read_pos={}, buf[{:?}]={:?}",
@@ -312,7 +312,7 @@ impl LZMAEncoder {
                     self.data.back - REPS as i32,
                     len as i32,
                 );
-                assert_eq!(match_len2, len);
+                debug_assert_eq!(match_len2, len);
                 let state = self.coder.state.get() as usize;
                 rc.encode_bit(&mut self.coder.is_rep, state, 0)?;
                 self.encode_match((self.data.back - REPS as i32) as u32, len, pos_state, rc)?;
@@ -421,7 +421,7 @@ impl LZMAEncoder {
     pub(crate) fn find_matches(&mut self) {
         self.data.read_ahead += 1;
         self.lz.find_matches();
-        assert!(self.lz.verify_matches());
+        debug_assert!(self.lz.verify_matches());
     }
 
     pub(crate) fn skip(&mut self, len: usize) {
@@ -579,7 +579,7 @@ impl LZMAEncoder {
             }
         }
 
-        assert_eq!(dist, FULL_DISTANCES);
+        debug_assert_eq!(dist, FULL_DISTANCES);
     }
 
     fn update_align_prices(&mut self) {
@@ -655,7 +655,7 @@ impl LiteralEncoder {
         coder: &mut LZMACoder,
         rc: &mut RangeEncoder<W>,
     ) -> std::io::Result<()> {
-        assert!(data.read_ahead >= 0);
+        debug_assert!(data.read_ahead >= 0);
         self.sub_encoders[0].encode(lz, data, coder, rc)
     }
 
@@ -666,7 +666,7 @@ impl LiteralEncoder {
         coder: &mut LZMACoder,
         rc: &mut RangeEncoder<W>,
     ) -> std::io::Result<()> {
-        assert!(data.read_ahead >= 0);
+        debug_assert!(data.read_ahead >= 0);
         let i = self.coder.get_sub_coder_index(
             lz.get_byte_backward(1 + data.read_ahead) as _,
             (lz.get_pos() - data.read_ahead) as u32,

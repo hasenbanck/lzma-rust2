@@ -253,18 +253,18 @@ impl<W: Write> LZMA2Writer<W> {
     fn write_chunk(&mut self) -> std::io::Result<()> {
         let compressed_size = self.rc.finish_buffer()?.unwrap_or_default() as u32;
         let mut uncompressed_size = self.lzma.data.uncompressed_size;
-        assert!(compressed_size > 0);
-        assert!(
+        debug_assert!(compressed_size > 0);
+        debug_assert!(
             uncompressed_size > 0,
             "uncompressed_size is 0, read_pos={}",
-            self.lzma.lz.read_pos
+            self.lzma.lz.read_pos,
         );
         if compressed_size + 2 < uncompressed_size {
             self.write_lzma(uncompressed_size, compressed_size)?;
         } else {
             self.lzma.reset(&mut self.mode);
             uncompressed_size = self.lzma.data.uncompressed_size;
-            assert!(uncompressed_size > 0);
+            debug_assert!(uncompressed_size > 0);
             self.write_uncompressed(uncompressed_size)?;
         }
         self.pending_size -= uncompressed_size;

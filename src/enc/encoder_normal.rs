@@ -74,7 +74,7 @@ impl NormalEncoderMode {
 
     fn update_opt_state_and_reps(&mut self) {
         let mut opt_prev = self.opts[self.opt_cur].opt_prev;
-        assert!(opt_prev < self.opt_cur);
+        debug_assert!(opt_prev < self.opt_cur);
 
         if self.opts[self.opt_cur].prev1_is_literal {
             opt_prev -= 1;
@@ -100,7 +100,7 @@ impl NormalEncoderMode {
 
         if opt_prev == self.opt_cur - 1 {
             // Must be either a short rep or a literal.
-            assert!(
+            debug_assert!(
                 self.opts[self.opt_cur].back_prev == 0 || self.opts[self.opt_cur].back_prev == -1
             );
 
@@ -259,7 +259,7 @@ impl NormalEncoderMode {
                 start_len = len + 1;
             }
             let len2_limit = i32::min(encoder.data.nice_len as i32, avail - len as i32 - 1);
-            // assert!(
+            // debug_assert!(
             //     len2_limit >= 0,
             //     "len2_limit>=0, len2_limit={}, avail={}, len={}",
             //     len2_limit,
@@ -421,16 +421,16 @@ impl LZMAEncoderTrait for NormalEncoderMode {
         // If there are pending symbols from an earlier call to this
         // function, return those symbols first.
         let pos = encoder.lz.get_pos();
-        assert!(pos >= 0);
+        debug_assert!(pos >= 0);
         if self.opt_cur < self.opt_end {
             let len = self.opts[self.opt_cur].opt_prev as i32 - self.opt_cur as i32;
             self.opt_cur = self.opts[self.opt_cur].opt_prev;
             encoder.data.back = self.opts[self.opt_cur].back_prev;
-            assert!(len >= 0);
+            debug_assert!(len >= 0);
             return len as u32;
         }
 
-        assert_eq!(self.opt_cur, self.opt_end);
+        debug_assert_eq!(self.opt_cur, self.opt_end);
         self.opt_cur = 0;
         self.opt_end = 0;
         encoder.data.back = -1;
@@ -529,7 +529,7 @@ impl LZMAEncoderTrait for NormalEncoderMode {
         // a short match instead of a literal if it is possible and cheaper.
         self.opt_end = usize::max(main_len, rep_lens[rep_best] as usize);
         if self.opt_end < MATCH_LEN_MIN {
-            assert_eq!(self.opt_end, 0);
+            debug_assert_eq!(self.opt_end, 0);
             encoder.data.back = self.opts[1].back_prev;
             return 1;
         }

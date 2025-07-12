@@ -12,22 +12,23 @@ static PG100: &str = include_str!("../tests/data/pg100.txt");
 fn bench_compression(c: &mut Criterion) {
     let mut group = c.benchmark_group("compression");
     group.throughput(Throughput::Bytes(PG100.len() as u64));
+    group.sample_size(50);
 
     let text_bytes = PG100.as_bytes();
 
-    for level in 0..=9 {
-        group.bench_with_input(BenchmarkId::new("lzma", level), &level, |b, &level| {
-            let option = LZMA2Options::with_preset(level);
-
-            b.iter(|| {
-                let mut compressed = Vec::new();
-                let mut writer =
-                    LZMAWriter::new_no_header(black_box(&mut compressed), &option, true).unwrap();
-                writer.write_all(black_box(text_bytes)).unwrap();
-                writer.finish().unwrap();
-                black_box(compressed)
-            });
-        });
+    for level in 6..=6 {
+        // group.bench_with_input(BenchmarkId::new("lzma", level), &level, |b, &level| {
+        //     let option = LZMA2Options::with_preset(level);
+        //
+        //     b.iter(|| {
+        //         let mut compressed = Vec::new();
+        //         let mut writer =
+        //             LZMAWriter::new_no_header(black_box(&mut compressed), &option, true).unwrap();
+        //         writer.write_all(black_box(text_bytes)).unwrap();
+        //         writer.finish().unwrap();
+        //         black_box(compressed)
+        //     });
+        // });
 
         group.bench_with_input(BenchmarkId::new("lzma2", level), &level, |b, &level| {
             let option = LZMA2Options::with_preset(level);
@@ -145,5 +146,5 @@ fn bench_decompression(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_compression, bench_decompression);
+criterion_group!(benches, bench_compression);
 criterion_main!(benches);
