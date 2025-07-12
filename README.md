@@ -37,6 +37,8 @@ diagrams for both aarch64 (M4 Max) and x86_64 (Ryzen 9950X3D) to compare the dif
 ![Compression Speed x86_64](./assets/compression_x86_64.svg)
 ![Compression Speed aarch64](./assets/compression_aarch64.svg)
 
+Data was assembled using lzma-rust2 v0.3.0 and liblzma v0.4.2.
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).

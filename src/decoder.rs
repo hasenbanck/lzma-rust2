@@ -239,12 +239,9 @@ impl LengthCoder {
                 .wrapping_add(LOW_SYMBOLS as _);
         }
 
-        let r = rc
-            .decode_bit_tree(&mut self.high)
+        rc.decode_bit_tree(&mut self.high)
             .wrapping_add(MATCH_LEN_MIN as _)
             .wrapping_add(LOW_SYMBOLS as _)
-            .wrapping_add(MID_SYMBOLS as _);
-
-        r
+            .wrapping_add(MID_SYMBOLS as _)
     }
 }
