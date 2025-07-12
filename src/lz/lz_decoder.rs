@@ -90,7 +90,7 @@ impl LZDecoder {
         let back = if self.pos < dist + 1 {
             // The distance wraps around to the end of the cyclic dictionary
             // buffer. We cannot get here if the dictionary isn't full.
-            assert_eq!(self.full, self.buf_size);
+            debug_assert_eq!(self.full, self.buf_size);
             let mut back = self.buf_size + self.pos - dist - 1;
 
             let copy_size = usize::min(self.buf_size - back, left);
@@ -108,8 +108,8 @@ impl LZDecoder {
             self.pos - dist - 1
         };
 
-        assert!(back < self.pos);
-        assert!(left > 0);
+        debug_assert!(back < self.pos);
+        debug_assert!(left > 0);
 
         if dist >= left {
             // No overlap possible. We can copy directly.

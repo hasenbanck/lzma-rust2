@@ -148,7 +148,7 @@ impl MatchFind for BT4 {
             }
         }
 
-        self.hash.calc_hashes(encoder.buf());
+        self.hash.calc_hashes(encoder.read_buffer());
         let mut delta2 = self.lz_pos - self.hash.get_hash2_pos();
         let delta3 = self.lz_pos - self.hash.get_hash3_pos();
         let mut current_match = self.hash.get_hash4_pos();
@@ -241,29 +241,32 @@ impl MatchFind for BT4 {
             let pair = sh_left(pair);
             let mut len = len0.min(len1);
 
-            if encoder.get_byte(len, delta) == encoder.get_byte(len, 0) {
-                while {
-                    len += 1;
-                    len
-                } < match_len_limit
-                {
-                    if encoder.get_byte(len, delta) != encoder.get_byte(len, 0) {
-                        break;
-                    }
-                }
-                if len > len_best {
-                    len_best = len;
-                    let count = matches.count as usize;
-                    matches.len[count] = len as _;
-                    let count = matches.count as usize;
-                    matches.dist[count] = delta - 1;
-                    matches.count += 1;
+            let current_pos = encoder.read_pos as usize;
+            let match_pos = (encoder.read_pos - delta) as usize;
 
-                    if len >= nice_len_limit {
-                        self.tree[ptr1 as usize] = self.tree[pair as usize];
-                        self.tree[ptr0 as usize] = self.tree[pair as usize + 1];
-                        return;
-                    }
+            let initial_match_len = len as usize;
+
+            let extended_len = search_match_prefix_length(
+                encoder.buf.as_slice(),
+                current_pos + initial_match_len,
+                match_pos + initial_match_len,
+                match_len_limit as usize - initial_match_len,
+            );
+
+            len += extended_len as i32;
+
+            if len > len_best {
+                len_best = len;
+                let count = matches.count as usize;
+                matches.len[count] = len as _;
+                let count = matches.count as usize;
+                matches.dist[count] = delta - 1;
+                matches.count += 1;
+
+                if len >= nice_len_limit {
+                    self.tree[ptr1 as usize] = self.tree[pair as usize];
+                    self.tree[ptr0 as usize] = self.tree[pair as usize + 1];
+                    return;
                 }
             }
 
@@ -298,11 +301,55 @@ impl MatchFind for BT4 {
                 nice_len_limit = avail;
             }
 
-            self.hash.calc_hashes(encoder.buf());
+            self.hash.calc_hashes(encoder.read_buffer());
             let current_match = self.hash.get_hash4_pos();
             self.hash.update_tables(self.lz_pos);
 
             self.skip(encoder, nice_len_limit, current_match);
         }
+    }
+}
+
+/// Finds the length of the common prefix of two byte sequences in a buffer.
+///
+/// This function is optimized using native word-at-a-time comparisons.
+#[inline(always)]
+fn search_match_prefix_length(buf: &[u8], pos1: usize, pos2: usize, limit: usize) -> usize {
+    const WORD_SIZE: usize = size_of::<usize>();
+
+    // Safety: The following unsafe blog is safe because we properly bound check.
+    assert!(pos1 + limit <= buf.len(), "lower bound check");
+    assert!(pos2 + limit <= buf.len(), "upper bound check");
+
+    unsafe {
+        let mut len = 0;
+
+        let mut ptr1 = buf.as_ptr().add(pos1);
+        let mut ptr2 = buf.as_ptr().add(pos2);
+
+        while len + WORD_SIZE <= limit {
+            let word1 = ptr1.cast::<usize>().read_unaligned();
+            let word2 = ptr2.cast::<usize>().read_unaligned();
+
+            if word1 == word2 {
+                len += WORD_SIZE;
+                ptr1 = ptr1.add(WORD_SIZE);
+                ptr2 = ptr2.add(WORD_SIZE);
+            } else {
+                let diff_bits = word1 ^ word2;
+                #[cfg(target_endian = "little")]
+                return len + (diff_bits.trailing_zeros() / 8) as usize;
+                #[cfg(target_endian = "big")]
+                return len + (diff_bits.leading_zeros() / 8) as usize;
+            }
+        }
+
+        while len < limit && *ptr1 == *ptr2 {
+            len += 1;
+            ptr1 = ptr1.add(1);
+            ptr2 = ptr2.add(1);
+        }
+
+        len
     }
 }

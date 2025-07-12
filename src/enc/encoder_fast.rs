@@ -125,7 +125,7 @@ impl LZMAEncoderTrait for FastEncoderMode {
             if encoder
                 .lz
                 .get_match_len(encoder.coder.reps[rep], limit as i32)
-                == limit as _
+                == limit as usize
             {
                 return 1;
             }

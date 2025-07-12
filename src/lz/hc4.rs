@@ -72,7 +72,7 @@ impl MatchFind for HC4 {
                 nice_len_limit = avail;
             }
         }
-        self.hash.calc_hashes(encoder.buf());
+        self.hash.calc_hashes(encoder.read_buffer());
         let mut delta2 = self.lz_pos.wrapping_sub(self.hash.get_hash2_pos());
         let delta3 = self.lz_pos.wrapping_sub(self.hash.get_hash3_pos());
         let mut current_match = self.hash.get_hash4_pos();
@@ -102,11 +102,13 @@ impl MatchFind for HC4 {
         }
 
         if matches.count > 0 {
-            while len_best < match_len_limit
-                && encoder.get_byte(len_best, delta2 as _) == encoder.get_byte(len_best, 0)
-            {
-                len_best += 1;
-            }
+            len_best = extend_match(
+                encoder.buf.as_slice(),
+                encoder.read_pos,
+                len_best,
+                delta2,
+                match_len_limit,
+            );
 
             let count = matches.count as usize;
             matches.len[count - 1] = len_best as u32;
@@ -146,16 +148,13 @@ impl MatchFind for HC4 {
                 && encoder.get_byte(0, delta) == encoder.get_current_byte()
             {
                 // Calculate the length of the match.
-                let mut len = 0;
-                while {
-                    len += 1;
-                    len
-                } < match_len_limit
-                {
-                    if encoder.get_byte(len, delta) != encoder.get_byte(len, 0) {
-                        break;
-                    }
-                }
+                let len = extend_match(
+                    encoder.buf.as_slice(),
+                    encoder.read_pos,
+                    1,
+                    delta,
+                    match_len_limit,
+                );
 
                 // Use the match if and only if it is better than the longest
                 // match found so far.
@@ -180,10 +179,58 @@ impl MatchFind for HC4 {
         while len > 0 {
             len -= 1;
             if self.move_pos(encoder) != 0 {
-                self.hash.calc_hashes(encoder.buf());
+                self.hash.calc_hashes(encoder.read_buffer());
                 self.chain[self.cyclic_pos as usize] = self.hash.get_hash4_pos();
                 self.hash.update_tables(self.lz_pos);
             }
         }
+    }
+}
+
+/// Extends a match to its maximum possible length within a specified limit.
+///
+/// This function is optimized using native word-at-a-time comparisons.
+#[inline(always)]
+fn extend_match(buf: &[u8], read_pos: i32, current_len: i32, distance: i32, limit: i32) -> i32 {
+    const WORD_SIZE: usize = size_of::<usize>();
+
+    // Safety: The following unsafe blog is safe because we properly bound check.
+    assert!(distance > 0, "match on itself");
+    assert!(read_pos >= distance, "lower bound check");
+    assert!(read_pos + limit <= buf.len() as i32, "upper bound check");
+
+    let extension_limit = (limit - current_len) as usize;
+
+    unsafe {
+        let mut extended_len = 0;
+
+        let mut ptr1 = buf.as_ptr().add((read_pos + current_len) as usize);
+        let mut ptr2 = ptr1.sub(distance as usize);
+
+        while extended_len + WORD_SIZE <= extension_limit {
+            let word1 = ptr1.cast::<usize>().read_unaligned();
+            let word2 = ptr2.cast::<usize>().read_unaligned();
+
+            if word1 == word2 {
+                extended_len += WORD_SIZE;
+                ptr1 = ptr1.add(WORD_SIZE);
+                ptr2 = ptr2.add(WORD_SIZE);
+            } else {
+                let diff_bits = word1 ^ word2;
+                #[cfg(target_endian = "little")]
+                let matching_bytes = (diff_bits.trailing_zeros() / 8) as usize;
+                #[cfg(target_endian = "big")]
+                let matching_bytes = (diff_bits.leading_zeros() / 8) as usize;
+                return current_len + (extended_len + matching_bytes) as i32;
+            }
+        }
+
+        while extended_len < extension_limit && *ptr1 == *ptr2 {
+            extended_len += 1;
+            ptr1 = ptr1.add(1);
+            ptr2 = ptr2.add(1);
+        }
+
+        current_len + extended_len as i32
     }
 }

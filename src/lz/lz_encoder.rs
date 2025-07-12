@@ -229,7 +229,7 @@ impl LZEncoderData {
         self.read_pos != -1
     }
 
-    pub(crate) fn buf(&mut self) -> &[u8] {
+    pub(crate) fn read_buffer(&self) -> &[u8] {
         &self.buf[self.read_pos as usize..]
     }
 
@@ -239,8 +239,8 @@ impl LZEncoderData {
         preset_dict: &[u8],
         match_finder: &mut dyn MatchFind,
     ) {
-        assert!(!self.is_started());
-        assert_eq!(self.write_pos, 0);
+        debug_assert!(!self.is_started());
+        debug_assert_eq!(self.write_pos, 0);
         let copy_size = preset_dict.len().min(dict_size as usize);
         let offset = preset_dict.len() - copy_size;
         self.buf[0..copy_size].copy_from_slice(&preset_dict[offset..(offset + copy_size)]);
@@ -251,8 +251,8 @@ impl LZEncoderData {
     fn move_window(&mut self) {
         let move_offset = (self.read_pos + 1 - self.keep_size_before as i32) & !15;
         let move_size = self.write_pos - move_offset;
-        assert!(move_size >= 0);
-        assert!(move_offset >= 0);
+        debug_assert!(move_size >= 0);
+        debug_assert!(move_offset >= 0);
         let move_size = move_size as usize;
         let offset = move_offset as usize;
         self.buf.copy_within(offset..offset + move_size, 0);
@@ -262,7 +262,7 @@ impl LZEncoderData {
     }
 
     fn fill_window(&mut self, input: &[u8], match_finder: &mut dyn MatchFind) -> usize {
-        assert!(!self.finishing);
+        debug_assert!(!self.finishing);
         if self.read_pos >= (self.buf_size as i32 - self.keep_size_after as i32) {
             self.move_window();
         }
@@ -288,7 +288,7 @@ impl LZEncoderData {
             let old_pending = self.pending_size;
             self.pending_size = 0;
             match_finder.skip(self, old_pending as _);
-            assert!(self.pending_size < old_pending)
+            debug_assert!(self.pending_size < old_pending)
         }
     }
 
@@ -318,7 +318,7 @@ impl LZEncoderData {
     }
 
     pub(crate) fn get_avail(&self) -> i32 {
-        assert_ne!(self.read_pos, -1);
+        debug_assert_ne!(self.read_pos, -1);
         self.write_pos - self.read_pos
     }
 
@@ -393,7 +393,7 @@ impl LZEncoderData {
         required_for_flushing: i32,
         required_for_finishing: i32,
     ) -> i32 {
-        assert!(required_for_flushing >= required_for_finishing);
+        debug_assert!(required_for_flushing >= required_for_finishing);
         self.read_pos += 1;
         let mut avail = self.write_pos - self.read_pos;
         if avail < required_for_flushing && (avail < required_for_finishing || !self.finishing) {
