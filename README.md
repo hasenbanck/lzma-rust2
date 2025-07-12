@@ -28,8 +28,14 @@ When compared against the `liblzma` crate, which uses the C library of the same 
 speed when using LZMA2 (aarch64 and x86_64) and LZMA (x86_64). We provide diagrams for both aarch64 (M4 Max) and
 x86_64 (Ryzen 9950X3D) to compare the different compression levels.
 
+![Decompression Speed x86_64](./assets/decompression_x86_64.svg)
+![Decompression Speed aarch64](./assets/decompression_aarch64.svg)
+
 Encoding hasn't been optimized yet and is in general slower. At worst 25% on aarch64 and 29% on x86_64. We provide
 diagrams for both aarch64 (M4 Max) and x86_64 (Ryzen 9950X3D) to compare the different compression levels.
+
+![Compression Speed x86_64](./assets/compression_x86_64.svg)
+![Compression Speed aarch64](./assets/compression_aarch64.svg)
 
 ## License
 
