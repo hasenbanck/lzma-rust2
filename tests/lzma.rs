@@ -2,18 +2,18 @@ use std::io::{Read, Write};
 
 use lzma_rust2::{LZMA2Options, LZMAReader, LZMAWriter};
 
-static APACHE2: &str = include_str!("data/apache2.txt");
-static PG100: &str = include_str!("data/pg100.txt");
-static PG6800: &str = include_str!("data/pg6800.txt");
+static EXECUTABLE: &[u8] = include_bytes!("data/executable.exe");
+static PG100: &[u8] = include_bytes!("data/pg100.txt");
+static PG6800: &[u8] = include_bytes!("data/pg6800.txt");
 
-fn test_round_trip(text: &str, level: u32) {
+fn test_round_trip(data: &[u8], level: u32) {
     let option = LZMA2Options::with_preset(level);
 
     let mut compressed = Vec::new();
 
     {
         let mut writer = LZMAWriter::new_no_header(&mut compressed, &option, true).unwrap();
-        writer.write_all(text.as_bytes()).unwrap();
+        writer.write_all(data).unwrap();
         writer.finish().unwrap();
     }
 
@@ -22,7 +22,7 @@ fn test_round_trip(text: &str, level: u32) {
     {
         let mut reader = LZMAReader::new(
             compressed.as_slice(),
-            text.len() as u64,
+            data.len() as u64,
             option.lc,
             option.lp,
             option.pb,
@@ -33,60 +33,58 @@ fn test_round_trip(text: &str, level: u32) {
         reader.read_to_end(&mut uncompressed).unwrap();
     }
 
-    let decoded = String::from_utf8(uncompressed).unwrap();
-
     // We don't use assert_eq since the debug output would be too big.
-    assert!(decoded == text);
+    assert!(uncompressed.as_slice() == data);
 }
 
 #[test]
-fn round_trip_apache2_0() {
-    test_round_trip(APACHE2, 0);
+fn round_trip_executable_0() {
+    test_round_trip(EXECUTABLE, 0);
 }
 
 #[test]
-fn round_trip_apache2_1() {
-    test_round_trip(APACHE2, 1);
+fn round_trip_executable_1() {
+    test_round_trip(EXECUTABLE, 1);
 }
 
 #[test]
-fn round_trip_apache2_2() {
-    test_round_trip(APACHE2, 2);
+fn round_trip_executable_2() {
+    test_round_trip(EXECUTABLE, 2);
 }
 
 #[test]
-fn round_trip_apache2_3() {
-    test_round_trip(APACHE2, 3);
+fn round_trip_executable_3() {
+    test_round_trip(EXECUTABLE, 3);
 }
 
 #[test]
-fn round_trip_apache2_4() {
-    test_round_trip(APACHE2, 4);
+fn round_trip_executable_4() {
+    test_round_trip(EXECUTABLE, 4);
 }
 
 #[test]
-fn round_trip_apache2_5() {
-    test_round_trip(APACHE2, 5);
+fn round_trip_executable_5() {
+    test_round_trip(EXECUTABLE, 5);
 }
 
 #[test]
-fn round_trip_apache2_6() {
-    test_round_trip(APACHE2, 6);
+fn round_trip_executable_6() {
+    test_round_trip(EXECUTABLE, 6);
 }
 
 #[test]
-fn round_trip_apache2_7() {
-    test_round_trip(APACHE2, 7);
+fn round_trip_executable_7() {
+    test_round_trip(EXECUTABLE, 7);
 }
 
 #[test]
-fn round_trip_apache2_8() {
-    test_round_trip(APACHE2, 8);
+fn round_trip_executable_8() {
+    test_round_trip(EXECUTABLE, 8);
 }
 
 #[test]
-fn round_trip_apache2_9() {
-    test_round_trip(APACHE2, 9);
+fn round_trip_executable_9() {
+    test_round_trip(EXECUTABLE, 9);
 }
 
 #[test]
