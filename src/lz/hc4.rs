@@ -6,6 +6,7 @@ use super::{
     LZEncoderData,
 };
 
+/// Hash Chain with 4-byte matching
 pub(crate) struct HC4 {
     hash: Hash234,
     chain: Vec<i32>,

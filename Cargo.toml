@@ -16,6 +16,7 @@ asm = []
 encoder = []
 
 [dependencies]
+liblzma = { version = "0.4", features = ["static"] }
 
 [dev-dependencies]
 criterion = { version = "0.6", features = ["html_reports"] }
@@ -28,3 +29,7 @@ harness = false
 [package.metadata.docs.rs]
 features = ["encoder"]
 rustdoc-args = ["--cfg", "docsrs"]
+
+[[bin]]
+name = "comparison"
+path = "src/bin/comparison.rs"

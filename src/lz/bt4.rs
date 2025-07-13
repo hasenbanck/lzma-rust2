@@ -1,5 +1,6 @@
 use super::{hash234::Hash234, LZEncoder, MatchFind, Matches};
 
+/// Binary Tree with 4-byte matching
 pub(crate) struct BT4 {
     hash: Hash234,
     tree: Vec<i32>,

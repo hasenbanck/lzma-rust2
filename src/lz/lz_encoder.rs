@@ -28,6 +28,7 @@ impl MatchFind for MatchFinders {
     }
 }
 
+/// Match Finders
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MFType {
     HC4,
