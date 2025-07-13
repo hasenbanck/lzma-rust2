@@ -346,7 +346,11 @@ impl LZEncoderData {
     }
 
     pub(crate) fn get_byte_backward(&self, backward: i32) -> u8 {
-        self.buf[(self.read_pos - backward) as usize]
+        let pos = (self.read_pos - backward) as usize;
+        debug_assert!(pos <= self.buf_limit);
+        let clamped = pos.min(self.buf_limit);
+        // Safety: Safe because we clamped it into the buffer range.
+        unsafe { *self.buf.get_unchecked(clamped) }
     }
 
     pub(crate) fn get_current_byte(&self) -> u8 {
