@@ -196,7 +196,6 @@ fn extend_match(buf: &[u8], read_pos: i32, current_len: i32, distance: i32, limi
     const WORD_SIZE: usize = size_of::<usize>();
 
     // Safety: The following unsafe blog is safe because we properly bound check.
-    assert!(distance > 0, "match on itself");
     assert!(read_pos >= distance, "lower bound check");
     assert!(read_pos + limit <= buf.len() as i32, "upper bound check");
 

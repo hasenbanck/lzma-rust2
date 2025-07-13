@@ -16,19 +16,19 @@ fn bench_compression(c: &mut Criterion) {
 
     let text_bytes = PG100.as_bytes();
 
-    for level in 4..=9 {
-        // group.bench_with_input(BenchmarkId::new("lzma", level), &level, |b, &level| {
-        //     let option = LZMA2Options::with_preset(level);
-        //
-        //     b.iter(|| {
-        //         let mut compressed = Vec::new();
-        //         let mut writer =
-        //             LZMAWriter::new_no_header(black_box(&mut compressed), &option, true).unwrap();
-        //         writer.write_all(black_box(text_bytes)).unwrap();
-        //         writer.finish().unwrap();
-        //         black_box(compressed)
-        //     });
-        // });
+    for level in 0..=9 {
+        group.bench_with_input(BenchmarkId::new("lzma", level), &level, |b, &level| {
+            let option = LZMA2Options::with_preset(level);
+
+            b.iter(|| {
+                let mut compressed = Vec::new();
+                let mut writer =
+                    LZMAWriter::new_no_header(black_box(&mut compressed), &option, true).unwrap();
+                writer.write_all(black_box(text_bytes)).unwrap();
+                writer.finish().unwrap();
+                black_box(compressed)
+            });
+        });
 
         group.bench_with_input(BenchmarkId::new("lzma2", level), &level, |b, &level| {
             let option = LZMA2Options::with_preset(level);

@@ -76,17 +76,12 @@ impl BT4 {
         loop {
             let delta = self.lz_pos - current_match;
 
-            if {
-                let tmp = depth;
-                depth -= 1;
-                tmp
-            } == 0
-                || delta >= self.cyclic_size
-            {
+            if depth == 0 || delta >= self.cyclic_size {
                 self.tree[ptr0 as usize] = 0;
                 self.tree[ptr1 as usize] = 0;
                 return;
             }
+            depth -= 1;
 
             let pair = self.cyclic_pos - delta
                 + (if delta > self.cyclic_pos {
@@ -172,7 +167,7 @@ impl MatchFind for BT4 {
 
         // See if the hash from the first three bytes found a match that
         // is different from the match possibly found by the two-byte hash.
-        // Also here the hashing algorithm guarantees that if the first byte
+        // Also, here the hashing algorithm guarantees that if the first byte
         // matches, also the next two bytes do.
         if delta2 != delta3
             && delta3 < self.cyclic_size
@@ -221,17 +216,12 @@ impl MatchFind for BT4 {
             // Return if the search depth limit has been reached or
             // if the distance of the potential match exceeds the
             // dictionary size.
-            if {
-                let n = depth;
-                depth -= 1;
-                n
-            } == 0
-                || delta >= self.cyclic_size
-            {
+            if depth == 0 || delta >= self.cyclic_size {
                 self.tree[ptr0 as usize] = 0;
                 self.tree[ptr1 as usize] = 0;
                 return;
             }
+            depth -= 1;
 
             let pair = self.cyclic_pos - delta
                 + (if delta > self.cyclic_pos {

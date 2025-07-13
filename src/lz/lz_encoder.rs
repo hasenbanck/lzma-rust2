@@ -318,41 +318,33 @@ impl LZEncoderData {
         out.write_all(&self.buf[start..(start + len)])
     }
 
+    #[inline(always)]
     pub(crate) fn get_avail(&self) -> i32 {
         debug_assert_ne!(self.read_pos, -1);
         self.write_pos - self.read_pos
     }
 
+    #[inline(always)]
     pub(crate) fn get_pos(&self) -> i32 {
         self.read_pos
     }
 
     #[inline(always)]
     pub(crate) fn get_byte(&self, forward: i32, backward: i32) -> u8 {
-        let pos = (self.read_pos + forward - backward) as usize;
-        debug_assert!(pos <= self.buf_limit);
-        let clamped = pos.min(self.buf_limit);
-        // Safety: Safe because we clamped it into the buffer range.
-        unsafe { *self.buf.get_unchecked(clamped) }
+        self.buf[(self.read_pos + forward - backward) as usize]
     }
 
     #[inline(always)]
     pub(crate) fn get_byte_by_pos(&self, pos: i32) -> u8 {
-        let pos = pos as usize;
-        debug_assert!(pos <= self.buf_limit);
-        let clamped = pos.min(self.buf_limit);
-        // Safety: Safe because we clamped it into the buffer range.
-        unsafe { *self.buf.get_unchecked(clamped) }
+        self.buf[pos as usize]
     }
 
+    #[inline(always)]
     pub(crate) fn get_byte_backward(&self, backward: i32) -> u8 {
-        let pos = (self.read_pos - backward) as usize;
-        debug_assert!(pos <= self.buf_limit);
-        let clamped = pos.min(self.buf_limit);
-        // Safety: Safe because we clamped it into the buffer range.
-        unsafe { *self.buf.get_unchecked(clamped) }
+        self.buf[(self.read_pos - backward) as usize]
     }
 
+    #[inline(always)]
     pub(crate) fn get_current_byte(&self) -> u8 {
         self.buf[self.read_pos as usize]
     }
