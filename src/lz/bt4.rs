@@ -1,6 +1,6 @@
 #[cfg(feature = "optimization")]
 use super::AlignedMemoryI32;
-use super::{hash234::Hash234, LZEncoder, MatchFind, Matches};
+use super::{extend_match, hash234::Hash234, LZEncoder, MatchFind, Matches};
 
 /// Binary Tree with 4-byte matching
 pub(crate) struct BT4 {
@@ -192,11 +192,14 @@ impl MatchFind for BT4 {
 
         // If a match was found, see how long it is.
         if matches.count > 0 {
-            while len_best < match_len_limit
-                && encoder.get_byte(len_best, delta2) == encoder.get_byte(len_best, 0)
-            {
-                len_best += 1;
-            }
+            len_best = extend_match(
+                &encoder.buf,
+                encoder.read_pos,
+                len_best,
+                delta2,
+                match_len_limit,
+            );
+
             let c = matches.count as usize - 1;
             matches.len[c] = len_best as u32;
 
@@ -242,19 +245,13 @@ impl MatchFind for BT4 {
             let pair = sh_left(pair);
             let mut len = len0.min(len1);
 
-            let current_pos = encoder.read_pos as usize;
-            let match_pos = (encoder.read_pos - delta) as usize;
-
-            let initial_match_len = len as usize;
-
-            let extended_len = search_match_prefix_length(
+            len = extend_match(
                 encoder.buf.as_slice(),
-                current_pos + initial_match_len,
-                match_pos + initial_match_len,
-                match_len_limit as usize - initial_match_len,
+                encoder.read_pos,
+                len,
+                delta,
+                match_len_limit,
             );
-
-            len += extended_len as i32;
 
             if len > len_best {
                 len_best = len;
@@ -309,64 +306,4 @@ impl MatchFind for BT4 {
             self.skip(encoder, nice_len_limit, current_match);
         }
     }
-}
-
-/// Finds the length of the common prefix of two byte sequences in a buffer.
-///
-/// This function is optimized using native word-at-a-time comparisons.
-#[cfg(feature = "optimization")]
-#[inline(always)]
-fn search_match_prefix_length(buf: &[u8], pos1: usize, pos2: usize, limit: usize) -> usize {
-    const WORD_SIZE: usize = size_of::<usize>();
-
-    // Safety: The following unsafe blog is safe because we properly bound check.
-    assert!(pos1 + limit <= buf.len(), "lower bound check");
-    assert!(pos2 + limit <= buf.len(), "upper bound check");
-
-    unsafe {
-        let mut len = 0;
-
-        let mut ptr1 = buf.as_ptr().add(pos1);
-        let mut ptr2 = buf.as_ptr().add(pos2);
-
-        while len + WORD_SIZE <= limit {
-            let word1 = ptr1.cast::<usize>().read_unaligned();
-            let word2 = ptr2.cast::<usize>().read_unaligned();
-
-            if word1 == word2 {
-                len += WORD_SIZE;
-                ptr1 = ptr1.add(WORD_SIZE);
-                ptr2 = ptr2.add(WORD_SIZE);
-            } else {
-                let diff_bits = word1 ^ word2;
-                #[cfg(target_endian = "little")]
-                return len + (diff_bits.trailing_zeros() / 8) as usize;
-                #[cfg(target_endian = "big")]
-                return len + (diff_bits.leading_zeros() / 8) as usize;
-            }
-        }
-
-        while len < limit && *ptr1 == *ptr2 {
-            len += 1;
-            ptr1 = ptr1.add(1);
-            ptr2 = ptr2.add(1);
-        }
-
-        len
-    }
-}
-
-/// Finds the length of the common prefix of two byte sequences in a buffer.
-///
-/// Unoptimized byte for byte version.
-#[cfg(not(feature = "optimization"))]
-#[inline(always)]
-fn search_match_prefix_length(buf: &[u8], pos1: usize, pos2: usize, limit: usize) -> usize {
-    let s1 = &buf[pos1..pos1 + limit];
-    let s2 = &buf[pos2..pos2 + limit];
-
-    s1.iter()
-        .zip(s2.iter())
-        .take_while(|&(b1, b2)| b1 == b2)
-        .count()
 }

@@ -1,6 +1,6 @@
 use std::{io::Write, ops::Deref};
 
-use super::{bt4::BT4, hc4::HC4};
+use super::{bt4::BT4, hc4::HC4, search_match_prefix_length};
 
 /// Align to a 64-byte cache line
 const MOVE_BLOCK_ALIGN: i32 = 64;
@@ -373,35 +373,34 @@ impl LZEncoderData {
     }
 
     pub(crate) fn get_match_len(&self, dist: i32, len_limit: i32) -> usize {
-        let back_pos = self.read_pos - dist - 1;
-        let mut len = 0;
+        let back_pos = (self.read_pos - dist - 1) as usize;
+        let cur_pos = self.read_pos as usize;
+        let limit = len_limit as usize;
 
-        while len < len_limit
-            && self.buf[(self.read_pos + len) as usize] == self.buf[(back_pos + len) as usize]
-        {
-            len += 1;
-        }
-
-        len as usize
+        search_match_prefix_length(&self.buf, cur_pos, back_pos, limit)
     }
 
     pub(crate) fn get_match_len2(&self, forward: i32, dist: i32, len_limit: i32) -> u32 {
+        if len_limit <= 0 {
+            return 0;
+        }
+
         let cur_pos = (self.read_pos + forward) as usize;
         let back_pos = cur_pos - dist as usize - 1;
-        let mut len = 0;
+        let limit = len_limit as usize;
 
-        while len < len_limit
-            && self.buf[cur_pos + len as usize] == self.buf[back_pos + len as usize]
-        {
-            len += 1;
-        }
-        len as _
+        search_match_prefix_length(&self.buf, cur_pos, back_pos, limit) as u32
     }
 
     fn verify_matches(&self, matches: &Matches) -> bool {
-        let len_limit = self.get_avail().min(self.match_len_max as i32);
+        let len_limit = self.get_avail().min(self.match_len_max as i32) as usize;
+        let cur_pos = self.read_pos as usize;
+
         for i in 0..matches.count as usize {
-            if self.get_match_len(matches.dist[i], len_limit) != matches.len[i] as usize {
+            let back_pos = cur_pos - matches.dist[i] as usize - 1;
+            let actual_len = search_match_prefix_length(&self.buf, cur_pos, back_pos, len_limit);
+
+            if actual_len != matches.len[i] as usize {
                 return false;
             }
         }
