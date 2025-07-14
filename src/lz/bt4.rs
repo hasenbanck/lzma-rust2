@@ -1,9 +1,14 @@
-use super::{hash234::Hash234, AlignedMemoryI32, LZEncoder, MatchFind, Matches};
+#[cfg(feature = "optimization")]
+use super::AlignedMemoryI32;
+use super::{hash234::Hash234, LZEncoder, MatchFind, Matches};
 
 /// Binary Tree with 4-byte matching
 pub(crate) struct BT4 {
     hash: Hash234,
+    #[cfg(feature = "optimization")]
     tree: AlignedMemoryI32,
+    #[cfg(not(feature = "optimization"))]
+    tree: Vec<i32>,
     depth_limit: i32,
 
     cyclic_size: i32,
@@ -21,7 +26,12 @@ fn sh_left(i: i32) -> i32 {
 impl BT4 {
     pub(crate) fn new(dict_size: u32, nice_len: u32, depth_limit: i32) -> Self {
         let cyclic_size = dict_size as i32 + 1;
+
+        #[cfg(feature = "optimization")]
         let tree = AlignedMemoryI32::new(cyclic_size as usize * 2);
+        #[cfg(not(feature = "optimization"))]
+        let tree = vec![0; cyclic_size as usize * 2];
+
         assert!(tree.len() >= cyclic_size as usize * 2);
 
         Self {
@@ -304,6 +314,7 @@ impl MatchFind for BT4 {
 /// Finds the length of the common prefix of two byte sequences in a buffer.
 ///
 /// This function is optimized using native word-at-a-time comparisons.
+#[cfg(feature = "optimization")]
 #[inline(always)]
 fn search_match_prefix_length(buf: &[u8], pos1: usize, pos2: usize, limit: usize) -> usize {
     const WORD_SIZE: usize = size_of::<usize>();
@@ -343,4 +354,19 @@ fn search_match_prefix_length(buf: &[u8], pos1: usize, pos2: usize, limit: usize
 
         len
     }
+}
+
+/// Finds the length of the common prefix of two byte sequences in a buffer.
+///
+/// Unoptimized byte for byte version.
+#[cfg(not(feature = "optimization"))]
+#[inline(always)]
+fn search_match_prefix_length(buf: &[u8], pos1: usize, pos2: usize, limit: usize) -> usize {
+    let s1 = &buf[pos1..pos1 + limit];
+    let s2 = &buf[pos2..pos2 + limit];
+
+    s1.iter()
+        .zip(s2.iter())
+        .take_while(|&(b1, b2)| b1 == b2)
+        .count()
 }

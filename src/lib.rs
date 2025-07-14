@@ -5,16 +5,13 @@
 //!
 //! ## Safety
 //!
-//! Only the `asm` feature uses unsafe Rust, which is needed to use handwritten assembly
-//! optimization for a special decoding function of LZMA2 in the hot loop. The ASM code doesn't
-//! write into the memory, does properly bound the reading into the memory and is rather short in
-//! size, so we are very confident that it is safe to use in general even with untrusted
-//! compression data.
+//! Only the `optimization` feature uses unsafe Rust features to implement optimizations, that are
+//! not possible in safe Rust. Those optimizations are properly guarded with assertions and are of
+//! course sound. The include creation of aligned memory, handwritten assembly code for hot
+//! functions and some pointer logic. Those optimization are well localized and generally consider
+//! safe to use, even with untrusted input.
 //!
-//! The speed difference between non ASM and ASM LZMA2 is roughly the gap between LZMA and LZMA2,
-//! since LZMA can't use the ASM optimized code path.
-//!
-//! Deactivating the `asm` feature will result in 100% safe Rust code.
+//! Deactivating the `optimization` feature will result in 100% standard Rust code.
 //!
 //! ## Performance
 //!

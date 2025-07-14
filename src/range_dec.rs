@@ -114,14 +114,14 @@ impl<R: RangeReader> RangeDecoder<R> {
     */
 
     pub(crate) fn decode_direct_bits(&mut self, count: u32) -> i32 {
-        #[cfg(all(feature = "asm", target_arch = "aarch64"))]
+        #[cfg(all(feature = "optimization", target_arch = "aarch64"))]
         {
             if self.inner.is_buffer() && count > 0 {
                 return self.decode_direct_bits_aarch64(count);
             }
         }
 
-        #[cfg(all(feature = "asm", target_arch = "x86_64"))]
+        #[cfg(all(feature = "optimization", target_arch = "x86_64"))]
         {
             if self.inner.is_buffer() && count > 0 {
                 return self.decode_direct_bits_x86_64(count);
@@ -160,7 +160,7 @@ impl<R: RangeReader> RangeDecoder<R> {
         result as _
     }
 
-    #[cfg(all(feature = "asm", target_arch = "aarch64"))]
+    #[cfg(all(feature = "optimization", target_arch = "aarch64"))]
     #[inline(always)]
     fn decode_direct_bits_aarch64(&mut self, count: u32) -> i32 {
         // Safety: It is critical that we clamp the reading from the buffer inside it bounds.
@@ -243,7 +243,7 @@ impl<R: RangeReader> RangeDecoder<R> {
         }
     }
 
-    #[cfg(all(feature = "asm", target_arch = "x86_64"))]
+    #[cfg(all(feature = "optimization", target_arch = "x86_64"))]
     #[inline(always)]
     fn decode_direct_bits_x86_64(&mut self, count: u32) -> i32 {
         // Safety: It is critical that we clamp the reading from the buffer inside it bounds.

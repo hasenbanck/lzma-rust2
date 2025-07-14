@@ -1,13 +1,18 @@
+#[cfg(feature = "optimization")]
+use super::AlignedMemoryI32;
 use super::{
     hash234::Hash234,
     lz_encoder::{LZEncoder, MatchFind, Matches},
-    AlignedMemoryI32, LZEncoderData,
+    LZEncoderData,
 };
 
 /// Hash Chain with 4-byte matching
 pub(crate) struct HC4 {
     hash: Hash234,
+    #[cfg(feature = "optimization")]
     chain: AlignedMemoryI32,
+    #[cfg(not(feature = "optimization"))]
+    chain: Vec<i32>,
     depth_limit: i32,
     cyclic_size: i32,
     cyclic_pos: i32,
@@ -20,8 +25,12 @@ impl HC4 {
     }
 
     pub(crate) fn new(dict_size: u32, nice_len: u32, depth_limit: i32) -> Self {
+        #[cfg(feature = "optimization")]
         let chain = AlignedMemoryI32::new(dict_size as usize + 1);
-        assert!(chain.len() >= dict_size as usize + 1);
+        #[cfg(not(feature = "optimization"))]
+        let chain = vec![0; dict_size as usize + 1];
+
+        assert!(chain.len() >= (dict_size as usize + 1));
 
         Self {
             hash: Hash234::new(dict_size),
@@ -192,6 +201,7 @@ impl MatchFind for HC4 {
 /// Extends a match to its maximum possible length within a specified limit.
 ///
 /// This function is optimized using native word-at-a-time comparisons.
+#[cfg(feature = "optimization")]
 #[inline(always)]
 fn extend_match(buf: &[u8], read_pos: i32, current_len: i32, distance: i32, limit: i32) -> i32 {
     const WORD_SIZE: usize = size_of::<usize>();
@@ -234,4 +244,31 @@ fn extend_match(buf: &[u8], read_pos: i32, current_len: i32, distance: i32, limi
 
         current_len + extended_len as i32
     }
+}
+
+/// Extends a match to its maximum possible length within a specified limit.
+///
+/// Unoptimized byte for byte version.
+#[cfg(not(feature = "optimization"))]
+#[inline(always)]
+fn extend_match(buf: &[u8], read_pos: i32, current_len: i32, distance: i32, limit: i32) -> i32 {
+    let extension_limit = limit - current_len;
+
+    if extension_limit == 0 {
+        return current_len;
+    }
+
+    let start1 = (read_pos + current_len) as usize;
+    let s1 = &buf[start1..start1 + extension_limit as usize];
+
+    let start2 = start1 - distance as usize;
+    let s2 = &buf[start2..start2 + extension_limit as usize];
+
+    let extended_len = s1
+        .iter()
+        .zip(s2.iter())
+        .take_while(|&(byte1, byte2)| byte1 == byte2)
+        .count();
+
+    current_len + (extended_len as i32)
 }
