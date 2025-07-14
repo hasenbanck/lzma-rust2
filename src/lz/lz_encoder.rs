@@ -1,6 +1,6 @@
 use std::{io::Write, ops::Deref};
 
-use super::{bt4::BT4, hc4::HC4, search_match_prefix_length};
+use super::{bt4::BT4, extend_match, hc4::HC4};
 
 /// Align to a 64-byte cache line
 const MOVE_BLOCK_ALIGN: i32 = 64;
@@ -373,11 +373,8 @@ impl LZEncoderData {
     }
 
     pub(crate) fn get_match_len(&self, dist: i32, len_limit: i32) -> usize {
-        let back_pos = (self.read_pos - dist - 1) as usize;
-        let cur_pos = self.read_pos as usize;
-        let limit = len_limit as usize;
-
-        search_match_prefix_length(&self.buf, cur_pos, back_pos, limit)
+        let match_distance = dist + 1;
+        extend_match(&self.buf, self.read_pos, 0, match_distance, len_limit) as usize
     }
 
     pub(crate) fn get_match_len2(&self, forward: i32, dist: i32, len_limit: i32) -> u32 {
@@ -385,25 +382,23 @@ impl LZEncoderData {
             return 0;
         }
 
-        let cur_pos = (self.read_pos + forward) as usize;
-        let back_pos = cur_pos - dist as usize - 1;
-        let limit = len_limit as usize;
-
-        search_match_prefix_length(&self.buf, cur_pos, back_pos, limit) as u32
+        let read_pos = self.read_pos + forward;
+        let match_distance = dist + 1;
+        extend_match(&self.buf, read_pos, 0, match_distance, len_limit) as u32
     }
 
     fn verify_matches(&self, matches: &Matches) -> bool {
-        let len_limit = self.get_avail().min(self.match_len_max as i32) as usize;
-        let cur_pos = self.read_pos as usize;
+        let len_limit = self.get_avail().min(self.match_len_max as i32);
 
         for i in 0..matches.count as usize {
-            let back_pos = cur_pos - matches.dist[i] as usize - 1;
-            let actual_len = search_match_prefix_length(&self.buf, cur_pos, back_pos, len_limit);
+            let match_distance = matches.dist[i] + 1;
+            let actual_len = extend_match(&self.buf, self.read_pos, 0, match_distance, len_limit);
 
-            if actual_len != matches.len[i] as usize {
+            if actual_len as u32 != matches.len[i] {
                 return false;
             }
         }
+
         true
     }
 

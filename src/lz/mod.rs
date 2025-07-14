@@ -11,66 +11,6 @@ pub(crate) use aligned_memory::*;
 pub(crate) use lz_decoder::*;
 pub use lz_encoder::*;
 
-/// Finds the length of the common prefix of two byte sequences in a buffer.
-///
-/// This function is optimized using native word-at-a-time comparisons.
-#[cfg(feature = "optimization")]
-#[inline(always)]
-fn search_match_prefix_length(buf: &[u8], pos1: usize, pos2: usize, limit: usize) -> usize {
-    const WORD_SIZE: usize = size_of::<usize>();
-
-    // Safety: The following unsafe blog is safe because we properly bound check.
-    assert!(pos1.wrapping_add(limit) <= buf.len(), "lower bound check");
-    assert!(pos2.wrapping_add(limit) <= buf.len(), "upper bound check");
-
-    unsafe {
-        let mut len = 0;
-
-        let mut ptr1 = buf.as_ptr().add(pos1);
-        let mut ptr2 = buf.as_ptr().add(pos2);
-
-        while len + WORD_SIZE <= limit {
-            let word1 = ptr1.cast::<usize>().read_unaligned();
-            let word2 = ptr2.cast::<usize>().read_unaligned();
-
-            if word1 == word2 {
-                len += WORD_SIZE;
-                ptr1 = ptr1.add(WORD_SIZE);
-                ptr2 = ptr2.add(WORD_SIZE);
-            } else {
-                let diff_bits = word1 ^ word2;
-                #[cfg(target_endian = "little")]
-                return len + (diff_bits.trailing_zeros() / 8) as usize;
-                #[cfg(target_endian = "big")]
-                return len + (diff_bits.leading_zeros() / 8) as usize;
-            }
-        }
-
-        while len < limit && *ptr1 == *ptr2 {
-            len += 1;
-            ptr1 = ptr1.add(1);
-            ptr2 = ptr2.add(1);
-        }
-
-        len
-    }
-}
-
-/// Finds the length of the common prefix of two byte sequences in a buffer.
-///
-/// Unoptimized byte for byte version.
-#[cfg(not(feature = "optimization"))]
-#[inline(always)]
-fn search_match_prefix_length(buf: &[u8], pos1: usize, pos2: usize, limit: usize) -> usize {
-    let s1 = &buf[pos1..pos1 + limit];
-    let s2 = &buf[pos2..pos2 + limit];
-
-    s1.iter()
-        .zip(s2.iter())
-        .take_while(|&(b1, b2)| b1 == b2)
-        .count()
-}
-
 /// Extends a match to its maximum possible length within a specified limit.
 ///
 /// This function is optimized using native word-at-a-time comparisons.
@@ -101,8 +41,18 @@ fn extend_match(buf: &[u8], read_pos: i32, current_len: i32, distance: i32, limi
                 ptr2 = ptr2.add(WORD_SIZE);
             } else {
                 let diff_bits = word1 ^ word2;
-                #[cfg(target_endian = "little")]
+                #[cfg(all(
+                    target_endian = "little",
+                    not(all(target_arch = "x86_64", target_feature = "bmi1"))
+                ))]
                 let matching_bytes = (diff_bits.trailing_zeros() / 8) as usize;
+
+                #[cfg(all(
+                    target_endian = "little",
+                    all(target_arch = "x86_64", target_feature = "bmi1")
+                ))]
+                let matching_bytes = (std::arch::x86_64::_tzcnt_u64(diff_bits as u64) / 8) as usize;
+
                 #[cfg(target_endian = "big")]
                 let matching_bytes = (diff_bits.leading_zeros() / 8) as usize;
                 return current_len + (extended_len + matching_bytes) as i32;
