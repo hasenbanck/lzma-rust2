@@ -2,6 +2,10 @@ use std::{io::Write, ops::Deref};
 
 use super::{bt4::BT4, hc4::HC4};
 
+/// Align to a 64-byte cache line
+const MOVE_BLOCK_ALIGN: i32 = 64;
+const MOVE_BLOCK_ALIGN_MASK: i32 = !(MOVE_BLOCK_ALIGN - 1);
+
 pub(crate) trait MatchFind {
     fn find_matches(&mut self, encoder: &mut LZEncoderData, matches: &mut Matches);
     fn skip(&mut self, encoder: &mut LZEncoderData, len: usize);
@@ -181,13 +185,27 @@ impl LZEncoder {
     }
 
     pub(crate) fn normalize(positions: &mut [i32], norm_offset: i32) {
-        for p in positions {
-            if *p <= norm_offset {
-                *p = 0;
-            } else {
-                *p -= norm_offset;
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("avx2") {
+                // SAFETY: We've checked that the CPU supports AVX2.
+                return unsafe { normalize_avx2(positions, norm_offset) };
+            }
+            if std::arch::is_x86_feature_detected!("sse4.1") {
+                // SAFETY: We've checked that the CPU supports SSE4.1.
+                return unsafe { normalize_sse41(positions, norm_offset) };
             }
         }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                // SAFETY: We've checked that the CPU supports NEON.
+                return unsafe { normalize_neon(positions, norm_offset) };
+            }
+        }
+
+        normalize_scalar(positions, norm_offset);
     }
 
     pub(crate) fn find_matches(&mut self) {
@@ -250,13 +268,18 @@ impl LZEncoderData {
     }
 
     fn move_window(&mut self) {
-        let move_offset = (self.read_pos + 1 - self.keep_size_before as i32) & !15;
+        let move_offset =
+            (self.read_pos + 1 - self.keep_size_before as i32) & MOVE_BLOCK_ALIGN_MASK;
         let move_size = self.write_pos - move_offset;
+
         debug_assert!(move_size >= 0);
         debug_assert!(move_offset >= 0);
+
         let move_size = move_size as usize;
         let offset = move_offset as usize;
+
         self.buf.copy_within(offset..offset + move_size, 0);
+
         self.read_pos -= move_offset;
         self.read_limit -= move_offset;
         self.write_pos -= move_offset;
@@ -419,4 +442,100 @@ fn get_buf_size(
     let keep_size_after = extra_size_after + match_len_max;
     let reserve_size = (dict_size / 2 + (256 << 10)).min(512 << 20);
     keep_size_before + keep_size_after + reserve_size
+}
+
+#[inline(always)]
+fn normalize_scalar(positions: &mut [i32], norm_offset: i32) {
+    positions
+        .iter_mut()
+        .for_each(|p| *p = p.saturating_sub(norm_offset));
+}
+
+/// Normalization implementation using ARM NEON for 128-bit SIMD processing.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn normalize_neon(positions: &mut [i32], norm_offset: i32) {
+    use std::arch::aarch64::*;
+
+    // Create a 128-bit vector with the offset broadcast to all 4 lanes.
+    let norm_v = vdupq_n_s32(norm_offset);
+
+    // Split the slice into a 16-byte aligned middle part and unaligned ends.
+    // `int32x4_t` is the NEON vector type for 4 x i32, which is 16 bytes.
+    let (prefix, chunks, suffix) = positions.align_to_mut::<int32x4_t>();
+
+    normalize_scalar(prefix, norm_offset);
+
+    for chunk in chunks {
+        let ptr = chunk as *mut int32x4_t as *mut i32;
+
+        let data = vld1q_s32(ptr);
+
+        // Perform saturated subtraction on 8 integers simultaneously.
+        let max_val = vmaxq_s32(data, norm_v);
+        let result = vsubq_s32(max_val, norm_v);
+
+        vst1q_s32(ptr, result);
+    }
+
+    normalize_scalar(suffix, norm_offset);
+}
+
+/// Normalization implementation using AVX2 for 256-bit SIMD processing.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn normalize_avx2(positions: &mut [i32], norm_offset: i32) {
+    use std::arch::x86_64::*;
+
+    // Create a 256-bit vector with the normalization offset broadcast to all 8 lanes.
+    let norm_v = _mm256_set1_epi32(norm_offset);
+
+    // Split the slice into a 32-byte aligned middle part and unaligned ends.
+    let (prefix, chunks, suffix) = positions.align_to_mut::<__m256i>();
+
+    normalize_scalar(prefix, norm_offset);
+
+    for chunk in chunks {
+        // Use ALIGNED load. This is safe because `align_to_mut`
+        // guarantees that `chunk` is aligned to 32 bytes.
+        let data = _mm256_load_si256(chunk as *mut _);
+
+        // Perform saturated subtraction on 8 integers simultaneously.
+        let max_val = _mm256_max_epi32(data, norm_v);
+        let result = _mm256_sub_epi32(max_val, norm_v);
+
+        // Use ALIGNED store to write the results back.
+        _mm256_store_si256(chunk as *mut _, result);
+    }
+
+    normalize_scalar(suffix, norm_offset);
+}
+
+/// Normalization implementation using SSE4.1 for 128-bit SIMD processing.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse4.1")]
+unsafe fn normalize_sse41(positions: &mut [i32], norm_offset: i32) {
+    use std::arch::x86_64::*;
+
+    // Create a 128-bit vector with the offset broadcast to all 4 lanes.
+    let norm_v = _mm_set1_epi32(norm_offset);
+
+    // Split the slice into a 16-byte aligned middle part and unaligned ends.
+    let (prefix, chunks, suffix) = positions.align_to_mut::<__m128i>();
+
+    normalize_scalar(prefix, norm_offset);
+
+    // Process the aligned middle part in 128-bit (4 x i32) chunks.
+    for chunk in chunks {
+        // Use ALIGNED 128-bit load.
+        let data = _mm_load_si128(chunk as *mut _);
+
+        let max_val = _mm_max_epi32(data, norm_v);
+        let result = _mm_sub_epi32(max_val, norm_v);
+
+        // Use ALIGNED 128-bit store.
+        _mm_store_si128(chunk as *mut _, result);
+    }
+
+    normalize_scalar(suffix, norm_offset);
 }

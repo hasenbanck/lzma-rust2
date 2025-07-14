@@ -1,15 +1,13 @@
-use std::vec;
-
 use super::{
     hash234::Hash234,
     lz_encoder::{LZEncoder, MatchFind, Matches},
-    LZEncoderData,
+    AlignedMemoryI32, LZEncoderData,
 };
 
 /// Hash Chain with 4-byte matching
 pub(crate) struct HC4 {
     hash: Hash234,
-    chain: Vec<i32>,
+    chain: AlignedMemoryI32,
     depth_limit: i32,
     cyclic_size: i32,
     cyclic_pos: i32,
@@ -22,9 +20,12 @@ impl HC4 {
     }
 
     pub(crate) fn new(dict_size: u32, nice_len: u32, depth_limit: i32) -> Self {
+        let chain = AlignedMemoryI32::new(dict_size as usize + 1);
+        assert!(chain.len() >= dict_size as usize + 1);
+
         Self {
             hash: Hash234::new(dict_size),
-            chain: vec![0; dict_size as usize + 1],
+            chain,
             depth_limit: if depth_limit > 0 {
                 depth_limit
             } else {
@@ -43,7 +44,7 @@ impl HC4 {
             if self.lz_pos == 0x7FFFFFFF {
                 let norm_offset = 0x7FFFFFFF - self.cyclic_size;
                 self.hash.normalize(norm_offset);
-                LZEncoder::normalize(&mut self.chain[..self.cyclic_size as usize], norm_offset);
+                LZEncoder::normalize(&mut self.chain, norm_offset);
                 self.lz_pos = self.lz_pos.wrapping_sub(norm_offset);
             }
 

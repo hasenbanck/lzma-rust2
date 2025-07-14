@@ -1,4 +1,5 @@
 use super::lz_encoder::LZEncoder;
+use crate::lz::AlignedMemoryI32;
 
 const HASH2_SIZE: u32 = 1 << 10;
 const HASH2_MASK: u32 = HASH2_SIZE - 1;
@@ -6,11 +7,11 @@ const HASH3_SIZE: u32 = 1 << 16;
 const HASH3_MASK: u32 = HASH3_SIZE - 1;
 
 pub struct Hash234 {
-    hash4_mask: u32,
-    hash2_table: Vec<i32>,
-    hash3_table: Vec<i32>,
-    hash4_table: Vec<i32>,
+    hash2_table: AlignedMemoryI32,
+    hash3_table: AlignedMemoryI32,
+    hash4_table: AlignedMemoryI32,
     hash4_size: u32,
+    hash4_mask: u32,
     hash2_value: i32,
     hash3_value: i32,
     hash4_value: i32,
@@ -36,11 +37,16 @@ impl Hash234 {
     }
 
     pub(crate) fn new(dict_size: u32) -> Self {
-        let hash2_table = vec![0; HASH2_SIZE as _];
-        let hash3_table = vec![0; HASH3_SIZE as _];
+        let hash2_table = AlignedMemoryI32::new(HASH2_SIZE as usize);
+        let hash3_table = AlignedMemoryI32::new(HASH3_SIZE as usize);
         let hash4_size = Self::get_hash4_size(dict_size);
         let hash4_mask = hash4_size - 1;
-        let hash4_table = vec![0; hash4_size as _];
+        let hash4_table = AlignedMemoryI32::new(hash4_size as usize);
+
+        assert!(hash2_table.len() >= HASH2_SIZE as usize);
+        assert!(hash3_table.len() >= HASH3_SIZE as usize);
+        assert!(hash4_table.len() >= hash4_size as usize);
+
         Self {
             hash4_mask,
             hash2_table,
@@ -93,7 +99,6 @@ impl Hash234 {
     pub(crate) fn normalize(&mut self, offset: i32) {
         LZEncoder::normalize(&mut self.hash2_table, offset);
         LZEncoder::normalize(&mut self.hash3_table, offset);
-        let hash4_size = self.hash4_size as usize;
-        LZEncoder::normalize(&mut self.hash4_table[..hash4_size], offset);
+        LZEncoder::normalize(&mut self.hash4_table, offset);
     }
 }

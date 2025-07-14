@@ -214,9 +214,9 @@ fn bench_decompression_lzma2(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_compression_lzma,
+    //bench_compression_lzma,
     bench_compression_lzma2,
-    bench_decompression_lzma,
-    bench_decompression_lzma2,
+    //bench_decompression_lzma,
+    //bench_decompression_lzma2,
 );
 criterion_main!(benches);

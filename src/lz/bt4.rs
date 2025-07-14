@@ -1,9 +1,9 @@
-use super::{hash234::Hash234, LZEncoder, MatchFind, Matches};
+use super::{hash234::Hash234, AlignedMemoryI32, LZEncoder, MatchFind, Matches};
 
 /// Binary Tree with 4-byte matching
 pub(crate) struct BT4 {
     hash: Hash234,
-    tree: Vec<i32>,
+    tree: AlignedMemoryI32,
     depth_limit: i32,
 
     cyclic_size: i32,
@@ -21,9 +21,12 @@ fn sh_left(i: i32) -> i32 {
 impl BT4 {
     pub(crate) fn new(dict_size: u32, nice_len: u32, depth_limit: i32) -> Self {
         let cyclic_size = dict_size as i32 + 1;
+        let tree = AlignedMemoryI32::new(cyclic_size as usize * 2);
+        assert!(tree.len() >= cyclic_size as usize * 2);
+
         Self {
             hash: Hash234::new(dict_size),
-            tree: vec![0; cyclic_size as usize * 2],
+            tree,
             depth_limit: if depth_limit > 0 {
                 depth_limit
             } else {
@@ -46,10 +49,7 @@ impl BT4 {
             if self.lz_pos == MAX_POS {
                 let normalization_offset = MAX_POS - self.cyclic_size;
                 self.hash.normalize(normalization_offset);
-                LZEncoder::normalize(
-                    &mut self.tree[..self.cyclic_size as usize * 2],
-                    normalization_offset,
-                );
+                LZEncoder::normalize(&mut self.tree, normalization_offset);
                 self.lz_pos -= normalization_offset;
             }
             self.cyclic_pos += 1;
