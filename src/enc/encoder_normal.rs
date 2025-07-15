@@ -229,16 +229,20 @@ impl NormalEncoderMode {
         let mut next_state = State::new();
 
         for rep in 0..REPS {
-            let len = encoder
-                .lz
-                .get_match_len(self.opts[self.opt_cur].reps[rep], len_limit);
+            let len = encoder.lz.get_match_len_fast_reject::<MATCH_LEN_MIN>(
+                self.opts[self.opt_cur].reps[rep],
+                len_limit,
+            );
+
             if len < MATCH_LEN_MIN {
                 continue;
             }
+
             while self.opt_end < self.opt_cur + len {
                 self.opt_end += 1;
                 self.opts[self.opt_end].reset();
             }
+
             let long_rep_price = encoder.get_long_rep_price(
                 any_rep_price,
                 rep as u32,

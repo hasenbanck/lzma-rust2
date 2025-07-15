@@ -373,8 +373,8 @@ impl LZEncoderData {
     }
 
     pub(crate) fn get_match_len(&self, dist: i32, len_limit: i32) -> usize {
-        let match_distance = dist + 1;
-        extend_match(&self.buf, self.read_pos, 0, match_distance, len_limit) as usize
+        let match_dist = dist + 1;
+        extend_match(&self.buf, self.read_pos, 0, match_dist, len_limit) as usize
     }
 
     pub(crate) fn get_match_len2(&self, forward: i32, dist: i32, len_limit: i32) -> u32 {
@@ -385,6 +385,37 @@ impl LZEncoderData {
         let read_pos = self.read_pos + forward;
         let match_distance = dist + 1;
         extend_match(&self.buf, read_pos, 0, match_distance, len_limit) as u32
+    }
+
+    #[inline(always)]
+    pub(crate) fn get_match_len_fast_reject<const MATCH_LEN_MIN: usize>(
+        &self,
+        dist: i32,
+        len_limit: i32,
+    ) -> usize {
+        let match_dist = dist + 1;
+        let read_pos = self.read_pos as usize;
+
+        // Fast rejection
+        #[cfg(feature = "optimization")]
+        unsafe {
+            // TODO: Safety comment & proof
+            if std::ptr::read_unaligned(self.buf.as_ptr().add(read_pos) as *const u16)
+                != std::ptr::read_unaligned(
+                    self.buf.as_ptr().add(read_pos - match_dist as usize) as *const u16
+                )
+            {
+                return 0;
+            }
+        }
+        #[cfg(not(feature = "optimization"))]
+        if self.buf[read_pos] != self.buf[read_pos - match_dist as usize]
+            || self.buf[read_pos + 1] != self.buf[read_pos + 1 - match_dist as usize]
+        {
+            return 0;
+        }
+
+        extend_match(&self.buf, self.read_pos, 2, match_dist, len_limit) as usize
     }
 
     fn verify_matches(&self, matches: &Matches) -> bool {
