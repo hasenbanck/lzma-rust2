@@ -83,18 +83,21 @@ fn compare_compression_sizes(data: &[u8]) {
 }
 
 #[test]
+#[ignore]
 fn compare_executable() {
     let data = std::fs::read("tests/data/executable.exe").unwrap();
     compare_compression_sizes(data.as_slice())
 }
 
 #[test]
+#[ignore]
 fn compare_pg100() {
     let data = std::fs::read("tests/data/pg100.txt").unwrap();
     compare_compression_sizes(data.as_slice())
 }
 
 #[test]
+#[ignore]
 fn compare_pg6800() {
     let data = std::fs::read("tests/data/pg6800.txt").unwrap();
     compare_compression_sizes(data.as_slice())

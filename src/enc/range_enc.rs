@@ -5,7 +5,9 @@ use crate::{BIT_MODEL_TOTAL, BIT_MODEL_TOTAL_BITS, MOVE_BITS, SHIFT_BITS, TOP_MA
 const MOVE_REDUCING_BITS: usize = 4;
 const BIT_PRICE_SHIFT_BITS: usize = 4;
 
-const PRICES: &[u32] = &[
+/// Pre-calculated price table for which 7zip has a function. We could use const to also calculate
+/// it at compile time without much benefit.
+static PRICES: &[u8; 128] = &[
     0x80, 0x67, 0x5B, 0x54, 0x4E, 0x49, 0x45, 0x42, 0x3F, 0x3D, 0x3A, 0x38, 0x36, 0x34, 0x33, 0x31,
     0x30, 0x2E, 0x2D, 0x2C, 0x2B, 0x2A, 0x29, 0x28, 0x27, 0x26, 0x25, 0x24, 0x23, 0x22, 0x22, 0x21,
     0x20, 0x1F, 0x1F, 0x1E, 0x1D, 0x1D, 0x1C, 0x1C, 0x1B, 0x1A, 0x1A, 0x19, 0x19, 0x18, 0x18, 0x17,
@@ -114,6 +116,7 @@ impl<W: Write> RangeEncoder<W> {
     ) -> std::io::Result<()> {
         let mut index = 1;
         let mut mask = probs.len() as u32;
+
         loop {
             mask >>= 1;
             let bit = symbol & mask;
@@ -169,14 +172,17 @@ impl<W: Write> RangeEncoder<W> {
 }
 
 impl RangeEncoder<()> {
+    #[inline(always)]
     pub(crate) fn get_bit_price(prob: u32, bit: i32) -> u32 {
         debug_assert!(bit == 0 || bit == 1);
         let i = (prob ^ ((-bit) as u32 & (BIT_MODEL_TOTAL - 1))) >> MOVE_REDUCING_BITS;
-        PRICES[i as usize]
+        PRICES[i as usize] as u32
     }
+
     pub(crate) fn get_bit_tree_price(probs: &mut [u16], symbol: u32) -> u32 {
         let mut price = 0;
         let mut symbol = symbol | probs.len() as u32;
+
         loop {
             let bit = symbol & 1;
             symbol >>= 1;
@@ -185,12 +191,15 @@ impl RangeEncoder<()> {
                 break;
             }
         }
+
         price
     }
+
     pub(crate) fn get_reverse_bit_tree_price(probs: &mut [u16], symbol: u32) -> u32 {
         let mut price = 0;
         let mut index = 1u32;
         let mut symbol = symbol | probs.len() as u32;
+
         loop {
             let bit = symbol & 1;
             symbol >>= 1;
@@ -200,9 +209,11 @@ impl RangeEncoder<()> {
                 break;
             }
         }
+
         price
     }
 
+    #[inline]
     pub(crate) fn get_direct_bits_price(count: u32) -> u32 {
         count << BIT_PRICE_SHIFT_BITS
     }
@@ -229,8 +240,7 @@ impl RangeEncoder<RangeEncoderBuffer> {
 
     #[inline]
     pub(crate) fn get_pending_size(&self) -> u32 {
-        let w = &self.inner;
-        w.pos as u32 + self.cache_size + 5 - 1
+        self.inner.pos as u32 + self.cache_size + 5 - 1
     }
 }
 
@@ -255,9 +265,11 @@ impl RangeEncoderBuffer {
 impl Write for RangeEncoderBuffer {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let size = buf.len().min(self.buf.len() - self.pos);
+
         if size == 0 {
             return Ok(0);
         }
+
         self.buf[self.pos..(self.pos + size)].copy_from_slice(&buf[..size]);
         self.pos += size;
         Ok(size)
