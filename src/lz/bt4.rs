@@ -93,13 +93,9 @@ impl BT4 {
             }
             depth -= 1;
 
-            let pair = self.cyclic_pos - delta
-                + (if delta > self.cyclic_pos {
-                    self.cyclic_size
-                } else {
-                    0
-                });
-            let pair = sh_left(pair);
+            let pair_selector = self.cyclic_size * ((delta > self.cyclic_pos) as i32);
+            let pair = sh_left(self.cyclic_pos - delta + pair_selector);
+
             let mut len = len0.min(len1);
 
             if encoder.get_byte_by_pos(encoder.read_pos + len - delta)
@@ -236,13 +232,9 @@ impl MatchFind for BT4 {
             }
             depth -= 1;
 
-            let pair = self.cyclic_pos - delta
-                + (if delta > self.cyclic_pos {
-                    self.cyclic_size
-                } else {
-                    0
-                });
-            let pair = sh_left(pair);
+            let pair_selector = self.cyclic_size * ((delta > self.cyclic_pos) as i32);
+            let pair = sh_left(self.cyclic_pos - delta + pair_selector);
+
             let mut len = len0.min(len1);
 
             len = extend_match(
