@@ -6,10 +6,10 @@
 //! ## Safety
 //!
 //! Only the `optimization` feature uses unsafe Rust features to implement optimizations, that are
-//! not possible in safe Rust. Those optimizations are properly guarded with assertions and are of
-//! course sound. The include creation of aligned memory, handwritten assembly code for hot
-//! functions and some pointer logic. Those optimization are well localized and generally consider
-//! safe to use, even with untrusted input.
+//! not possible in safe Rust. Those optimizations are properly guarded and are of course sound.
+//! This includes creation of aligned memory, handwritten assembly code for hot functions and some
+//! pointer logic. Those optimization are well localized and generally consider safe to use, even
+//! with untrusted input.
 //!
 //! Deactivating the `optimization` feature will result in 100% standard Rust code.
 //!
@@ -20,10 +20,10 @@
 //! yet.
 //!
 //! When compared against the `liblzma` crate, which uses the C library of the same name, this crate
-//! has improved decoding speed when using LZMA2 (aarch64 and x86_64) and LZMA (x86_64).
+//! has improved decoding speed.
 //!
-//! Encoding hasn't been optimized yet and is in general slower. Based on our test At worst 25% on
-//! aarch64 and 30% on x86_64.
+//! Encoding is also well optimized and is surpassing `liblzma` for level 0 to 3 and matches it for
+//! level 4 to 9.
 //!
 //! ## License
 //!
