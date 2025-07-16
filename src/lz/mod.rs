@@ -47,14 +47,46 @@ fn extend_match(buf: &[u8], read_pos: i32, current_len: i32, distance: i32, limi
 
 /// Extends a match to its maximum possible length within a specified limit.
 ///
-/// Unoptimized byte for byte version.
+/// This function is optimized using native word-at-a-time comparisons.
 #[cfg(not(feature = "optimization"))]
 #[inline(always)]
 fn extend_match_safe(s1: &[u8], s2: &[u8]) -> usize {
-    s1.iter()
-        .zip(s2.iter())
-        .take_while(|&(byte1, byte2)| byte1 == byte2)
-        .count()
+    const WORD_SIZE: usize = size_of::<usize>();
+
+    let len = s1.len().min(s2.len());
+
+    let mut matched = 0;
+
+    while matched + WORD_SIZE <= len {
+        let s1_slice = &s1[matched..matched + WORD_SIZE];
+        let s2_slice = &s2[matched..matched + WORD_SIZE];
+
+        let s1_array: [u8; WORD_SIZE] = s1_slice.try_into().unwrap();
+        let s2_array: [u8; WORD_SIZE] = s2_slice.try_into().unwrap();
+
+        let word1 = usize::from_ne_bytes(s1_array);
+        let word2 = usize::from_ne_bytes(s2_array);
+
+        if word1 == word2 {
+            matched += WORD_SIZE;
+        } else {
+            let diff_bits = word1 ^ word2;
+
+            #[cfg(target_endian = "little")]
+            let matching_bytes = (diff_bits.trailing_zeros() / 8) as usize;
+
+            #[cfg(target_endian = "big")]
+            let matching_bytes = (diff_bits.leading_zeros() / 8) as usize;
+
+            return matched + matching_bytes;
+        }
+    }
+
+    while matched < len && s1[matched] == s2[matched] {
+        matched += 1;
+    }
+
+    matched
 }
 
 /// Extends a match between two slices to its maximum possible length.
@@ -87,8 +119,17 @@ fn extend_match_safe(s1: &[u8], s2: &[u8]) -> usize {
             } else {
                 let diff_bits = word1 ^ word2;
 
-                #[cfg(target_endian = "little")]
+                #[cfg(all(
+                    target_endian = "little",
+                    not(all(target_arch = "x86_64", target_feature = "bmi1"))
+                ))]
                 let matching_bytes = (diff_bits.trailing_zeros() / 8) as usize;
+
+                #[cfg(all(
+                    target_endian = "little",
+                    all(target_arch = "x86_64", target_feature = "bmi1")
+                ))]
+                let matching_bytes = (std::arch::x86_64::_tzcnt_u64(diff_bits as u64) / 8) as usize;
 
                 #[cfg(target_endian = "big")]
                 let matching_bytes = (diff_bits.leading_zeros() / 8) as usize;
