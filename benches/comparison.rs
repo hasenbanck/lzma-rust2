@@ -53,7 +53,7 @@ fn bench_compression_lzma2(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(TEST_DATA.len() as u64));
     group.sample_size(25);
 
-    for level in 4..=9 {
+    for level in 0..=9 {
         group.bench_with_input(
             BenchmarkId::new("lzma-rust2", level),
             &level,
@@ -214,9 +214,9 @@ fn bench_decompression_lzma2(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    //bench_compression_lzma,
+    bench_compression_lzma,
     bench_compression_lzma2,
-    //bench_decompression_lzma,
-    //bench_decompression_lzma2,
+    bench_decompression_lzma,
+    bench_decompression_lzma2,
 );
 criterion_main!(benches);

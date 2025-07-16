@@ -15,6 +15,7 @@ pub(crate) struct AlignedMemoryI32 {
 }
 
 unsafe impl Send for AlignedMemoryI32 {}
+
 unsafe impl Sync for AlignedMemoryI32 {}
 
 impl AlignedMemoryI32 {
@@ -34,7 +35,7 @@ impl AlignedMemoryI32 {
         let target_length = required_bytes / size_of::<i32>();
 
         let layout = Layout::from_size_align(required_bytes, ALIGNMENT).expect("invalid layout");
-        // Safety: We created a proper layout.
+        // SAFETY: We created a proper layout.
         let ptr = unsafe { alloc_zeroed(layout) };
         let ptr = NonNull::new(ptr).expect("failed to allocate memory");
 
@@ -67,7 +68,7 @@ impl DerefMut for AlignedMemoryI32 {
 
 impl AsRef<[i32]> for AlignedMemoryI32 {
     fn as_ref(&self) -> &[i32] {
-        // Safety: Points to a valid region in space that is allocated, aligned, initialized and
+        // SAFETY: Points to a valid region in space that is allocated, aligned, initialized and
         // of length target_length * size_of::<i32>()
         unsafe { std::slice::from_raw_parts(self.ptr.cast::<i32>().as_ptr(), self.target_length) }
     }
@@ -75,7 +76,7 @@ impl AsRef<[i32]> for AlignedMemoryI32 {
 
 impl AsMut<[i32]> for AlignedMemoryI32 {
     fn as_mut(&mut self) -> &mut [i32] {
-        // Safety: Points to a valid region in space that is allocated, aligned, initialized and
+        // SAFETY: Points to a valid region in space that is allocated, aligned, initialized and
         // of length target_length * size_of::<i32>()
         unsafe {
             std::slice::from_raw_parts_mut(self.ptr.cast::<i32>().as_ptr(), self.target_length)
@@ -86,7 +87,7 @@ impl AsMut<[i32]> for AlignedMemoryI32 {
 impl Drop for AlignedMemoryI32 {
     fn drop(&mut self) {
         if self.layout.size() > 0 {
-            // Safety: We use the original ptr and layout we allocated this memory for.
+            // SAFETY: We use the original ptr and layout we allocated this memory for.
             unsafe { dealloc(self.ptr.as_ptr(), self.layout) };
         }
     }

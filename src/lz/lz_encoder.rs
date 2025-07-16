@@ -67,8 +67,8 @@ pub(crate) struct LZEncoderData {
     pub(crate) match_len_max: u32,
     pub(crate) nice_len: u32,
     pub(crate) buf: Vec<u8>,
-    pub(crate) buf_size: u32,
-    pub(crate) buf_limit: usize,
+    pub(crate) buf_size: usize,
+    pub(crate) buf_limit_u16: usize,
     pub(crate) read_pos: i32,
     pub(crate) read_limit: i32,
     pub(crate) finishing: bool,
@@ -158,8 +158,9 @@ impl LZEncoder {
             extra_size_after,
             match_len_max,
         );
-        let buf = vec![0; buf_size as usize];
-        let buf_limit = buf_size.checked_sub(1).unwrap() as usize;
+        let buf_size = buf_size as usize;
+        let buf = vec![0; buf_size];
+        let buf_limit_u16 = buf_size.checked_sub(size_of::<u16>()).unwrap();
 
         let keep_size_before = extra_size_before + dict_size;
         let keep_size_after = extra_size_after + match_len_max;
@@ -172,7 +173,7 @@ impl LZEncoder {
                 nice_len,
                 buf,
                 buf_size,
-                buf_limit,
+                buf_limit_u16,
                 read_pos: -1,
                 read_limit: -1,
                 finishing: false,
@@ -372,19 +373,17 @@ impl LZEncoderData {
         self.buf[self.read_pos as usize]
     }
 
+    #[inline(always)]
     pub(crate) fn get_match_len(&self, dist: i32, len_limit: i32) -> usize {
-        let match_dist = dist + 1;
-        extend_match(&self.buf, self.read_pos, 0, match_dist, len_limit) as usize
+        extend_match(&self.buf, self.read_pos, 0, dist + 1, len_limit) as usize
     }
 
+    #[inline(always)]
     pub(crate) fn get_match_len2(&self, forward: i32, dist: i32, len_limit: i32) -> u32 {
         if len_limit <= 0 {
             return 0;
         }
-
-        let read_pos = self.read_pos + forward;
-        let match_distance = dist + 1;
-        extend_match(&self.buf, read_pos, 0, match_distance, len_limit) as u32
+        extend_match(&self.buf, self.read_pos + forward, 0, dist + 1, len_limit) as u32
     }
 
     #[inline(always)]
@@ -399,11 +398,12 @@ impl LZEncoderData {
         // Fast rejection
         #[cfg(feature = "optimization")]
         unsafe {
-            // TODO: Safety comment & proof
-            if std::ptr::read_unaligned(self.buf.as_ptr().add(read_pos) as *const u16)
-                != std::ptr::read_unaligned(
-                    self.buf.as_ptr().add(read_pos - match_dist as usize) as *const u16
-                )
+            // SAFETY: We clamp the read positions in range of the buffer.
+            let clamped0 = read_pos.min(self.buf_limit_u16);
+            let clamped1 = (read_pos - match_dist as usize).min(self.buf_limit_u16);
+
+            if std::ptr::read_unaligned(self.buf.as_ptr().add(clamped0) as *const u16)
+                != std::ptr::read_unaligned(self.buf.as_ptr().add(clamped1) as *const u16)
             {
                 return 0;
             }

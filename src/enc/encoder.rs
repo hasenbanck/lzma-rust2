@@ -285,34 +285,10 @@ impl LZMAEncoder {
             let state = self.coder.state.get() as usize;
             rc.encode_bit(&mut self.coder.is_match[state], pos_state as usize, 1)?;
             if self.data.back < REPS as i32 {
-                let match_len2 = self.lz.get_match_len2(
-                    -self.data.read_ahead,
-                    self.coder.reps[self.data.back as usize],
-                    len as i32,
-                );
-
-                let start = (self.lz.read_pos - 20).max(0) as usize;
-                let end = (self.lz.read_pos as usize + 20).min(self.lz.buf_limit);
-                debug_assert_eq!(
-                    match_len2,
-                    len,
-                    "read_ahead={},back={},read_pos={}, buf[{:?}]={:?}",
-                    self.data.read_ahead,
-                    self.data.back,
-                    self.lz.read_pos,
-                    start..end,
-                    &self.lz.buf[start..end]
-                );
                 let state = self.coder.state.get() as usize;
                 rc.encode_bit(&mut self.coder.is_rep, state, 1)?;
                 self.encode_rep_match(self.data.back as u32, len, pos_state, rc)?;
             } else {
-                let match_len2 = self.lz.get_match_len2(
-                    -self.data.read_ahead,
-                    self.data.back - REPS as i32,
-                    len as i32,
-                );
-                debug_assert_eq!(match_len2, len);
                 let state = self.coder.state.get() as usize;
                 rc.encode_bit(&mut self.coder.is_rep, state, 0)?;
                 self.encode_match((self.data.back - REPS as i32) as u32, len, pos_state, rc)?;
