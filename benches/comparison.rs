@@ -61,10 +61,9 @@ fn bench_compression_lzma2(c: &mut Criterion) {
                 let option = LZMA2Options::with_preset(level);
 
                 b.iter(|| {
-                    let mut compressed = Vec::new();
-                    let mut writer = LZMA2Writer::new(black_box(&mut compressed), &option);
+                    let mut writer = LZMA2Writer::new(Vec::new(), &option);
                     writer.write_all(black_box(TEST_DATA)).unwrap();
-                    writer.finish().unwrap();
+                    let compressed = writer.finish().unwrap();
                     black_box(compressed)
                 });
             },
@@ -214,9 +213,9 @@ fn bench_decompression_lzma2(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_compression_lzma,
+    //bench_compression_lzma,
     bench_compression_lzma2,
-    bench_decompression_lzma,
-    bench_decompression_lzma2,
+    //bench_decompression_lzma,
+    //bench_decompression_lzma2,
 );
 criterion_main!(benches);

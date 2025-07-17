@@ -16,6 +16,7 @@ optimization = []
 encoder = []
 
 [dependencies]
+crossbeam-channel = "0.5"
 
 [dev-dependencies]
 criterion = { version = "0.6", features = ["html_reports"] }

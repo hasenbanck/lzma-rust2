@@ -140,7 +140,7 @@ pub fn get_extra_size_before(dict_size: u32) -> u32 {
     COMPRESSED_SIZE_MAX.saturating_sub(dict_size)
 }
 
-/// LZMA2 format writer
+/// A single-threaded LZMA2 encoder.
 /// # Examples
 /// ```
 /// use std::io::Write;
