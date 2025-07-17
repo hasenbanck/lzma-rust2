@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{io::Write, num::NonZeroU32, ptr::NonNull};
 
 use super::{
     encoder::{EncodeMode, LZMAEncoder, LZMAEncoderModes},
@@ -8,6 +8,13 @@ use super::{
 
 #[derive(Debug, Clone)]
 pub struct LZMA2Options {
+    /// Option size of one stream. Used to allow multi-threaded compression & decompression.
+    /// Essentially the encoded file is cut into `stream_size` slices that can be decoded & encoded
+    /// in parallel. As a rule of thumb: The more streams a file has the less effective the
+    /// compression ratio will be.
+    ///
+    /// If not set the data is compressed as one stream.
+    pub stream_size: Option<NonZeroU32>,
     pub dict_size: u32,
     pub lc: u32,
     pub lp: u32,
@@ -55,6 +62,7 @@ impl LZMA2Options {
 
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        stream_size: Option<NonZeroU32>,
         dict_size: u32,
         lc: u32,
         lp: u32,
@@ -65,6 +73,7 @@ impl LZMA2Options {
         depth_limit: i32,
     ) -> Self {
         Self {
+            stream_size,
             dict_size,
             lc,
             lp,
@@ -81,6 +90,7 @@ impl LZMA2Options {
     #[inline]
     pub fn with_preset(preset: u32) -> Self {
         let mut opt = Self {
+            stream_size: None,
             dict_size: Default::default(),
             lc: Default::default(),
             lp: Default::default(),
@@ -140,7 +150,12 @@ pub fn get_extra_size_before(dict_size: u32) -> u32 {
     COMPRESSED_SIZE_MAX.saturating_sub(dict_size)
 }
 
+// TODO: If stream_size is set, we need to write chunks until we have written stream_size or more
+//       uncompressed bytes. After that we start a new "stream" that can be decoded by the multi-
+//       threaded reader by setting the "dict_reset_needed". We then repeat the process.
+//       This allows the multi threaded decoder to decode the file with many threads.
 /// A single-threaded LZMA2 encoder.
+///
 /// # Examples
 /// ```
 /// use std::io::Write;
@@ -161,6 +176,8 @@ pub struct LZMA2Writer<W: Write> {
     state_reset_needed: bool,
     props_needed: bool,
     pending_size: u32,
+    stream_size: Option<NonZeroU32>,
+    current_stream_size: u32,
 }
 
 impl<W: Write> LZMA2Writer<W> {
@@ -194,6 +211,8 @@ impl<W: Write> LZMA2Writer<W> {
             state_reset_needed: true,
             props_needed: true,
             pending_size: 0,
+            stream_size: options.stream_size,
+            current_stream_size: 0,
         }
     }
 
