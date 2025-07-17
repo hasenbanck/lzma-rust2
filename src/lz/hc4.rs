@@ -197,4 +197,11 @@ impl MatchFind for HC4 {
             }
         }
     }
+
+    fn reset(&mut self) {
+        self.hash.reset();
+        self.chain.as_mut().fill(0);
+        self.cyclic_pos = -1;
+        self.lz_pos = self.cyclic_size;
+    }
 }

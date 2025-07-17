@@ -9,6 +9,7 @@ const MOVE_BLOCK_ALIGN_MASK: i32 = !(MOVE_BLOCK_ALIGN - 1);
 pub(crate) trait MatchFind {
     fn find_matches(&mut self, encoder: &mut LZEncoderData, matches: &mut Matches);
     fn skip(&mut self, encoder: &mut LZEncoderData, len: usize);
+    fn reset(&mut self);
 }
 
 pub(crate) enum MatchFinders {
@@ -28,6 +29,13 @@ impl MatchFind for MatchFinders {
         match self {
             MatchFinders::HC4(m) => m.skip(encoder, len),
             MatchFinders::BT4(m) => m.skip(encoder, len),
+        }
+    }
+
+    fn reset(&mut self) {
+        match self {
+            MatchFinders::HC4(m) => m.reset(),
+            MatchFinders::BT4(m) => m.reset(),
         }
     }
 }
@@ -245,6 +253,14 @@ impl LZEncoder {
 }
 
 impl LZEncoderData {
+    pub(crate) fn reset(&mut self) {
+        self.read_pos = -1;
+        self.read_limit = -1;
+        self.finishing = false;
+        self.write_pos = 0;
+        self.pending_size = 0;
+    }
+
     pub(crate) fn is_started(&self) -> bool {
         self.read_pos != -1
     }

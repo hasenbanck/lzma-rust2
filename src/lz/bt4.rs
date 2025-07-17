@@ -298,4 +298,11 @@ impl MatchFind for BT4 {
             self.skip(encoder, nice_len_limit, current_match);
         }
     }
+
+    fn reset(&mut self) {
+        self.hash.reset();
+        self.tree.as_mut().fill(0);
+        self.cyclic_pos = -1;
+        self.lz_pos = self.cyclic_size;
+    }
 }

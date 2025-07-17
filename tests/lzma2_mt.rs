@@ -1,13 +1,17 @@
-use std::io::{Cursor, Read, Write};
+use std::{
+    io::{Cursor, Read, Write},
+    num::{NonZero, NonZeroU32},
+};
 
-use lzma_rust2::{LZMA2Options, LZMA2Reader, LZMA2Writer};
+use lzma_rust2::{LZMA2Options, LZMA2Reader, LZMA2ReaderMT, LZMA2Writer};
 
 static EXECUTABLE: &[u8] = include_bytes!("data/executable.exe");
 static PG100: &[u8] = include_bytes!("data/pg100.txt");
 static PG6800: &[u8] = include_bytes!("data/pg6800.txt");
 
 fn test_round_trip(data: &[u8], level: u32) {
-    let option = LZMA2Options::with_preset(level);
+    let mut option = LZMA2Options::with_preset(level);
+    option.stream_size = NonZeroU32::new(512 * 1025);
 
     let mut compressed = Vec::new();
 
@@ -17,12 +21,17 @@ fn test_round_trip(data: &[u8], level: u32) {
         writer.finish().unwrap();
     }
 
+    dbg!("finished");
+
     let mut uncompressed = Vec::new();
 
     {
         let mut reader = LZMA2Reader::new(Cursor::new(compressed), option.dict_size, None);
         reader.read_to_end(&mut uncompressed).unwrap();
     }
+
+    dbg!(uncompressed.len());
+    dbg!(data.len());
 
     // We don't use assert_eq since the debug output would be too big.
     assert!(uncompressed.as_slice() == data);

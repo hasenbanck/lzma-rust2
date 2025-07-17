@@ -7,6 +7,7 @@ use super::{
     range_enc::{RangeEncoder, RangeEncoderBuffer},
     *,
 };
+use crate::lz::MatchFind;
 
 const LZMA2_UNCOMPRESSED_LIMIT: u32 = (2 << 20) - MATCH_LEN_MAX as u32;
 const LZMA2_COMPRESSED_LIMIT: u32 = (64 << 10) - 26;
@@ -194,12 +195,12 @@ impl LZMAEncoder {
                 uncompressed_size: 0,
             },
         };
-        e.reset(&mut mode);
+        e.reset(false, &mut mode);
 
         (e, mode)
     }
 
-    pub(crate) fn reset(&mut self, mode: &mut dyn LZMAEncoderTrait) {
+    pub(crate) fn reset(&mut self, reset_lz_data: bool, mode: &mut dyn LZMAEncoderTrait) {
         self.coder.reset();
         self.literal_encoder.reset();
         self.match_len_encoder.reset();
@@ -209,6 +210,12 @@ impl LZMAEncoder {
         self.data.uncompressed_size += (self.data.read_ahead + 1) as u32;
         self.data.read_ahead = -1;
         mode.reset();
+
+        if reset_lz_data {
+            self.lz.data.reset();
+            self.lz.match_finder.reset();
+            self.data.uncompressed_size = 0;
+        }
     }
 
     #[inline(always)]

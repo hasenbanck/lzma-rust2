@@ -1,10 +1,11 @@
-use std::{io::Write, num::NonZeroU32, ptr::NonNull};
+use std::{io::Write, num::NonZeroU32};
 
 use super::{
     encoder::{EncodeMode, LZMAEncoder, LZMAEncoderModes},
     lz::MFType,
     range_enc::{RangeEncoder, RangeEncoderBuffer},
 };
+use crate::enc::encoder::LZMAEncoderTrait;
 
 #[derive(Debug, Clone)]
 pub struct LZMA2Options {
@@ -150,10 +151,6 @@ pub fn get_extra_size_before(dict_size: u32) -> u32 {
     COMPRESSED_SIZE_MAX.saturating_sub(dict_size)
 }
 
-// TODO: If stream_size is set, we need to write chunks until we have written stream_size or more
-//       uncompressed bytes. After that we start a new "stream" that can be decoded by the multi-
-//       threaded reader by setting the "dict_reset_needed". We then repeat the process.
-//       This allows the multi threaded decoder to decode the file with many threads.
 /// A single-threaded LZMA2 encoder.
 ///
 /// # Examples
@@ -163,8 +160,8 @@ pub fn get_extra_size_before(dict_size: u32) -> u32 {
 /// use lzma_rust2::{LZMA2Options, LZMA2Writer};
 ///
 /// let mut writer = LZMA2Writer::new(Vec::new(), &LZMA2Options::default());
-/// writer.write_all(b"hello world").unwrap();
-/// writer.finish().unwrap();
+/// writer.write_all(b"some very long data...").unwrap();
+/// let compressed_data = writer.finish().unwrap();
 /// ```
 pub struct LZMA2Writer<W: Write> {
     inner: W,
@@ -216,79 +213,112 @@ impl<W: Write> LZMA2Writer<W> {
         }
     }
 
-    fn write_lzma(&mut self, uncompressed_size: u32, compressed_size: u32) -> std::io::Result<()> {
-        let mut control = if self.props_needed {
-            if self.dict_reset_needed {
-                0x80 + (3 << 5)
-            } else {
-                0x80 + (2 << 5)
-            }
+    fn prepare_for_encode(&mut self) -> std::io::Result<()> {
+        if self.dict_reset_needed {
+            // A full dictionary reset is needed. Reset everything.
+            self.lzma.reset(true, &mut self.mode);
+            self.dict_reset_needed = false;
+            self.state_reset_needed = false;
         } else if self.state_reset_needed {
-            0x80 + (1 << 5)
-        } else {
-            0x80
-        };
-        control |= (uncompressed_size - 1) >> 16;
+            // A state-only reset is needed (e.g., after uncompressed chunk).
+            self.lzma.reset(false, &mut self.mode);
+            self.state_reset_needed = false;
+        }
+        Ok(())
+    }
+
+    fn write_lzma(&mut self, uncompressed_size: u32, compressed_size: u32) -> std::io::Result<()> {
+        let mut control: u8;
         let mut chunk_header = [0u8; 6];
-        chunk_header[0] = control as u8;
+        let mut header_len = 5;
+
+        if self.props_needed {
+            control = 0x80 | (3 << 5);
+            chunk_header[5] = self.props;
+            header_len = 6;
+            self.props_needed = false;
+        } else if self.state_reset_needed {
+            control = 0x80 | (2 << 5);
+            self.state_reset_needed = false;
+        } else {
+            control = 0x80;
+        }
+        control |= ((uncompressed_size - 1) >> 16) as u8;
+
+        chunk_header[0] = control;
         chunk_header[1] = ((uncompressed_size - 1) >> 8) as u8;
         chunk_header[2] = (uncompressed_size - 1) as u8;
         chunk_header[3] = ((compressed_size - 1) >> 8) as u8;
         chunk_header[4] = (compressed_size - 1) as u8;
-        if self.props_needed {
-            chunk_header[5] = self.props;
-            self.inner.write_all(&chunk_header)?;
-        } else {
-            self.inner.write_all(&chunk_header[..5])?;
-        }
 
+        self.inner.write_all(&chunk_header[..header_len])?;
         self.rc.write_to(&mut self.inner)?;
-        self.props_needed = false;
-        self.state_reset_needed = false;
-        self.dict_reset_needed = false;
+
         Ok(())
     }
 
-    fn write_uncompressed(&mut self, mut uncompressed_size: u32) -> std::io::Result<()> {
-        while uncompressed_size > 0 {
-            let chunk_size = uncompressed_size.min(COMPRESSED_SIZE_MAX);
+    fn write_uncompressed(&mut self, uncompressed_size: u32) -> std::io::Result<()> {
+        let mut remaining = uncompressed_size;
+        while remaining > 0 {
+            let chunk_size = remaining.min(COMPRESSED_SIZE_MAX);
             let mut chunk_header = [0u8; 3];
-            chunk_header[0] = if self.dict_reset_needed { 0x01 } else { 0x02 };
+
+            // The first uncompressed chunk after a reset signal needs to carry that signal.
+            chunk_header[0] = if self.state_reset_needed { 0x01 } else { 0x02 };
             chunk_header[1] = ((chunk_size - 1) >> 8) as u8;
             chunk_header[2] = (chunk_size - 1) as u8;
             self.inner.write_all(&chunk_header)?;
+
             self.lzma.lz.copy_uncompressed(
                 &mut self.inner,
-                uncompressed_size as i32,
+                chunk_size as i32,
                 chunk_size as usize,
             )?;
-            uncompressed_size -= chunk_size;
-            self.dict_reset_needed = false;
+            remaining -= chunk_size;
+
+            // Only the first chunk carries the reset signal. Subsequent ones are normal.
+            self.state_reset_needed = false;
         }
+
+        // After any uncompressed data, the next LZMA chunk must reset its state.
+        // But the dictionary is preserved. This is a "soft" reset.
         self.state_reset_needed = true;
         Ok(())
     }
 
     fn write_chunk(&mut self) -> std::io::Result<()> {
         let compressed_size = self.rc.finish_buffer()?.unwrap_or_default() as u32;
-        let mut uncompressed_size = self.lzma.data.uncompressed_size;
-        debug_assert!(compressed_size > 0);
-        debug_assert!(
-            uncompressed_size > 0,
-            "uncompressed_size is 0, read_pos={}",
-            self.lzma.lz.read_pos,
-        );
-        if compressed_size + 2 < uncompressed_size {
+        let uncompressed_size = self.lzma.data.uncompressed_size;
+
+        debug_assert!(uncompressed_size > 0);
+
+        if compressed_size > 0 && compressed_size + 2 < uncompressed_size {
             self.write_lzma(uncompressed_size, compressed_size)?;
         } else {
-            self.lzma.reset(&mut self.mode);
-            uncompressed_size = self.lzma.data.uncompressed_size;
-            debug_assert!(uncompressed_size > 0);
+            // The uncompressed data is smaller. We need to reset the LZMA state
+            // because we are interrupting it to write an uncompressed block.
+            self.lzma.reset(false, &mut self.mode);
             self.write_uncompressed(uncompressed_size)?;
         }
+
         self.pending_size -= uncompressed_size;
         self.lzma.reset_uncompressed_size();
         self.rc.reset_buffer();
+
+        // If stream_size is configured, check if we need to start a new stream.
+        if let Some(stream_size) = self.stream_size {
+            self.current_stream_size += uncompressed_size;
+
+            if self.current_stream_size >= stream_size.get() {
+                // The *next* chunk must start a new stream.
+                // Signal that a full dictionary and props reset is needed.
+                self.dict_reset_needed = true;
+                self.props_needed = true;
+                self.state_reset_needed = true;
+                self.current_stream_size = 0;
+            }
+        }
+
         Ok(())
     }
 
@@ -300,8 +330,10 @@ impl<W: Write> LZMA2Writer<W> {
         self.lzma.lz.set_finishing();
 
         while self.pending_size > 0 {
-            self.lzma.encode_for_lzma2(&mut self.rc, &mut self.mode)?;
-            self.write_chunk()?;
+            self.prepare_for_encode()?;
+            if self.lzma.encode_for_lzma2(&mut self.rc, &mut self.mode)? {
+                self.write_chunk()?;
+            }
         }
 
         self.inner.write_all(&[0x00])?;
@@ -313,13 +345,15 @@ impl<W: Write> LZMA2Writer<W> {
 impl<W: Write> Write for LZMA2Writer<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let mut len = buf.len();
-
         let mut off = 0;
         while len > 0 {
+            self.prepare_for_encode()?;
+
             let used = self.lzma.lz.fill_window(&buf[off..(off + len)]);
             off += used;
             len -= used;
             self.pending_size += used as u32;
+
             if self.lzma.encode_for_lzma2(&mut self.rc, &mut self.mode)? {
                 self.write_chunk()?;
             }
@@ -329,10 +363,14 @@ impl<W: Write> Write for LZMA2Writer<W> {
 
     fn flush(&mut self) -> std::io::Result<()> {
         self.lzma.lz.set_flushing();
+
         while self.pending_size > 0 {
-            self.lzma.encode_for_lzma2(&mut self.rc, &mut self.mode)?;
-            self.write_chunk()?;
+            self.prepare_for_encode()?;
+            if self.lzma.encode_for_lzma2(&mut self.rc, &mut self.mode)? {
+                self.write_chunk()?;
+            }
         }
+
         self.inner.flush()
     }
 }

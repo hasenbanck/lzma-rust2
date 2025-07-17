@@ -1,12 +1,18 @@
-use crate::LZMA2Reader;
+use std::{
+    collections::BTreeMap,
+    io,
+    io::{Cursor, Read},
+    num::NonZeroU8,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    thread,
+};
+
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
-use std::collections::BTreeMap;
-use std::io;
-use std::io::{Cursor, Read};
-use std::num::NonZeroU8;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
+
+use crate::LZMA2Reader;
 
 /// A work unit for a worker thread.
 /// Contains the sequence number and the raw compressed bytes for a series of chunks.
@@ -20,8 +26,7 @@ type ResultUnit = (u64, io::Result<Vec<u8>>);
 ///
 /// # Examples
 /// ```
-/// use std::io::Read;
-/// use std::num::NonZeroU8;
+/// use std::{io::Read, num::NonZeroU8};
 ///
 /// use lzma_rust2::{LZMA2Options, LZMA2ReaderMT};
 ///
@@ -32,7 +37,7 @@ type ResultUnit = (u64, io::Result<Vec<u8>>);
 ///     compressed.as_slice(),
 ///     LZMA2Options::DICT_SIZE_DEFAULT,
 ///     None,
-///     NonZeroU8::new(1).unwrap()
+///     NonZeroU8::new(1).unwrap(),
 /// );
 /// let mut decompressed = Vec::new();
 /// reader.read_to_end(&mut decompressed).unwrap();
@@ -172,105 +177,114 @@ fn reader_thread_logic<R: Read>(
             break;
         }
 
-        let mut control_buf = [0u8; 1];
-        match inner.read_exact(&mut control_buf) {
-            Ok(_) => (),
-            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
-                // Clean end of stream.
+        let chunk_bytes = match read_one_chunk(&mut inner) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => break, // Clean end of stream
+            Err(e) => {
+                set_error(e, &error_store, &shutdown_flag);
                 break;
             }
-            Err(error) => {
-                set_error(error, &error_store, &shutdown_flag);
-                break;
-            }
+        };
+
+        if chunk_bytes.is_empty() {
+            continue;
         }
-        let control = control_buf[0];
+        let control = chunk_bytes[0];
 
-        // End of stream marker. Add it to the current unit and finish.
-        if control == 0x00 {
-            current_work_unit.push(control);
-            break;
-        }
+        let is_new_stream_start = control >= 0xE0 || control == 0x01;
 
-        // A dictionary reset marks the beginning of a new, independent work unit.
-        // The single-threaded reader requires that any new stream it processes
-        // starts with a chunk that resets the dictionary.
-        let is_dict_reset = control >= 0xE0 || control == 0x01;
-
-        // If this chunk is a dictionary reset AND we have already buffered
-        // some data, it means the previous work unit is complete. Send it.
-        if is_dict_reset && !current_work_unit.is_empty() {
+        // If this chunk starts a new stream AND we have data in our current buffer,
+        // then the current buffer represents a complete, finished work unit. Send it.
+        if is_new_stream_start && !current_work_unit.is_empty() {
             let work_to_send = std::mem::take(&mut current_work_unit);
             if work_tx.send((sequence_id, work_to_send)).is_err() {
-                // Main thread is gone, shut down.
-                return;
+                return; // Main thread has shut down.
             }
             sequence_id += 1;
         }
 
-        // Now, add the current chunk (which is either the first chunk of the
-        // first work unit, a new dictionary-reset chunk for a new unit, or a
-        // subsequent chunk for the current unit) to the buffer.
-        current_work_unit.push(control);
+        // Add the current chunk's bytes to the buffer.
+        // If we just sent a work unit, this will be the first chunk of the new unit.
+        current_work_unit.extend_from_slice(&chunk_bytes);
 
-        // This parsing logic for the rest of the chunk is correct.
-        let chunk_size_to_read = if control >= 0x80 {
-            // LZMA chunk
-            let mut header_buf = [0u8; 4];
-            if let Err(e) = inner.read_exact(&mut header_buf) {
-                set_error(e, &error_store, &shutdown_flag);
-                break;
-            }
-            current_work_unit.extend_from_slice(&header_buf);
-
-            if control >= 0xC0 {
-                let mut props_buf = [0u8; 1];
-                if let Err(e) = inner.read_exact(&mut props_buf) {
-                    set_error(e, &error_store, &shutdown_flag);
-                    break;
-                }
-                current_work_unit.push(props_buf[0]);
-            }
-            u16::from_be_bytes([header_buf[2], header_buf[3]]) as usize + 1
-        } else if control == 0x02 {
-            // Uncompressed chunk, no reset.
-            let mut size_buf = [0u8; 2];
-            if let Err(e) = inner.read_exact(&mut size_buf) {
-                set_error(e, &error_store, &shutdown_flag);
-                break;
-            }
-            current_work_unit.extend_from_slice(&size_buf);
-            u16::from_be_bytes(size_buf) as usize + 1
-        } else if control == 0x01 {
-            // Uncompressed chunk with dict reset.
-            0
-        } else {
-            set_error(
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Invalid LZMA2 control byte: {}", control),
-                ),
-                &error_store,
-                &shutdown_flag,
-            );
+        // If we just read the end-of-stream marker, the work unit is complete.
+        if control == 0x00 {
             break;
-        };
-
-        // Read the chunk data itself.
-        if chunk_size_to_read > 0 {
-            let start_len = current_work_unit.len();
-            current_work_unit.resize(start_len + chunk_size_to_read, 0);
-            if let Err(e) = inner.read_exact(&mut current_work_unit[start_len..]) {
-                set_error(e, &error_store, &shutdown_flag);
-                break;
-            }
         }
     }
 
-    // After the loop, send any remaining data as the final work unit.
+    // Send any remaining data as the final work unit.
     if !current_work_unit.is_empty() {
+        // The receiver may be gone if an error occurred, so ignore the result.
         let _ = work_tx.send((sequence_id, current_work_unit));
     }
+}
+
+/// Helper to read one complete LZMA2 chunk from the stream.
+///
+/// Returns Ok(None) on clean EOF (no more chunks).
+/// Returns Ok(Some(Vec<u8>)) with the raw bytes of the chunk.
+fn read_one_chunk<R: Read>(inner: &mut R) -> io::Result<Option<Vec<u8>>> {
+    let mut chunk_bytes = Vec::with_capacity(128);
+    let mut control_buf = [0u8; 1];
+
+    match inner.read_exact(&mut control_buf) {
+        Ok(_) => (),
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
+    }
+
+    let control = control_buf[0];
+    chunk_bytes.push(control);
+
+    if control == 0x00 {
+        // End of stream
+        return Ok(Some(chunk_bytes));
+    }
+
+    if control == 0x01 {
+        // Uncompressed with dict reset, no data
+        return Ok(Some(chunk_bytes));
+    }
+
+    let data_len_result = if control >= 0x80 {
+        // LZMA chunk
+        let mut header_buf = [0u8; 4];
+        inner.read_exact(&mut header_buf)?;
+        chunk_bytes.extend_from_slice(&header_buf);
+
+        if control >= 0xC0 {
+            // Properties byte is present
+            let mut props_buf = [0u8; 1];
+            inner.read_exact(&mut props_buf)?;
+            chunk_bytes.push(props_buf[0]);
+        }
+        let compressed_size = u16::from_be_bytes([header_buf[2], header_buf[3]]) as usize + 1;
+        Ok(compressed_size)
+    } else if control == 0x02 {
+        // Uncompressed chunk
+        let mut size_buf = [0u8; 2];
+        inner.read_exact(&mut size_buf)?;
+        chunk_bytes.extend_from_slice(&size_buf);
+        let uncompressed_size = u16::from_be_bytes(size_buf) as usize + 1;
+        Ok(uncompressed_size)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Invalid LZMA2 control byte: {control}"),
+        ))
+    };
+
+    let data_len = data_len_result?;
+    if data_len > 0 {
+        let start_len = chunk_bytes.len();
+        chunk_bytes.resize(start_len + data_len, 0);
+        inner.read_exact(&mut chunk_bytes[start_len..])?;
+    }
+
+    Ok(Some(chunk_bytes))
 }
 
 /// The logic for a single worker thread.

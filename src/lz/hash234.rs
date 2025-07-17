@@ -80,6 +80,15 @@ impl Hash234 {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.hash2_table.fill(0);
+        self.hash3_table.fill(0);
+        self.hash4_table.fill(0);
+        self.hash2_value = 0;
+        self.hash3_value = 0;
+        self.hash4_value = 0;
+    }
+
     #[inline(always)]
     fn hash_byte(byte: u8) -> u32 {
         // Original CRC lookup replaced with a golden ratio constant as used for example TEA.
