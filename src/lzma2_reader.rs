@@ -83,8 +83,27 @@ impl<R: Read> LZMA2Reader<R> {
         }
     }
 
+    // ### LZMA2 Control Byte Meaning
+    //
+    //  Control Byte    | Chunk Type      | Formal Action
+    //  --------------- | --------------- | ----------------------------
+    //  0x00            | End of Stream   | Terminates the LZMA2 stream.
+    //  0x01            | Uncompressed    | Resets Dictionary.
+    //  0x02            | Uncompressed    | Preserves Dictionary.
+    //  0x03 – 0x7F     | Reserved        | Invalid stream.
+    //  0x80 – 0xFF     | LZMA Compressed | Varies based on bits 6 and 5
+    //
+    // ### Detailed Breakdown of LZMA Compressed Chunks (0x80 - 0xFF)
+    //
+    //  Bits | Control Byte | Reset Action            | Suitable for Parallel Start? |
+    //  ---- | ------------ | ----------------------- | ---------------------------- |
+    //  00   | 0x80 – 0x9F  | None                    | No
+    //  01   | 0xA0 – 0xBF  | Reset State             | No
+    //  10   | 0xC0 – 0xDF  | Reset State & Props     | Yes
+    //  11   | 0xE0 – 0xFF  | Reset Everything        | Yes
     fn decode_chunk_header(&mut self) -> std::io::Result<()> {
         let control = self.inner.read_u8()?;
+
         if control == 0x00 {
             self.end_reached = true;
             return Ok(());
@@ -93,6 +112,7 @@ impl<R: Read> LZMA2Reader<R> {
         if control >= 0xE0 || control == 0x01 {
             self.need_props = true;
             self.need_dict_reset = false;
+            // Reset dictionary
             self.lz.reset();
         } else if self.need_dict_reset {
             return Err(std::io::Error::new(
@@ -105,7 +125,9 @@ impl<R: Read> LZMA2Reader<R> {
             self.uncompressed_size = ((control & 0x1F) as usize) << 16;
             self.uncompressed_size += self.inner.read_u16_be()? as usize + 1;
             let compressed_size = self.inner.read_u16_be()? as usize + 1;
+
             if control >= 0xC0 {
+                // Reset props and state (by re-creating it)
                 self.need_props = false;
                 self.decode_props()?;
             } else if self.need_props {
@@ -114,10 +136,12 @@ impl<R: Read> LZMA2Reader<R> {
                     "Corrupted input data (LZMA2:1)",
                 ));
             } else if control >= 0xA0 {
+                // Reset state
                 if let Some(l) = self.lzma.as_mut() {
                     l.reset()
                 }
             }
+
             self.rc.prepare(&mut self.inner, compressed_size)?;
         } else if control > 0x02 {
             return Err(std::io::Error::new(
@@ -131,6 +155,7 @@ impl<R: Read> LZMA2Reader<R> {
         Ok(())
     }
 
+    /// Reads the next props and re-creates the state by creating a new decoder.
     fn decode_props(&mut self) -> std::io::Result<()> {
         let props = self.inner.read_u8()?;
         if props > (4 * 5 + 4) * 9 + 8 {
