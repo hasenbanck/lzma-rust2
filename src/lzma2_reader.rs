@@ -9,7 +9,8 @@ use crate::ByteReader;
 
 pub const COMPRESSED_SIZE_MAX: u32 = 1 << 16;
 
-/// Decompresses a raw LZMA2 stream (no XZ headers).
+/// A single-threaded LZMA2 decompressor.
+///
 /// # Examples
 /// ```
 /// use std::io::Read;

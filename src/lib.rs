@@ -39,9 +39,11 @@ mod lzma2_reader;
 mod lzma_reader;
 mod range_dec;
 mod state;
+mod work_queue;
 
 #[cfg(feature = "encoder")]
 mod enc;
+mod lzma2_reader_mt;
 
 use std::io::Read;
 
@@ -49,6 +51,7 @@ use std::io::Read;
 pub use enc::*;
 pub use lz::MFType;
 pub use lzma2_reader::{get_memory_usage as lzma2_get_memory_usage, LZMA2Reader};
+pub use lzma2_reader_mt::LZMA2ReaderMT;
 pub use lzma_reader::{
     get_memory_usage as lzma_get_memory_usage,
     get_memory_usage_by_props as lzma_get_memory_usage_by_props, LZMAReader,
