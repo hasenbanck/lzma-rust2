@@ -1,7 +1,4 @@
-use std::{
-    io::{Cursor, Read, Write},
-    num::NonZeroU32,
-};
+use std::io::{Cursor, Read, Write};
 
 use lzma_rust2::{LZMA2Options, LZMA2ReaderMT, LZMA2Writer};
 
@@ -23,12 +20,7 @@ fn test_round_trip(data: &[u8], level: u32) {
     let mut uncompressed = Vec::new();
 
     {
-        let mut reader = LZMA2ReaderMT::new(
-            Cursor::new(compressed),
-            option.dict_size,
-            None,
-            NonZeroU32::new(2).unwrap(),
-        );
+        let mut reader = LZMA2ReaderMT::new(Cursor::new(compressed), option.dict_size, None, 2);
         reader.read_to_end(&mut uncompressed).unwrap();
     }
 

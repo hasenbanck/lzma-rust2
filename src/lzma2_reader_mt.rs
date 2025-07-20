@@ -2,7 +2,6 @@ use std::{
     collections::BTreeMap,
     io,
     io::{Cursor, Read},
-    num::NonZeroU32,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
@@ -11,7 +10,10 @@ use std::{
     thread,
 };
 
-use crate::{work_queue::WorkStealingQueue, LZMA2Reader};
+use crate::{
+    work_queue::{WorkStealingQueue, WorkerHandle},
+    LZMA2Reader,
+};
 
 /// A work unit for a worker thread.
 /// Contains the sequence number and the raw compressed bytes for a series of chunks.
@@ -57,20 +59,15 @@ impl<R: Read> LZMA2ReaderMT<R> {
     /// - `dict_size`: The dictionary size in bytes, as specified in the stream properties.
     /// - `preset_dict`: An optional preset dictionary.
     /// - `num_workers`: The number of worker threads to spawn for decompression. Currently capped at 256 Threads.
-    pub fn new(
-        inner: R,
-        dict_size: u32,
-        preset_dict: Option<&[u8]>,
-        num_workers: NonZeroU32,
-    ) -> Self {
-        let num_workers = (num_workers.get() as usize).min(256);
+    pub fn new(inner: R, dict_size: u32, preset_dict: Option<&[u8]>, num_workers: u32) -> Self {
+        let num_workers = num_workers.clamp(1, 256);
 
         let work_queue = WorkStealingQueue::new();
         let (result_tx, result_rx) = mpsc::channel::<ResultUnit>();
         let shutdown_flag = Arc::new(AtomicBool::new(false));
         let error_store = Arc::new(Mutex::new(None));
 
-        let mut worker_handles = Vec::with_capacity(num_workers);
+        let mut worker_handles = Vec::with_capacity(num_workers as usize);
 
         // Spawn Worker Threads
         for _ in 0..num_workers {
@@ -318,7 +315,7 @@ impl<R: Read> LZMA2ReaderMT<R> {
 
 /// The logic for a single worker thread.
 fn worker_thread_logic(
-    worker_handle: crate::work_queue::WorkerHandle<WorkUnit>,
+    worker_handle: WorkerHandle<WorkUnit>,
     result_tx: Sender<ResultUnit>,
     dict_size: u32,
     preset_dict: Option<Arc<Vec<u8>>>,
