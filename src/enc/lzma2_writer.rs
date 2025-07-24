@@ -140,7 +140,8 @@ pub fn get_extra_size_before(dict_size: u32) -> u32 {
     COMPRESSED_SIZE_MAX.saturating_sub(dict_size)
 }
 
-/// LZMA2 format writer
+/// A single-threaded LZMA2 compressor.
+///
 /// # Examples
 /// ```
 /// use std::io::Write;
@@ -184,6 +185,7 @@ impl<W: Write> LZMA2Writer<W> {
             lzma.lz.set_preset_dict(dict_size, preset_dict);
             dict_reset_needed = false;
         }
+
         Self {
             inner,
             rc,
@@ -210,6 +212,7 @@ impl<W: Write> LZMA2Writer<W> {
             0x80
         };
         control |= (uncompressed_size - 1) >> 16;
+
         let mut chunk_header = [0u8; 6];
         chunk_header[0] = control as u8;
         chunk_header[1] = ((uncompressed_size - 1) >> 8) as u8;
@@ -310,10 +313,12 @@ impl<W: Write> Write for LZMA2Writer<W> {
 
     fn flush(&mut self) -> std::io::Result<()> {
         self.lzma.lz.set_flushing();
+
         while self.pending_size > 0 {
             self.lzma.encode_for_lzma2(&mut self.rc, &mut self.mode)?;
             self.write_chunk()?;
         }
+
         self.inner.flush()
     }
 }

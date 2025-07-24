@@ -100,7 +100,7 @@ impl<R: Read> LZMA2Reader<R> {
     //  ---- | ------------ | ----------------------- | ---------------------------- |
     //  00   | 0x80 – 0x9F  | None                    | No
     //  01   | 0xA0 – 0xBF  | Reset State             | No
-    //  10   | 0xC0 – 0xDF  | Reset State & Props     | Yes
+    //  10   | 0xC0 – 0xDF  | Reset State & Props     | No
     //  11   | 0xE0 – 0xFF  | Reset Everything        | Yes
     fn decode_chunk_header(&mut self) -> std::io::Result<()> {
         let control = self.inner.read_u8()?;

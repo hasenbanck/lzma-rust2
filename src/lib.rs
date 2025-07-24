@@ -45,7 +45,14 @@ mod work_queue;
 mod enc;
 mod lzma2_reader_mt;
 
-use std::io::Read;
+use std::{
+    io,
+    io::Read,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+};
 
 #[cfg(feature = "encoder")]
 pub use enc::*;
@@ -94,6 +101,19 @@ const TOP_VALUE: u32 = 0x0100_0000;
 const RC_BIT_MODEL_OFFSET: u32 = (1u32 << MOVE_BITS)
     .wrapping_sub(1)
     .wrapping_sub(BIT_MODEL_TOTAL);
+
+/// Helper to set the shared error state and trigger shutdown.
+fn set_error(
+    error: io::Error,
+    error_store: &Arc<Mutex<Option<io::Error>>>,
+    shutdown_flag: &Arc<AtomicBool>,
+) {
+    let mut guard = error_store.lock().unwrap();
+    if guard.is_none() {
+        *guard = Some(error);
+    }
+    shutdown_flag.store(true, Ordering::Relaxed);
+}
 
 pub(crate) struct LZMACoder {
     pub(crate) pos_mask: u32,

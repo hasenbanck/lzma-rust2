@@ -11,6 +11,7 @@ use std::{
 };
 
 use crate::{
+    set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
     LZMA2Reader,
 };
@@ -108,6 +109,12 @@ impl<R: Read> LZMA2ReaderMT<R> {
         }
     }
 
+    /// The count of independent streams found inside the compressed file.
+    /// This is effectively tha maximum parallelization possible.
+    pub fn stream_count(&self) -> u64 {
+        self.next_sequence_to_return
+    }
+
     /// Reads one LZMA2 chunk from the inner reader and appends it to the current work unit.
     /// If the chunk is an independent block, it dispatches the current work unit.
     ///
@@ -122,6 +129,7 @@ impl<R: Read> LZMA2ReaderMT<R> {
             }
             Err(error) => return Err(error),
         }
+
         let control = control_buf[0];
 
         if control == 0x00 {
@@ -351,19 +359,6 @@ fn worker_thread_logic(
             return;
         }
     }
-}
-
-/// Helper to set the shared error state and trigger shutdown.
-fn set_error(
-    error: io::Error,
-    error_store: &Arc<Mutex<Option<io::Error>>>,
-    shutdown_flag: &Arc<AtomicBool>,
-) {
-    let mut guard = error_store.lock().unwrap();
-    if guard.is_none() {
-        *guard = Some(error);
-    }
-    shutdown_flag.store(true, Ordering::Relaxed);
 }
 
 impl<R: Read> Read for LZMA2ReaderMT<R> {
