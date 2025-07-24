@@ -6,8 +6,9 @@ use super::{
     range_enc::{RangeEncoder, RangeEncoderBuffer},
 };
 
+/// Encoder settings when compressing with LZMA and LZMA2.
 #[derive(Debug, Clone)]
-pub struct LZMA2Options {
+pub struct LZMAOptions {
     pub dict_size: u32,
     pub lc: u32,
     pub lp: u32,
@@ -19,13 +20,13 @@ pub struct LZMA2Options {
     pub preset_dict: Option<Vec<u8>>,
 }
 
-impl Default for LZMA2Options {
+impl Default for LZMAOptions {
     fn default() -> Self {
         Self::with_preset(6)
     }
 }
 
-impl LZMA2Options {
+impl LZMAOptions {
     pub const LC_DEFAULT: u32 = 3;
 
     pub const LP_DEFAULT: u32 = 0;
@@ -146,9 +147,9 @@ pub fn get_extra_size_before(dict_size: u32) -> u32 {
 /// ```
 /// use std::io::Write;
 ///
-/// use lzma_rust2::{LZMA2Options, LZMA2Writer};
+/// use lzma_rust2::{LZMA2Writer, LZMAOptions};
 ///
-/// let mut writer = LZMA2Writer::new(Vec::new(), &LZMA2Options::default());
+/// let mut writer = LZMA2Writer::new(Vec::new(), &LZMAOptions::default());
 /// writer.write_all(b"hello world").unwrap();
 /// writer.finish().unwrap();
 /// ```
@@ -165,7 +166,7 @@ pub struct LZMA2Writer<W: Write> {
 }
 
 impl<W: Write> LZMA2Writer<W> {
-    pub fn new(inner: W, options: &LZMA2Options) -> Self {
+    pub fn new(inner: W, options: &LZMAOptions) -> Self {
         let dict_size = options.dict_size;
         let rc = RangeEncoder::new_buffer(COMPRESSED_SIZE_MAX as usize);
         let (mut lzma, mode) = LZMAEncoder::new(

@@ -32,10 +32,12 @@ impl MatchFind for MatchFinders {
     }
 }
 
-/// Match Finders
+/// Match finders to use when encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MFType {
+    /// Hash chain for 4 bytes entries (lower quality but faster).
     HC4,
+    /// Binary tree for 4 byte entries (higher quality but slower).
     BT4,
 }
 

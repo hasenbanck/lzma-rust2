@@ -15,9 +15,12 @@ const DIST_PRICE_UPDATE_INTERVAL: u32 = FULL_DISTANCES as u32;
 const ALIGN_PRICE_UPDATE_INTERVAL: u32 = ALIGN_SIZE as u32;
 const PRICE_UPDATE_INTERVAL: usize = 32;
 
+/// The mode to use when encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncodeMode {
+    /// Fast mode (lower quality but faster).
     Fast,
+    /// Normal mode (higher quality but slower).
     Normal,
 }
 

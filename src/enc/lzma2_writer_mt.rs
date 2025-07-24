@@ -13,7 +13,7 @@ use super::LZMA2Writer;
 use crate::{
     set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
-    LZMA2Options,
+    LZMAOptions,
 };
 
 /// The minimal size of a stream.
@@ -42,7 +42,7 @@ enum State {
 /// A multi-threaded LZMA2 compressor.
 pub struct LZMA2WriterMT<W: Write> {
     inner: Option<W>,
-    options: LZMA2Options,
+    options: LZMAOptions,
     result_rx: Receiver<ResultUnit>,
     current_work_unit: Vec<u8>,
     stream_size: u64,
@@ -66,7 +66,7 @@ impl<W: Write> LZMA2WriterMT<W> {
     ///   Will be clamped to be at least [`MIN_STREAM_SIZE`].
     /// - `num_workers`: The number of worker threads to spawn for compression.
     ///   Currently capped at 256 Threads.
-    pub fn new(inner: W, options: &LZMA2Options, stream_size: u64, num_workers: u32) -> Self {
+    pub fn new(inner: W, options: &LZMAOptions, stream_size: u64, num_workers: u32) -> Self {
         let num_workers = num_workers.clamp(1, 256);
         let stream_size = stream_size.max(MIN_STREAM_SIZE);
 
@@ -288,7 +288,7 @@ impl<W: Write> LZMA2WriterMT<W> {
 fn worker_thread_logic(
     worker_handle: WorkerHandle<WorkUnit>,
     result_tx: Sender<ResultUnit>,
-    options: LZMA2Options,
+    options: LZMAOptions,
     shutdown_flag: Arc<AtomicBool>,
     error_store: Arc<Mutex<Option<io::Error>>>,
 ) {

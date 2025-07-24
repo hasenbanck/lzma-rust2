@@ -30,6 +30,8 @@ fn get_dict_size(dict_size: u32) -> std::io::Result<u32> {
     Ok((dict_size + 15) & !15)
 }
 
+/// A single-threaded LZMA decompressor.
+///
 /// # Examples
 /// ```
 /// use std::io::Read;

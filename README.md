@@ -19,8 +19,8 @@ Deactivating the `optimization` feature will result in 100% standard Rust code.
 
 ## Performance
 
-The following part is strictly about single threaded performance. This crate doesn't expose a multithreaded API yet
-to support compression or decompressing LZMA2's chunked stream in parallel yet.
+The following part is strictly about single threaded performance. It supports multithreaded encoding and decoding
+through the `LZMA2WriterMT` and `LZMA2ReaderMT` structs though.
 
 When compared against the `liblzma` crate, which uses the C library of the same name, this crate has improved decoding
 speed.

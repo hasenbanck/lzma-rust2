@@ -3,21 +3,21 @@ use std::io::Write;
 use super::{
     encoder::{LZMAEncoder, LZMAEncoderModes},
     range_enc::RangeEncoder,
-    LZMA2Options,
+    LZMAOptions,
 };
 
-/// Compresses into the legacy .lzma file format or into a raw LZMA stream
+/// A single-threaded LZMA2 compressor.
 ///
 /// # Examples
 /// ```
 /// use std::io::Write;
 ///
-/// use lzma_rust2::{LZMA2Options, LZMAWriter};
+/// use lzma_rust2::{LZMAOptions, LZMAWriter};
 ///
 /// let s = b"Hello, world!";
 /// let mut out = Vec::new();
-/// let mut options = LZMA2Options::with_preset(6);
-/// options.dict_size = LZMA2Options::DICT_SIZE_DEFAULT;
+/// let mut options = LZMAOptions::with_preset(6);
+/// options.dict_size = LZMAOptions::DICT_SIZE_DEFAULT;
 ///
 /// let mut w = LZMAWriter::new_no_header(&mut out, &options, false).unwrap();
 /// w.write_all(s).unwrap();
@@ -36,7 +36,7 @@ pub struct LZMAWriter<W: Write> {
 impl<W: Write> LZMAWriter<W> {
     pub fn new(
         mut out: W,
-        options: &LZMA2Options,
+        options: &LZMAOptions,
         use_header: bool,
         use_end_marker: bool,
         expected_uncompressed_size: Option<u64>,
@@ -90,7 +90,7 @@ impl<W: Write> LZMAWriter<W> {
     #[inline]
     pub fn new_use_header(
         out: W,
-        options: &LZMA2Options,
+        options: &LZMAOptions,
         input_size: Option<u64>,
     ) -> Result<Self, std::io::Error> {
         Self::new(out, options, true, input_size.is_none(), input_size)
@@ -99,7 +99,7 @@ impl<W: Write> LZMAWriter<W> {
     #[inline]
     pub fn new_no_header(
         out: W,
-        options: &LZMA2Options,
+        options: &LZMAOptions,
         use_end_marker: bool,
     ) -> Result<Self, std::io::Error> {
         Self::new(out, options, false, use_end_marker, None)

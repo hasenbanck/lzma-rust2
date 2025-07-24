@@ -15,10 +15,6 @@
 //!
 //! ## Performance
 //!
-//! The following part is strictly about single threaded performance. This crate doesn't expose a
-//! multithreaded API yet to support compression or decompressing LZMA2's chunked stream in parallel
-//! yet.
-//!
 //! When compared against the `liblzma` crate, which uses the C library of the same name, this crate
 //! has improved decoding speed.
 //!
@@ -65,8 +61,10 @@ pub use lzma_reader::{
 };
 use state::*;
 
+/// The minimal size of a dictionary.
 pub const DICT_SIZE_MIN: u32 = 4096;
 
+/// The maximal size of a dictionary.
 pub const DICT_SIZE_MAX: u32 = u32::MAX & !15_u32;
 
 const LOW_SYMBOLS: usize = 1 << 3;

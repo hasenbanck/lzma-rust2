@@ -5,7 +5,7 @@ use std::{
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use liblzma::{bufread::*, stream::*};
-use lzma_rust2::{LZMA2Options, LZMA2Reader, LZMA2Writer, LZMAReader, LZMAWriter};
+use lzma_rust2::{LZMA2Reader, LZMA2Writer, LZMAOptions, LZMAReader, LZMAWriter};
 
 static TEST_DATA: &[u8] = include_bytes!("../tests/data/executable.exe");
 
@@ -19,7 +19,7 @@ fn bench_compression_lzma(c: &mut Criterion) {
             BenchmarkId::new("lzma-rust2", level),
             &level,
             |b, &level| {
-                let option = LZMA2Options::with_preset(level);
+                let option = LZMAOptions::with_preset(level);
 
                 b.iter(|| {
                     let mut compressed = Vec::new();
@@ -58,7 +58,7 @@ fn bench_compression_lzma2(c: &mut Criterion) {
             BenchmarkId::new("lzma-rust2", level),
             &level,
             |b, &level| {
-                let option = LZMA2Options::with_preset(level);
+                let option = LZMAOptions::with_preset(level);
 
                 b.iter(|| {
                     let mut compressed = Vec::new();
@@ -94,7 +94,7 @@ fn bench_decompression_lzma(c: &mut Criterion) {
 
     for level in 0..=9 {
         {
-            let option = LZMA2Options::with_preset(level);
+            let option = LZMAOptions::with_preset(level);
             let mut compressed = Vec::new();
             let mut writer = LZMAWriter::new_no_header(&mut compressed, &option, true).unwrap();
             writer.write_all(TEST_DATA).unwrap();
@@ -162,7 +162,7 @@ fn bench_decompression_lzma2(c: &mut Criterion) {
     let mut liblzma_data = Vec::new();
 
     for level in 0..=9 {
-        let option = LZMA2Options::with_preset(level);
+        let option = LZMAOptions::with_preset(level);
         {
             let mut compressed = Vec::new();
             let mut writer = LZMA2Writer::new(&mut compressed, &option);

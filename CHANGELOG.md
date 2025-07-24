@@ -5,11 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.5.0 - 2025-07-**
+## 0.5.0 - 2025-07-24
 
 ### Added
 
-- Added multi threaded decoding for LZMA2.
+- Added multithreaded compression for LZMA2.
+- Added multithreaded decompression for LZMA2.
+
+### Updated
+
+- Renamed LZMA2Options to LZMAOptions, since it described the way we encode the LZMA encoder, which is shared between
+  LZMA and LZMA2.
 
 ## 0.4.0 - 2025-07-16
 

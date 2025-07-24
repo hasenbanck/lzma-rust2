@@ -15,12 +15,12 @@ pub const COMPRESSED_SIZE_MAX: u32 = 1 << 16;
 /// ```
 /// use std::io::Read;
 ///
-/// use lzma_rust2::{LZMA2Options, LZMA2Reader};
+/// use lzma_rust2::{LZMA2Reader, LZMAOptions};
 ///
 /// let compressed: Vec<u8> = vec![
 ///     1, 0, 12, 72, 101, 108, 108, 111, 44, 32, 119, 111, 114, 108, 100, 33, 0,
 /// ];
-/// let mut reader = LZMA2Reader::new(compressed.as_slice(), LZMA2Options::DICT_SIZE_DEFAULT, None);
+/// let mut reader = LZMA2Reader::new(compressed.as_slice(), LZMAOptions::DICT_SIZE_DEFAULT, None);
 /// let mut decompressed = Vec::new();
 /// reader.read_to_end(&mut decompressed).unwrap();
 /// assert_eq!(&decompressed[..], b"Hello, world!");

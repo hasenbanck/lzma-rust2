@@ -6,7 +6,7 @@ use std::{
 /// A work-stealing queue that supports multiple workers taking work from a shared queue.
 ///
 /// Will be removed once std::sync::mpsc is stable.
-pub struct WorkStealingQueue<T> {
+pub(crate) struct WorkStealingQueue<T> {
     inner: Arc<Inner<T>>,
 }
 
@@ -18,7 +18,7 @@ struct Inner<T> {
 
 impl<T> WorkStealingQueue<T> {
     /// Creates a new work-stealing queue.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: Arc::new(Inner {
                 queue: Mutex::new(VecDeque::new()),
@@ -29,14 +29,14 @@ impl<T> WorkStealingQueue<T> {
     }
 
     /// Creates a worker handle that can steal work from this queue.
-    pub fn worker(&self) -> WorkerHandle<T> {
+    pub(crate) fn worker(&self) -> WorkerHandle<T> {
         WorkerHandle {
             inner: Arc::clone(&self.inner),
         }
     }
 
     /// Pushes work to the queue. Returns false if the queue is closed.
-    pub fn push(&self, item: T) -> bool {
+    pub(crate) fn push(&self, item: T) -> bool {
         if self.inner.closed.load(std::sync::atomic::Ordering::Acquire) {
             return false;
         }
@@ -53,7 +53,7 @@ impl<T> WorkStealingQueue<T> {
 
     /// Closes the queue, preventing new work from being added.
     /// Workers will continue to process remaining work until the queue is empty.
-    pub fn close(&self) {
+    pub(crate) fn close(&self) {
         self.inner
             .closed
             .store(true, std::sync::atomic::Ordering::Release);
@@ -62,12 +62,12 @@ impl<T> WorkStealingQueue<T> {
     }
 
     /// Returns the current number of items in the queue.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.inner.queue.lock().unwrap().len()
     }
 
     /// Returns true if the queue is empty.
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.inner.queue.lock().unwrap().is_empty()
     }
 }
