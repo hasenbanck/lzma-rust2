@@ -1,10 +1,9 @@
-use std::io::Write;
-
 use super::{
     encoder::{LZMAEncoder, LZMAEncoderModes},
     range_enc::RangeEncoder,
     LZMAOptions,
 };
+use crate::{error_invalid_input, error_unsupported, Write};
 
 /// A single-threaded LZMA2 compressor.
 ///
@@ -40,7 +39,7 @@ impl<W: Write> LZMAWriter<W> {
         use_header: bool,
         use_end_marker: bool,
         expected_uncompressed_size: Option<u64>,
-    ) -> Result<LZMAWriter<W>, std::io::Error> {
+    ) -> crate::Result<LZMAWriter<W>> {
         let (mut lzma, mode) = LZMAEncoder::new(
             options.mode,
             options.lc,
@@ -53,8 +52,7 @@ impl<W: Write> LZMAWriter<W> {
         );
         if let Some(preset_dict) = &options.preset_dict {
             if use_header {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
+                return Err(error_unsupported(
                     "Header is not supported with preset dict",
                 ));
             }
@@ -92,7 +90,7 @@ impl<W: Write> LZMAWriter<W> {
         out: W,
         options: &LZMAOptions,
         input_size: Option<u64>,
-    ) -> Result<Self, std::io::Error> {
+    ) -> crate::Result<Self> {
         Self::new(out, options, true, input_size.is_none(), input_size)
     }
 
@@ -101,7 +99,7 @@ impl<W: Write> LZMAWriter<W> {
         out: W,
         options: &LZMAOptions,
         use_end_marker: bool,
-    ) -> Result<Self, std::io::Error> {
+    ) -> crate::Result<Self> {
         Self::new(out, options, false, use_end_marker, None)
     }
 
@@ -119,12 +117,11 @@ impl<W: Write> LZMAWriter<W> {
         self.rc.inner()
     }
 
-    pub fn finish(mut self) -> std::io::Result<W> {
+    pub fn finish(mut self) -> crate::Result<W> {
         if let Some(exp) = self.expected_uncompressed_size {
             if exp != self.current_uncompressed_size {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Expected compressed size does not match actual compressed size",
+                return Err(error_invalid_input(
+                    "expected compressed size does not match actual compressed size",
                 ));
             }
         }
@@ -142,12 +139,11 @@ impl<W: Write> LZMAWriter<W> {
 }
 
 impl<W: Write> Write for LZMAWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> crate::Result<usize> {
         if let Some(exp) = self.expected_uncompressed_size {
             if exp < self.current_uncompressed_size + buf.len() as u64 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Expected compressed size does not match actual compressed size",
+                return Err(error_invalid_input(
+                    "expected compressed size does not match actual compressed size",
                 ));
             }
         }
@@ -164,7 +160,7 @@ impl<W: Write> Write for LZMAWriter<W> {
         Ok(off)
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn flush(&mut self) -> crate::Result<()> {
         Ok(())
     }
 }

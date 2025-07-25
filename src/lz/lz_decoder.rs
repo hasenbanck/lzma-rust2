@@ -1,4 +1,6 @@
-use std::io::{ErrorKind, Read};
+use alloc::{vec, vec::Vec};
+
+use crate::{error_other, Read};
 
 #[derive(Default)]
 pub(crate) struct LZDecoder {
@@ -76,12 +78,9 @@ impl LZDecoder {
         }
     }
 
-    pub(crate) fn repeat(&mut self, dist: usize, len: usize) -> std::io::Result<()> {
+    pub(crate) fn repeat(&mut self, dist: usize, len: usize) -> crate::Result<()> {
         if dist >= self.full {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "dist overflow",
-            ));
+            return Err(error_other("dist overflow"));
         }
         let mut left = usize::min(self.limit - self.pos, len);
         self.pending_len = len - left;
@@ -134,7 +133,7 @@ impl LZDecoder {
         Ok(())
     }
 
-    pub(crate) fn repeat_pending(&mut self) -> std::io::Result<()> {
+    pub(crate) fn repeat_pending(&mut self) -> crate::Result<()> {
         if self.pending_len > 0 {
             self.repeat(self.pending_dist, self.pending_len)?;
         }
@@ -145,7 +144,7 @@ impl LZDecoder {
         &mut self,
         mut in_data: R,
         len: usize,
-    ) -> std::io::Result<()> {
+    ) -> crate::Result<()> {
         let copy_size = (self.buf_size - self.pos).min(len);
         let buf = &mut self.buf[self.pos..(self.pos + copy_size)];
         in_data.read_exact(buf)?;

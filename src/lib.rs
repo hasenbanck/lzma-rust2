@@ -21,6 +21,27 @@
 //! Encoding is also well optimized and is surpassing `liblzma` for level 0 to 3 and matches it for
 //! level 4 to 9.
 //!
+//! ## no_std Support
+//!
+//! This crate supports `no_std` environments by disabling the default `std` feature.
+//!
+//! When used in `no_std` mode, the crate provides custom `Read`, `Write`, and `Error` types
+//! (defined in `no_std.rs`) that are compatible with `no_std` environments. These types offer
+//! similar functionality to their `std::io` counterparts but are implemented using only `core`
+//! and `alloc`.
+//!
+//! The custom types include:
+//!
+//! - [`Error`]: A custom error enum with variants for different error conditions.
+//! - [`Read`]: A trait similar to `std::io::Read` with `read()` and `read_exact()` methods.
+//! - [`Write`]: A trait similar to `std::io::Write` with `write()`, `write_all()`, and `flush()`
+//!   methods.
+//!
+//! Default implementations for `&[u8]` (Read) and `&mut [u8]` (Write) are provided.
+//!
+//! Note that multithreaded features are not available in `no_std` mode as they require
+//! standard library threading primitives.
+//!
 //! ## License
 //!
 //! Licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
@@ -28,6 +49,9 @@
 // TODO: There is a lot of code left that only the "encode" feature uses.
 #![allow(dead_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
 
 mod decoder;
 mod lz;
@@ -35,31 +59,49 @@ mod lzma2_reader;
 mod lzma_reader;
 mod range_dec;
 mod state;
+#[cfg(feature = "std")]
 mod work_queue;
 
 #[cfg(feature = "encoder")]
 mod enc;
-mod lzma2_reader_mt;
 
-use std::{
-    io,
-    io::Read,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
-};
+#[cfg(feature = "std")]
+mod lzma2_reader_mt;
+#[cfg(not(feature = "std"))]
+mod no_std;
+
+#[cfg(feature = "std")]
+pub(crate) use std::io::Error;
+#[cfg(feature = "std")]
+pub(crate) use std::io::Read;
+#[cfg(feature = "std")]
+pub(crate) use std::io::Write;
 
 #[cfg(feature = "encoder")]
 pub use enc::*;
 pub use lz::MFType;
 pub use lzma2_reader::{get_memory_usage as lzma2_get_memory_usage, LZMA2Reader};
+#[cfg(feature = "std")]
 pub use lzma2_reader_mt::LZMA2ReaderMT;
 pub use lzma_reader::{
     get_memory_usage as lzma_get_memory_usage,
     get_memory_usage_by_props as lzma_get_memory_usage_by_props, LZMAReader,
 };
+#[cfg(not(feature = "std"))]
+pub use no_std::Error;
+#[cfg(not(feature = "std"))]
+pub use no_std::Read;
+#[cfg(not(feature = "std"))]
+pub use no_std::Write;
 use state::*;
+
+/// Result type of the crate.
+#[cfg(feature = "std")]
+pub type Result<T> = core::result::Result<T, Error>;
+
+/// Result type of the crate.
+#[cfg(not(feature = "std"))]
+pub type Result<T> = core::result::Result<T, Error>;
 
 /// The minimal size of a dictionary.
 pub const DICT_SIZE_MIN: u32 = 4096;
@@ -101,16 +143,17 @@ const RC_BIT_MODEL_OFFSET: u32 = (1u32 << MOVE_BITS)
     .wrapping_sub(BIT_MODEL_TOTAL);
 
 /// Helper to set the shared error state and trigger shutdown.
+#[cfg(feature = "std")]
 fn set_error(
-    error: io::Error,
-    error_store: &Arc<Mutex<Option<io::Error>>>,
-    shutdown_flag: &Arc<AtomicBool>,
+    error: Error,
+    error_store: &std::sync::Arc<std::sync::Mutex<Option<Error>>>,
+    shutdown_flag: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     let mut guard = error_store.lock().unwrap();
     if guard.is_none() {
         *guard = Some(error);
     }
-    shutdown_flag.store(true, Ordering::Relaxed);
+    shutdown_flag.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 pub(crate) struct LZMACoder {
@@ -262,59 +305,119 @@ impl LengthCoder {
 }
 
 trait ByteReader {
-    fn read_u8(&mut self) -> std::io::Result<u8>;
+    fn read_u8(&mut self) -> Result<u8>;
 
-    fn read_u16(&mut self) -> std::io::Result<u16>;
+    fn read_u16(&mut self) -> Result<u16>;
 
-    fn read_u16_be(&mut self) -> std::io::Result<u16>;
+    fn read_u16_be(&mut self) -> Result<u16>;
 
-    fn read_u32(&mut self) -> std::io::Result<u32>;
+    fn read_u32(&mut self) -> Result<u32>;
 
-    fn read_u32_be(&mut self) -> std::io::Result<u32>;
+    fn read_u32_be(&mut self) -> Result<u32>;
 
-    fn read_u64(&mut self) -> std::io::Result<u64>;
+    fn read_u64(&mut self) -> Result<u64>;
 }
 
 impl<T: Read> ByteReader for T {
     #[inline(always)]
-    fn read_u8(&mut self) -> std::io::Result<u8> {
+    fn read_u8(&mut self) -> Result<u8> {
         let mut buf = [0; 1];
         self.read_exact(&mut buf)?;
         Ok(buf[0])
     }
 
     #[inline(always)]
-    fn read_u16(&mut self) -> std::io::Result<u16> {
+    fn read_u16(&mut self) -> Result<u16> {
         let mut buf = [0; 2];
         self.read_exact(buf.as_mut())?;
         Ok(u16::from_le_bytes(buf))
     }
 
     #[inline(always)]
-    fn read_u16_be(&mut self) -> std::io::Result<u16> {
+    fn read_u16_be(&mut self) -> Result<u16> {
         let mut buf = [0; 2];
         self.read_exact(buf.as_mut())?;
         Ok(u16::from_be_bytes(buf))
     }
 
     #[inline(always)]
-    fn read_u32(&mut self) -> std::io::Result<u32> {
+    fn read_u32(&mut self) -> Result<u32> {
         let mut buf = [0; 4];
         self.read_exact(buf.as_mut())?;
         Ok(u32::from_le_bytes(buf))
     }
 
     #[inline(always)]
-    fn read_u32_be(&mut self) -> std::io::Result<u32> {
+    fn read_u32_be(&mut self) -> Result<u32> {
         let mut buf = [0; 4];
         self.read_exact(buf.as_mut())?;
         Ok(u32::from_be_bytes(buf))
     }
 
     #[inline(always)]
-    fn read_u64(&mut self) -> std::io::Result<u64> {
+    fn read_u64(&mut self) -> Result<u64> {
         let mut buf = [0; 8];
         self.read_exact(buf.as_mut())?;
         Ok(u64::from_le_bytes(buf))
     }
+}
+
+#[cfg(feature = "std")]
+#[inline(always)]
+fn error_other(msg: &'static str) -> Error {
+    Error::other(msg)
+}
+
+#[cfg(feature = "std")]
+#[inline(always)]
+fn error_invalid_input(msg: &'static str) -> Error {
+    Error::new(std::io::ErrorKind::InvalidInput, msg)
+}
+
+#[cfg(feature = "std")]
+#[inline(always)]
+fn error_invalid_data(msg: &'static str) -> Error {
+    Error::new(std::io::ErrorKind::InvalidData, msg)
+}
+
+#[cfg(feature = "std")]
+#[inline(always)]
+fn error_out_of_memory(msg: &'static str) -> Error {
+    Error::new(std::io::ErrorKind::OutOfMemory, msg)
+}
+
+#[cfg(feature = "std")]
+#[inline(always)]
+fn error_unsupported(msg: &'static str) -> Error {
+    Error::new(std::io::ErrorKind::Unsupported, msg)
+}
+
+#[cfg(not(feature = "std"))]
+#[inline(always)]
+fn error_other(msg: &'static str) -> Error {
+    Error::Other(msg)
+}
+
+#[cfg(not(feature = "std"))]
+#[inline(always)]
+fn error_invalid_input(msg: &'static str) -> Error {
+    Error::InvalidInput(msg)
+}
+
+#[cfg(not(feature = "std"))]
+#[inline(always)]
+fn error_invalid_data(msg: &'static str) -> Error {
+    Error::InvalidData(msg)
+}
+
+#[cfg(not(feature = "std"))]
+#[inline(always)]
+fn error_out_of_memory(msg: &'static str) -> Error {
+    Error::OutOfMemory(msg)
+}
+
+#[cfg(not(feature = "std"))]
+#[inline(always)]
+fn error_unsupported(msg: &'static str) -> Error {
+    Error::Unsupported(msg)
 }

@@ -1,6 +1,9 @@
-use std::io::{ErrorKind, Read};
+use alloc::{vec, vec::Vec};
 
-use super::*;
+use crate::{
+    error_invalid_input, ByteReader, Read, BIT_MODEL_TOTAL_BITS, MOVE_BITS, RC_BIT_MODEL_OFFSET,
+    SHIFT_BITS,
+};
 
 pub(crate) struct RangeDecoder<R> {
     inner: R,
@@ -19,13 +22,10 @@ impl RangeDecoder<RangeDecoderBuffer> {
 }
 
 impl<R: RangeReader> RangeDecoder<R> {
-    pub(crate) fn new_stream(mut inner: R) -> std::io::Result<Self> {
+    pub(crate) fn new_stream(mut inner: R) -> crate::Result<Self> {
         let b = inner.read_u8();
         if b != 0x00 {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "range decoder first byte is 0",
-            ));
+            return Err(error_invalid_input("range decoder first byte is 0"));
         }
         let code = inner.read_u32_be()?;
         Ok(Self {
@@ -174,7 +174,7 @@ impl<R: RangeReader> RangeDecoder<R> {
             let buf_ptr = buf.as_ptr();
             let limit = buf.len() - 1;
 
-            std::arch::asm!(r#"
+            core::arch::asm!(r#"
                     // Setup constants
                     mov    {top_value_reg:w}, #{top_value}
 
@@ -257,7 +257,7 @@ impl<R: RangeReader> RangeDecoder<R> {
             let buf_ptr = buf.as_ptr();
             let limit = buf.len() - 1;
 
-            std::arch::asm!(r#"
+            core::arch::asm!(r#"
                 2:
                     // First, calculate result = result << 1
                     shl    {result:e}, 1
@@ -336,20 +336,14 @@ impl RangeDecoder<RangeDecoderBuffer> {
         &mut self,
         mut reader: R,
         len: usize,
-    ) -> std::io::Result<()> {
+    ) -> crate::Result<()> {
         if len < 5 {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "buffer len must >= 5",
-            ));
+            return Err(error_invalid_input("buffer len must >= 5"));
         }
 
         let b = reader.read_u8()?;
         if b != 0x00 {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "first byte is 0",
-            ));
+            return Err(error_invalid_input("first byte is 0"));
         }
         self.code = reader.read_u32_be()?;
 
@@ -379,7 +373,7 @@ impl RangeDecoderBuffer {
 pub(crate) trait RangeReader {
     fn read_u8(&mut self) -> u8;
 
-    fn read_u32_be(&mut self) -> std::io::Result<u32>;
+    fn read_u32_be(&mut self) -> crate::Result<u32>;
 
     #[inline(always)]
     fn is_buffer(&self) -> bool {
@@ -413,7 +407,7 @@ impl<T: Read> RangeReader for T {
     }
 
     #[inline(always)]
-    fn read_u32_be(&mut self) -> std::io::Result<u32> {
+    fn read_u32_be(&mut self) -> crate::Result<u32> {
         let mut buf = [0; 4];
         self.read_exact(buf.as_mut())?;
         Ok(u32::from_be_bytes(buf))
@@ -434,7 +428,7 @@ impl RangeReader for RangeDecoderBuffer {
     }
 
     #[inline(always)]
-    fn read_u32_be(&mut self) -> std::io::Result<u32> {
+    fn read_u32_be(&mut self) -> crate::Result<u32> {
         let b = u32::from_be_bytes(self.buf[self.pos..self.pos + 4].try_into().unwrap());
         self.pos += 4;
         Ok(b)

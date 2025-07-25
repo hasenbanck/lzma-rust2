@@ -1,11 +1,15 @@
-use std::{io::Write, vec};
+use alloc::{vec, vec::Vec};
 
 use super::{
     encoder_fast::FastEncoderMode,
     encoder_normal::NormalEncoderMode,
     lz::{LZEncoder, MFType},
     range_enc::{RangeEncoder, RangeEncoderBuffer},
-    *,
+};
+use crate::{
+    get_dist_state, state::State, LZMACoder, LengthCoder, LiteralCoder, LiteralSubCoder, Write,
+    ALIGN_BITS, ALIGN_MASK, ALIGN_SIZE, DIST_MODEL_END, DIST_MODEL_START, DIST_STATES,
+    FULL_DISTANCES, LOW_SYMBOLS, MATCH_LEN_MAX, MATCH_LEN_MIN, MID_SYMBOLS, REPS,
 };
 
 const LZMA2_UNCOMPRESSED_LIMIT: u32 = (2 << 20) - MATCH_LEN_MAX as u32;
@@ -224,7 +228,7 @@ impl LZMAEncoder {
         &mut self,
         rc: &mut RangeEncoder<W>,
         mode: &mut dyn LZMAEncoderTrait,
-    ) -> std::io::Result<()> {
+    ) -> crate::Result<()> {
         if !self.lz.is_started() && !self.encode_init(rc)? {
             return Ok(());
         }
@@ -236,7 +240,7 @@ impl LZMAEncoder {
     pub(crate) fn encode_lzma1_end_marker<W: Write>(
         &mut self,
         rc: &mut RangeEncoder<W>,
-    ) -> std::io::Result<()> {
+    ) -> crate::Result<()> {
         let pos_state = (self.lz.get_pos() - self.data.read_ahead) as u32 & self.coder.pos_mask;
         rc.encode_bit(
             &mut self.coder.is_match[self.coder.state.get() as usize],
@@ -248,7 +252,7 @@ impl LZMAEncoder {
         Ok(())
     }
 
-    fn encode_init<W: Write>(&mut self, rc: &mut RangeEncoder<W>) -> std::io::Result<bool> {
+    fn encode_init<W: Write>(&mut self, rc: &mut RangeEncoder<W>) -> crate::Result<bool> {
         debug_assert_eq!(self.data.read_ahead, -1);
         if !self.lz.has_enough_data(0) {
             return Ok(false);
@@ -269,7 +273,7 @@ impl LZMAEncoder {
         &mut self,
         rc: &mut RangeEncoder<W>,
         mode: &mut dyn LZMAEncoderTrait,
-    ) -> std::io::Result<bool> {
+    ) -> crate::Result<bool> {
         if !self.lz.has_enough_data(self.data.read_ahead + 1) {
             return Ok(false);
         }
@@ -308,7 +312,7 @@ impl LZMAEncoder {
         len: u32,
         pos_state: u32,
         rc: &mut RangeEncoder<W>,
-    ) -> std::io::Result<()> {
+    ) -> crate::Result<()> {
         self.coder.state.update_match();
         self.match_len_encoder.encode(len, pos_state, rc)?;
         let dist_slot = LZMAEncoder::get_dist_slot(dist);
@@ -353,7 +357,7 @@ impl LZMAEncoder {
         len: u32,
         pos_state: u32,
         rc: &mut RangeEncoder<W>,
-    ) -> std::io::Result<()> {
+    ) -> crate::Result<()> {
         if rep == 0 {
             let state = self.coder.state.get() as usize;
             rc.encode_bit(&mut self.coder.is_rep0, state, 0)?;
@@ -588,7 +592,7 @@ impl LZMAEncoder {
         &mut self,
         rc: &mut RangeEncoder<RangeEncoderBuffer>,
         mode: &mut dyn LZMAEncoderTrait,
-    ) -> std::io::Result<bool> {
+    ) -> crate::Result<bool> {
         if !self.lz.is_started() && !self.encode_init(rc)? {
             return Ok(false);
         }
@@ -633,7 +637,7 @@ impl LiteralEncoder {
         data: &LZMAEncData,
         coder: &mut LZMACoder,
         rc: &mut RangeEncoder<W>,
-    ) -> std::io::Result<()> {
+    ) -> crate::Result<()> {
         debug_assert!(data.read_ahead >= 0);
         self.sub_encoders[0].encode(lz, data, coder, rc)
     }
@@ -644,7 +648,7 @@ impl LiteralEncoder {
         data: &LZMAEncData,
         coder: &mut LZMACoder,
         rc: &mut RangeEncoder<W>,
-    ) -> std::io::Result<()> {
+    ) -> crate::Result<()> {
         debug_assert!(data.read_ahead >= 0);
         let i = self.coder.get_sub_coder_index(
             lz.get_byte_backward(1 + data.read_ahead) as _,
@@ -694,7 +698,7 @@ impl LiteralSubEncoder {
         data: &LZMAEncData,
         coder: &mut LZMACoder,
         rc: &mut RangeEncoder<W>,
-    ) -> std::io::Result<()> {
+    ) -> crate::Result<()> {
         let mut symbol = lz.get_byte_backward(data.read_ahead) as u32 | 0x100;
 
         if coder.state.is_literal() {
@@ -810,7 +814,7 @@ impl LengthEncoder {
         len: u32,
         pos_state: u32,
         rc: &mut RangeEncoder<W>,
-    ) -> std::io::Result<()> {
+    ) -> crate::Result<()> {
         let mut len = len as usize - MATCH_LEN_MIN;
         if len < LOW_SYMBOLS {
             rc.encode_bit(&mut self.coder.choice, 0, 0)?;

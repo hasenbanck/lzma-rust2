@@ -1,6 +1,8 @@
-use std::{io::Write, ops::Deref};
+use alloc::{vec, vec::Vec};
+use core::ops::Deref;
 
 use super::{bt4::BT4, extend_match, hc4::HC4};
+use crate::Write;
 
 /// Align to a 64-byte cache line
 const MOVE_BLOCK_ALIGN: i32 = 64;
@@ -188,7 +190,7 @@ impl LZEncoder {
     }
 
     pub(crate) fn normalize(positions: &mut [i32], norm_offset: i32) {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(feature = "std", target_arch = "x86_64"))]
         {
             if std::arch::is_x86_feature_detected!("avx2") {
                 // SAFETY: We've checked that the CPU supports AVX2.
@@ -200,7 +202,7 @@ impl LZEncoder {
             }
         }
 
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(all(feature = "std", target_arch = "aarch64"))]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
                 // SAFETY: We've checked that the CPU supports NEON.
@@ -339,7 +341,7 @@ impl LZEncoderData {
         out: &mut W,
         backward: i32,
         len: usize,
-    ) -> std::io::Result<()> {
+    ) -> crate::Result<()> {
         let start = (self.read_pos + 1 - backward) as usize;
         out.write_all(&self.buf[start..(start + len)])
     }
@@ -404,8 +406,8 @@ impl LZEncoderData {
             let clamped0 = read_pos.min(self.buf_limit_u16);
             let clamped1 = (read_pos - match_dist as usize).min(self.buf_limit_u16);
 
-            if std::ptr::read_unaligned(self.buf.as_ptr().add(clamped0) as *const u16)
-                != std::ptr::read_unaligned(self.buf.as_ptr().add(clamped1) as *const u16)
+            if core::ptr::read_unaligned(self.buf.as_ptr().add(clamped0) as *const u16)
+                != core::ptr::read_unaligned(self.buf.as_ptr().add(clamped1) as *const u16)
             {
                 return 0;
             }
@@ -479,10 +481,10 @@ fn normalize_scalar(positions: &mut [i32], norm_offset: i32) {
 }
 
 /// Normalization implementation using ARM NEON for 128-bit SIMD processing.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(feature = "std", target_arch = "aarch64"))]
 #[target_feature(enable = "neon")]
 unsafe fn normalize_neon(positions: &mut [i32], norm_offset: i32) {
-    use std::arch::aarch64::*;
+    use core::arch::aarch64::*;
 
     // Create a 128-bit vector with the offset broadcast to all 4 lanes.
     let norm_v = vdupq_n_s32(norm_offset);
@@ -509,10 +511,10 @@ unsafe fn normalize_neon(positions: &mut [i32], norm_offset: i32) {
 }
 
 /// Normalization implementation using AVX2 for 256-bit SIMD processing.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(feature = "std", target_arch = "x86_64"))]
 #[target_feature(enable = "avx2")]
 unsafe fn normalize_avx2(positions: &mut [i32], norm_offset: i32) {
-    use std::arch::x86_64::*;
+    use core::arch::x86_64::*;
 
     // Create a 256-bit vector with the normalization offset broadcast to all 8 lanes.
     let norm_v = _mm256_set1_epi32(norm_offset);
@@ -539,10 +541,10 @@ unsafe fn normalize_avx2(positions: &mut [i32], norm_offset: i32) {
 }
 
 /// Normalization implementation using SSE4.1 for 128-bit SIMD processing.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(feature = "std", target_arch = "x86_64"))]
 #[target_feature(enable = "sse4.1")]
 unsafe fn normalize_sse41(positions: &mut [i32], norm_offset: i32) {
-    use std::arch::x86_64::*;
+    use core::arch::x86_64::*;
 
     // Create a 128-bit vector with the offset broadcast to all 4 lanes.
     let norm_v = _mm_set1_epi32(norm_offset);

@@ -129,7 +129,8 @@ fn extend_match_safe(s1: &[u8], s2: &[u8]) -> usize {
                     target_endian = "little",
                     all(target_arch = "x86_64", target_feature = "bmi1")
                 ))]
-                let matching_bytes = (std::arch::x86_64::_tzcnt_u64(diff_bits as u64) / 8) as usize;
+                let matching_bytes =
+                    (core::arch::x86_64::_tzcnt_u64(diff_bits as u64) / 8) as usize;
 
                 #[cfg(target_endian = "big")]
                 let matching_bytes = (diff_bits.leading_zeros() / 8) as usize;

@@ -1,5 +1,5 @@
-use std::{
-    alloc::{alloc_zeroed, dealloc, Layout},
+use alloc::alloc::{alloc_zeroed, dealloc, Layout};
+use core::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
     ptr::NonNull,
@@ -70,7 +70,7 @@ impl AsRef<[i32]> for AlignedMemoryI32 {
     fn as_ref(&self) -> &[i32] {
         // SAFETY: Points to a valid region in space that is allocated, aligned, initialized and
         // of length target_length * size_of::<i32>()
-        unsafe { std::slice::from_raw_parts(self.ptr.cast::<i32>().as_ptr(), self.target_length) }
+        unsafe { core::slice::from_raw_parts(self.ptr.cast::<i32>().as_ptr(), self.target_length) }
     }
 }
 
@@ -79,7 +79,7 @@ impl AsMut<[i32]> for AlignedMemoryI32 {
         // SAFETY: Points to a valid region in space that is allocated, aligned, initialized and
         // of length target_length * size_of::<i32>()
         unsafe {
-            std::slice::from_raw_parts_mut(self.ptr.cast::<i32>().as_ptr(), self.target_length)
+            core::slice::from_raw_parts_mut(self.ptr.cast::<i32>().as_ptr(), self.target_length)
         }
     }
 }

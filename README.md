@@ -35,6 +35,26 @@ Encoding is also well optimized and is surpassing `liblzma` for level 0 to 3 and
 
 Data was assembled using lzma-rust2 v0.4.0 and liblzma v0.4.2.
 
+## no_std Support
+
+This crate supports `no_std` environments by disabling the default `std` feature.
+
+When used in `no_std` mode, the crate provides custom `Read`, `Write`, and `Error` types
+(defined in `no_std.rs`) that are compatible with `no_std` environments. These types offer
+similar functionality to their `std::io` counterparts but are implemented using only `core`
+and `alloc`.
+
+The custom types include:
+
+- [`Error`]: A custom error enum with variants for different error conditions.
+- [`Read`]: A trait similar to `std::io::Read`.
+- [`Write`]: A trait similar to `std::io::Write`.
+
+Default implementations for `&[u8]` (Read) and `&mut [u8]` (Write) are provided.
+
+Note that multithreaded features are not available in `no_std` mode as they require
+standard library threading primitives.
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).

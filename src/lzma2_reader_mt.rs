@@ -189,7 +189,7 @@ impl<R: Read> LZMA2ReaderMT<R> {
         }
 
         let work_unit =
-            std::mem::replace(&mut self.current_work_unit, Vec::with_capacity(1024 * 1024));
+            core::mem::replace(&mut self.current_work_unit, Vec::with_capacity(1024 * 1024));
 
         if !self
             .work_queue

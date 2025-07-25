@@ -139,7 +139,7 @@ impl<W: Write> LZMA2WriterMT<W> {
             }
         }
 
-        let work_unit = std::mem::take(&mut self.current_work_unit);
+        let work_unit = core::mem::take(&mut self.current_work_unit);
 
         if !self
             .work_queue

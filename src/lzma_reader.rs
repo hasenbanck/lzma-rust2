@@ -1,13 +1,15 @@
-use std::io::{Error, ErrorKind, Read};
+use super::{
+    decoder::LZMADecoder, error_invalid_data, error_invalid_input, error_out_of_memory,
+    lz::LZDecoder, range_dec::RangeDecoder, ByteReader, Read, DICT_SIZE_MAX,
+};
 
-use super::{decoder::LZMADecoder, lz::LZDecoder, range_dec::RangeDecoder, *};
-
-pub fn get_memory_usage_by_props(dict_size: u32, props_byte: u8) -> std::io::Result<u32> {
+/// Calculates the memory usage in KiB required for LZMA decompression from properties byte.
+pub fn get_memory_usage_by_props(dict_size: u32, props_byte: u8) -> crate::Result<u32> {
     if dict_size > DICT_SIZE_MAX {
-        return Err(Error::new(ErrorKind::InvalidInput, "dict size too large"));
+        return Err(error_invalid_input("dict size too large"));
     }
     if props_byte > (4 * 5 + 4) * 9 + 8 {
-        return Err(Error::new(ErrorKind::InvalidInput, "Invalid props byte"));
+        return Err(error_invalid_input("Invalid props byte"));
     }
     let props = props_byte % (9 * 5);
     let lp = props / 9;
@@ -15,16 +17,17 @@ pub fn get_memory_usage_by_props(dict_size: u32, props_byte: u8) -> std::io::Res
     get_memory_usage(dict_size, lc as u32, lp as u32)
 }
 
-pub fn get_memory_usage(dict_size: u32, lc: u32, lp: u32) -> std::io::Result<u32> {
+/// Calculates the memory usage in KiB required for LZMA decompression.
+pub fn get_memory_usage(dict_size: u32, lc: u32, lp: u32) -> crate::Result<u32> {
     if lc > 8 || lp > 4 {
-        return Err(Error::new(ErrorKind::InvalidInput, "Invalid lc or lp"));
+        return Err(error_invalid_input("Invalid lc or lp"));
     }
     Ok(10 + get_dict_size(dict_size)? / 1024 + ((2 * 0x300) << (lc + lp)) / 1024)
 }
 
-fn get_dict_size(dict_size: u32) -> std::io::Result<u32> {
+fn get_dict_size(dict_size: u32) -> crate::Result<u32> {
     if dict_size > DICT_SIZE_MAX {
-        return Err(Error::new(ErrorKind::InvalidInput, "dict size too large"));
+        return Err(error_invalid_input("dict size too large"));
     }
     let dict_size = dict_size.max(4096);
     Ok((dict_size + 15) & !15)
@@ -70,16 +73,16 @@ impl<R: Read> LZMAReader<R> {
         mut props: u8,
         dict_size: u32,
         preset_dict: Option<&[u8]>,
-    ) -> std::io::Result<Self> {
+    ) -> crate::Result<Self> {
         if props > (4 * 5 + 4) * 9 + 8 {
-            return Err(Error::new(ErrorKind::InvalidInput, "Invalid props byte"));
+            return Err(error_invalid_input("Invalid props byte"));
         }
         let pb = props / (9 * 5);
         props -= pb * 9 * 5;
         let lp = props / 9;
         let lc = props - lp * 9;
         if dict_size > DICT_SIZE_MAX {
-            return Err(Error::new(ErrorKind::InvalidInput, "dict size too large"));
+            return Err(error_invalid_input("dict size too large"));
         }
         Self::construct2(
             reader,
@@ -100,12 +103,9 @@ impl<R: Read> LZMAReader<R> {
         pb: u32,
         dict_size: u32,
         preset_dict: Option<&[u8]>,
-    ) -> std::io::Result<Self> {
+    ) -> crate::Result<Self> {
         if lc > 8 || lp > 4 || pb > 4 {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
-                "Invalid lc or lp or pb",
-            ));
+            return Err(error_invalid_input("Invalid lc or lp or pb"));
         }
         let mut dict_size = get_dict_size(dict_size)?;
         if uncomp_size <= u64::MAX / 2 && dict_size as u64 > uncomp_size {
@@ -138,16 +138,15 @@ impl<R: Read> LZMAReader<R> {
         mut reader: R,
         mem_limit_kb: u32,
         preset_dict: Option<&[u8]>,
-    ) -> std::io::Result<Self> {
+    ) -> crate::Result<Self> {
         let props = reader.read_u8()?;
         let dict_size = reader.read_u32()?;
 
         let uncomp_size = reader.read_u64()?;
         let need_mem = get_memory_usage_by_props(dict_size, props)?;
         if mem_limit_kb < need_mem {
-            return Err(Error::new(
-                ErrorKind::OutOfMemory,
-                format!("{need_mem}kb memory needed,but limit was {mem_limit_kb}kb"),
+            return Err(error_out_of_memory(
+                "needed memory too big for mem_limit_kb",
             ));
         }
         Self::construct1(reader, uncomp_size, props, dict_size, preset_dict)
@@ -165,7 +164,7 @@ impl<R: Read> LZMAReader<R> {
         props: u8,
         dict_size: u32,
         preset_dict: Option<&[u8]>,
-    ) -> std::io::Result<Self> {
+    ) -> crate::Result<Self> {
         Self::construct1(reader, uncomp_size, props, dict_size, preset_dict)
     }
 
@@ -185,11 +184,11 @@ impl<R: Read> LZMAReader<R> {
         pb: u32,
         dict_size: u32,
         preset_dict: Option<&[u8]>,
-    ) -> std::io::Result<Self> {
+    ) -> crate::Result<Self> {
         Self::construct2(reader, uncomp_size, lc, lp, pb, dict_size, preset_dict)
     }
 
-    fn read_decode(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read_decode(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
         }
@@ -232,10 +231,7 @@ impl<R: Read> LZMAReader<R> {
                 if self.lz.has_pending()
                     || (!self.relaxed_end_cond && !self.rc.is_stream_finished())
                 {
-                    return Err(Error::new(
-                        ErrorKind::InvalidData,
-                        "end reached but not decoder finished",
-                    ));
+                    return Err(error_invalid_data("end reached but not decoder finished"));
                 }
                 return Ok(size as _);
             }
@@ -245,7 +241,7 @@ impl<R: Read> LZMAReader<R> {
 }
 
 impl<R: Read> Read for LZMAReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
         self.read_decode(buf)
     }
 }

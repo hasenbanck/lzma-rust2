@@ -1,6 +1,6 @@
-use std::io::Write;
+use alloc::{vec, vec::Vec};
 
-use crate::{BIT_MODEL_TOTAL, BIT_MODEL_TOTAL_BITS, MOVE_BITS, SHIFT_BITS, TOP_MASK};
+use crate::{Write, BIT_MODEL_TOTAL, BIT_MODEL_TOTAL_BITS, MOVE_BITS, SHIFT_BITS, TOP_MASK};
 
 const MOVE_REDUCING_BITS: usize = 4;
 const BIT_PRICE_SHIFT_BITS: usize = 4;
@@ -55,18 +55,18 @@ impl<W: Write> RangeEncoder<W> {
         self.cache_size = 1;
     }
 
-    pub(crate) fn finish(&mut self) -> std::io::Result<Option<usize>> {
+    pub(crate) fn finish(&mut self) -> crate::Result<Option<usize>> {
         for _i in 0..5 {
             self.shift_low()?;
         }
         Ok(None)
     }
 
-    fn write_byte(&mut self, b: u8) -> std::io::Result<()> {
+    fn write_byte(&mut self, b: u8) -> crate::Result<()> {
         self.inner.write_all(&[b])
     }
 
-    fn shift_low(&mut self) -> std::io::Result<()> {
+    fn shift_low(&mut self) -> crate::Result<()> {
         let low_hi = (self.low >> 32) as i32;
         if low_hi != 0 || self.low < 0xFF000000u64 {
             let mut temp = self.cache;
@@ -91,7 +91,7 @@ impl<W: Write> RangeEncoder<W> {
         probs: &mut [u16],
         index: usize,
         bit: u32,
-    ) -> std::io::Result<()> {
+    ) -> crate::Result<()> {
         let prob = &mut probs[index];
         let bound = (self.range >> BIT_MODEL_TOTAL_BITS) * (*prob as u32);
         if bit == 0 {
@@ -109,11 +109,7 @@ impl<W: Write> RangeEncoder<W> {
         Ok(())
     }
 
-    pub(crate) fn encode_bit_tree(
-        &mut self,
-        probs: &mut [u16],
-        symbol: u32,
-    ) -> std::io::Result<()> {
+    pub(crate) fn encode_bit_tree(&mut self, probs: &mut [u16], symbol: u32) -> crate::Result<()> {
         let mut index = 1;
         let mut mask = probs.len() as u32;
 
@@ -137,7 +133,7 @@ impl<W: Write> RangeEncoder<W> {
         &mut self,
         probs: &mut [u16],
         symbol: u32,
-    ) -> std::io::Result<()> {
+    ) -> crate::Result<()> {
         let mut index = 1u32;
         let mut symbol = symbol | probs.len() as u32;
         loop {
@@ -152,7 +148,7 @@ impl<W: Write> RangeEncoder<W> {
         Ok(())
     }
 
-    pub(crate) fn encode_direct_bits(&mut self, value: u32, mut count: u32) -> std::io::Result<()> {
+    pub(crate) fn encode_direct_bits(&mut self, value: u32, mut count: u32) -> crate::Result<()> {
         loop {
             self.range >>= 1;
             count -= 1;
@@ -220,11 +216,11 @@ impl RangeEncoder<()> {
 }
 
 impl RangeEncoder<RangeEncoderBuffer> {
-    pub(crate) fn write_to<W: Write>(&self, out: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write_to<W: Write>(&self, out: &mut W) -> crate::Result<()> {
         self.inner.write_to(out)
     }
 
-    pub(crate) fn finish_buffer(&mut self) -> std::io::Result<Option<usize>> {
+    pub(crate) fn finish_buffer(&mut self) -> crate::Result<Option<usize>> {
         self.finish()?;
         Ok(Some(self.inner.pos))
     }
@@ -257,13 +253,13 @@ impl RangeEncoderBuffer {
         }
     }
 
-    pub(crate) fn write_to<W: Write>(&self, out: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write_to<W: Write>(&self, out: &mut W) -> crate::Result<()> {
         out.write_all(&self.buf[..self.pos])
     }
 }
 
 impl Write for RangeEncoderBuffer {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> crate::Result<usize> {
         let size = buf.len().min(self.buf.len() - self.pos);
 
         if size == 0 {
@@ -275,7 +271,7 @@ impl Write for RangeEncoderBuffer {
         Ok(size)
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn flush(&mut self) -> crate::Result<()> {
         Ok(())
     }
 }

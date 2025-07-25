@@ -1,6 +1,10 @@
-use std::io::Result;
+use alloc::{vec, vec::Vec};
 
-use super::{lz::LZDecoder, range_dec::RangeDecoder, *};
+use super::{
+    coder_get_dict_size, lz::LZDecoder, range_dec::RangeDecoder, LZMACoder, LengthCoder,
+    LiteralCoder, LiteralSubCoder, ALIGN_BITS, DIST_MODEL_END, DIST_MODEL_START, LOW_SYMBOLS,
+    MATCH_LEN_MIN, MID_SYMBOLS,
+};
 use crate::range_dec::RangeReader;
 
 pub(crate) struct LZMADecoder {
@@ -47,7 +51,7 @@ impl LZMADecoder {
         &mut self,
         lz: &mut LZDecoder,
         rc: &mut RangeDecoder<R>,
-    ) -> Result<()> {
+    ) -> crate::Result<()> {
         lz.repeat_pending()?;
         while lz.has_space() {
             let pos_state = lz.get_pos() as u32 & self.coder.pos_mask;
@@ -162,7 +166,7 @@ impl LiteralDecoder {
         coder: &mut LZMACoder,
         lz: &mut LZDecoder,
         rc: &mut RangeDecoder<R>,
-    ) -> Result<()> {
+    ) -> crate::Result<()> {
         let i = self
             .coder
             .get_sub_coder_index(lz.get_byte(0) as _, lz.get_pos() as _);
@@ -188,7 +192,7 @@ impl LiteralSubDecoder {
         coder: &mut LZMACoder,
         lz: &mut LZDecoder,
         rc: &mut RangeDecoder<R>,
-    ) -> Result<()> {
+    ) -> crate::Result<()> {
         let mut symbol: u32 = 1;
         let liter = coder.state.is_literal();
         if liter {

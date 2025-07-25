@@ -1,3 +1,6 @@
+#[cfg(not(feature = "optimization"))]
+use alloc::{vec, vec::Vec};
+
 #[cfg(feature = "optimization")]
 use super::AlignedMemoryI32;
 use super::{

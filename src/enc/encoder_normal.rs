@@ -1,3 +1,5 @@
+use alloc::{vec, vec::Vec};
+
 use super::{
     encoder::{LZMAEncoder, LZMAEncoderTrait},
     lz::{LZEncoder, MFType},

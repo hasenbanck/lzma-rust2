@@ -5,7 +5,7 @@ use std::{
 
 /// A work-stealing queue that supports multiple workers taking work from a shared queue.
 ///
-/// Will be removed once std::sync::mpsc is stable.
+/// Will be removed once core::sync::mpsc is stable.
 pub(crate) struct WorkStealingQueue<T> {
     inner: Arc<Inner<T>>,
 }
@@ -37,7 +37,11 @@ impl<T> WorkStealingQueue<T> {
 
     /// Pushes work to the queue. Returns false if the queue is closed.
     pub(crate) fn push(&self, item: T) -> bool {
-        if self.inner.closed.load(std::sync::atomic::Ordering::Acquire) {
+        if self
+            .inner
+            .closed
+            .load(core::sync::atomic::Ordering::Acquire)
+        {
             return false;
         }
 
@@ -56,7 +60,7 @@ impl<T> WorkStealingQueue<T> {
     pub(crate) fn close(&self) {
         self.inner
             .closed
-            .store(true, std::sync::atomic::Ordering::Release);
+            .store(true, core::sync::atomic::Ordering::Release);
         // Wake up all waiting workers so they can check the closed status
         self.inner.condvar.notify_all();
     }
@@ -96,7 +100,11 @@ impl<T> WorkerHandle<T> {
             }
 
             // Check if queue is closed
-            if self.inner.closed.load(std::sync::atomic::Ordering::Acquire) {
+            if self
+                .inner
+                .closed
+                .load(core::sync::atomic::Ordering::Acquire)
+            {
                 return None;
             }
 
@@ -114,7 +122,10 @@ impl<T> WorkerHandle<T> {
     /// Returns `true` if the queue is closed and empty (no more work will ever be available).
     pub(crate) fn is_closed_and_empty(&self) -> bool {
         let queue = self.inner.queue.lock().unwrap();
-        let closed = self.inner.closed.load(std::sync::atomic::Ordering::Acquire);
+        let closed = self
+            .inner
+            .closed
+            .load(core::sync::atomic::Ordering::Acquire);
         closed && queue.is_empty()
     }
 }

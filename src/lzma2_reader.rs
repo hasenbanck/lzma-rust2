@@ -1,9 +1,9 @@
-use std::io::{ErrorKind, Read};
-
 use super::{
     decoder::LZMADecoder,
+    error_invalid_input,
     lz::LZDecoder,
     range_dec::{RangeDecoder, RangeDecoderBuffer},
+    Error, Read,
 };
 use crate::ByteReader;
 
@@ -35,9 +35,10 @@ pub struct LZMA2Reader<R> {
     need_dict_reset: bool,
     need_props: bool,
     end_reached: bool,
-    error: Option<std::io::Error>,
+    error: Option<Error>,
 }
 
+/// Calculates the memory usage in KiB required for LZMA2 decompression.
 #[inline]
 pub fn get_memory_usage(dict_size: u32) -> u32 {
     40 + COMPRESSED_SIZE_MAX / 1024 + get_dict_size(dict_size) / 1024
@@ -102,7 +103,7 @@ impl<R: Read> LZMA2Reader<R> {
     //  01   | 0xA0 – 0xBF  | Reset State             | No
     //  10   | 0xC0 – 0xDF  | Reset State & Props     | No
     //  11   | 0xE0 – 0xFF  | Reset Everything        | Yes
-    fn decode_chunk_header(&mut self) -> std::io::Result<()> {
+    fn decode_chunk_header(&mut self) -> crate::Result<()> {
         let control = self.inner.read_u8()?;
 
         if control == 0x00 {
@@ -116,10 +117,7 @@ impl<R: Read> LZMA2Reader<R> {
             // Reset dictionary
             self.lz.reset();
         } else if self.need_dict_reset {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "Corrupted input data (LZMA2:0)",
-            ));
+            return Err(error_invalid_input("Corrupted input data (LZMA2:0)"));
         }
         if control >= 0x80 {
             self.is_lzma_chunk = true;
@@ -132,10 +130,7 @@ impl<R: Read> LZMA2Reader<R> {
                 self.need_props = false;
                 self.decode_props()?;
             } else if self.need_props {
-                return Err(std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "Corrupted input data (LZMA2:1)",
-                ));
+                return Err(error_invalid_input("Corrupted input data (LZMA2:1)"));
             } else if control >= 0xA0 {
                 // Reset state
                 if let Some(l) = self.lzma.as_mut() {
@@ -145,10 +140,7 @@ impl<R: Read> LZMA2Reader<R> {
 
             self.rc.prepare(&mut self.inner, compressed_size)?;
         } else if control > 0x02 {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "Corrupted input data (LZMA2:2)",
-            ));
+            return Err(error_invalid_input("Corrupted input data (LZMA2:2)"));
         } else {
             self.is_lzma_chunk = false;
             self.uncompressed_size = (self.inner.read_u16_be()? + 1) as _;
@@ -157,35 +149,32 @@ impl<R: Read> LZMA2Reader<R> {
     }
 
     /// Reads the next props and re-creates the state by creating a new decoder.
-    fn decode_props(&mut self) -> std::io::Result<()> {
+    fn decode_props(&mut self) -> crate::Result<()> {
         let props = self.inner.read_u8()?;
         if props > (4 * 5 + 4) * 9 + 8 {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "Corrupted input data (LZMA2:3)",
-            ));
+            return Err(error_invalid_input("Corrupted input data (LZMA2:3)"));
         }
         let pb = props / (9 * 5);
         let props = props - pb * 9 * 5;
         let lp = props / 9;
         let lc = props - lp * 9;
         if lc + lp > 4 {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "Corrupted input data (LZMA2:4)",
-            ));
+            return Err(error_invalid_input("Corrupted input data (LZMA2:4)"));
         }
         self.lzma = Some(LZMADecoder::new(lc as _, lp as _, pb as _));
 
         Ok(())
     }
 
-    fn read_decode(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read_decode(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
         }
-        if let Some(e) = &self.error {
-            return Err(std::io::Error::new(e.kind(), e.to_string()));
+        if let Some(error) = &self.error {
+            #[cfg(not(feature = "std"))]
+            return Err(*error);
+            #[cfg(feature = "std")]
+            return Err(Error::new(error.kind(), error.to_string()));
         }
 
         if self.end_reached {
@@ -220,10 +209,7 @@ impl<R: Read> LZMA2Reader<R> {
                 self.uncompressed_size -= copied_size;
                 if self.uncompressed_size == 0 && (!self.rc.is_finished() || self.lz.has_pending())
                 {
-                    return Err(std::io::Error::new(
-                        ErrorKind::InvalidInput,
-                        "rc not finished or lz has pending",
-                    ));
+                    return Err(error_invalid_input("rc not finished or lz has pending"));
                 }
             }
         }
@@ -232,12 +218,18 @@ impl<R: Read> LZMA2Reader<R> {
 }
 
 impl<R: Read> Read for LZMA2Reader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
         match self.read_decode(buf) {
             Ok(size) => Ok(size),
-            Err(e) => {
-                let error = std::io::Error::new(e.kind(), e.to_string());
-                self.error = Some(e);
+            Err(error) => {
+                #[cfg(not(feature = "std"))]
+                {
+                    self.error = Some(error);
+                }
+                #[cfg(feature = "std")]
+                {
+                    self.error = Some(Error::new(error.kind(), error.to_string()));
+                }
                 Err(error)
             }
         }

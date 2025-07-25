@@ -1,10 +1,11 @@
-use std::io::Write;
+use alloc::vec::Vec;
 
 use super::{
     encoder::{EncodeMode, LZMAEncoder, LZMAEncoderModes},
     lz::MFType,
     range_enc::{RangeEncoder, RangeEncoderBuffer},
 };
+use crate::Write;
 
 /// Encoder settings when compressing with LZMA and LZMA2.
 #[derive(Debug, Clone)]
@@ -137,6 +138,7 @@ impl LZMAOptions {
 
 const COMPRESSED_SIZE_MAX: u32 = 64 << 10;
 
+/// Calculates the extra space needed before the dictionary for LZMA2 encoding.
 pub fn get_extra_size_before(dict_size: u32) -> u32 {
     COMPRESSED_SIZE_MAX.saturating_sub(dict_size)
 }
@@ -200,7 +202,7 @@ impl<W: Write> LZMA2Writer<W> {
         }
     }
 
-    fn write_lzma(&mut self, uncompressed_size: u32, compressed_size: u32) -> std::io::Result<()> {
+    fn write_lzma(&mut self, uncompressed_size: u32, compressed_size: u32) -> crate::Result<()> {
         let mut control = if self.props_needed {
             if self.dict_reset_needed {
                 0x80 + (3 << 5)
@@ -234,7 +236,7 @@ impl<W: Write> LZMA2Writer<W> {
         Ok(())
     }
 
-    fn write_uncompressed(&mut self, mut uncompressed_size: u32) -> std::io::Result<()> {
+    fn write_uncompressed(&mut self, mut uncompressed_size: u32) -> crate::Result<()> {
         while uncompressed_size > 0 {
             let chunk_size = uncompressed_size.min(COMPRESSED_SIZE_MAX);
             let mut chunk_header = [0u8; 3];
@@ -254,7 +256,7 @@ impl<W: Write> LZMA2Writer<W> {
         Ok(())
     }
 
-    fn write_chunk(&mut self) -> std::io::Result<()> {
+    fn write_chunk(&mut self) -> crate::Result<()> {
         let compressed_size = self.rc.finish_buffer()?.unwrap_or_default() as u32;
         let mut uncompressed_size = self.lzma.data.uncompressed_size;
         debug_assert!(compressed_size > 0);
@@ -281,7 +283,7 @@ impl<W: Write> LZMA2Writer<W> {
         &mut self.inner
     }
 
-    pub fn finish(mut self) -> std::io::Result<W> {
+    pub fn finish(mut self) -> crate::Result<W> {
         self.lzma.lz.set_finishing();
 
         while self.pending_size > 0 {
@@ -296,7 +298,7 @@ impl<W: Write> LZMA2Writer<W> {
 }
 
 impl<W: Write> Write for LZMA2Writer<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> crate::Result<usize> {
         let mut len = buf.len();
 
         let mut off = 0;
@@ -312,7 +314,7 @@ impl<W: Write> Write for LZMA2Writer<W> {
         Ok(off)
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn flush(&mut self) -> crate::Result<()> {
         self.lzma.lz.set_flushing();
 
         while self.pending_size > 0 {

@@ -37,7 +37,9 @@ jobs:
           target: ${{matrix.target}}
       - uses: actions/checkout@v4
       - name: Build
-        run: cargo build --workspace --release
+        run: cargo build --workspace --release --all-features
+      - name: Build (no_std)
+        run: cargo build --workspace --release --no-default-features --features=encoder,optimization
       - name: Run tests
         run: cargo test --workspace --release --all-features
 
