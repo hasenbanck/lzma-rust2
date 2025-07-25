@@ -157,6 +157,7 @@ impl<W: Write> LZMA2WriterMT<W> {
                 .take()
                 .unwrap_or_else(|| io::Error::other("Failed to push to work queue")));
         }
+
         self.next_sequence_to_dispatch += 1;
         Ok(())
     }
@@ -229,18 +230,23 @@ impl<W: Write> LZMA2WriterMT<W> {
                             }
                         }
                         Err(_) => {
-                            // All workers finished, and channel is empty.
-                            if self.out_of_order_chunks.is_empty() {
-                                self.state = State::Finished;
-                            } else {
-                                // This indicates a missing chunk. An error.
-                                self.state = State::Error;
-                                let err = io::Error::new(
-                                    io::ErrorKind::InvalidData,
-                                    "A compressed chunk was lost",
-                                );
-                                set_error(err, &self.error_store, &self.shutdown_flag);
+                            // If we get here, it means no more results will ever arrive.
+                            // Let's check if the chunks we have are sufficient.
+                            if let Some(last_seq) = self.last_sequence_id {
+                                if self.next_sequence_to_write <= last_seq
+                                    && self.out_of_order_chunks.is_empty()
+                                {
+                                    // We expected more chunks, but the workers are gone and the
+                                    // out-of-order buffer is empty. This is a real error.
+                                    self.state = State::Error;
+                                    let err = io::Error::new(
+                                        io::ErrorKind::InvalidData,
+                                        format!("A compressed chunk was lost. Expected up to seq {}, but only got up to {}", last_seq, self.next_sequence_to_write.saturating_sub(1)),
+                                    );
+                                    set_error(err, &self.error_store, &self.shutdown_flag);
+                                }
                             }
+                            // Otherwise, allow the loop to continue to drain the map.
                         }
                     }
                 }
@@ -262,6 +268,19 @@ impl<W: Write> LZMA2WriterMT<W> {
 
     pub fn finish(mut self) -> io::Result<W> {
         self.send_work_unit()?;
+
+        // No data was provided to compress
+        if self.next_sequence_to_dispatch == 0 {
+            let mut inner = self.inner.take().expect("inner is empty");
+            inner.write_all(&[0x00])?;
+            inner.flush()?;
+
+            self.shutdown_flag.store(true, Ordering::Relaxed);
+            self.work_queue.close();
+
+            return Ok(inner);
+        }
+
         self.last_sequence_id = Some(self.next_sequence_to_dispatch.saturating_sub(1));
         self.state = State::Finishing;
 
@@ -378,11 +397,23 @@ impl<W: Write> Write for LZMA2WriterMT<W> {
             self.send_work_unit()?;
         }
 
-        while let Some(chunk) = self.get_next_compressed_chunk(true)? {
-            self.inner
-                .as_mut()
-                .expect("inner is empty")
-                .write_all(&chunk)?;
+        let sequence_to_wait = self.next_sequence_to_dispatch;
+
+        while self.next_sequence_to_write < sequence_to_wait {
+            match self.get_next_compressed_chunk(true)? {
+                Some(chunk) => {
+                    self.inner
+                        .as_mut()
+                        .expect("inner is empty")
+                        .write_all(&chunk)?;
+                }
+                None => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "Compression stream ended unexpectedly during flush",
+                    ));
+                }
+            }
         }
 
         self.inner.as_mut().expect("inner is empty").flush()

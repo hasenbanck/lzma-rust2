@@ -226,10 +226,35 @@ impl<R: Read> LZMA2ReaderMT<R> {
 
             match self.state {
                 State::Reading => {
-                    // Try to read more data and dispatch work if the queue isn't too full.
+                    // First, always try to receive a result without blocking.
+                    // This keeps the pipeline moving and avoids unnecessary blocking on I/O.
+                    match self.result_rx.try_recv() {
+                        Ok((seq, result)) => {
+                            if seq == self.next_sequence_to_return {
+                                self.next_sequence_to_return += 1;
+                                return Ok(Some(result));
+                            } else {
+                                self.out_of_order_chunks.insert(seq, result);
+                                continue; // Loop again to check the out_of_order_chunks
+                            }
+                        }
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            // All workers are done.
+                            self.state = State::Draining;
+                            continue;
+                        }
+                        Err(mpsc::TryRecvError::Empty) => {
+                            // No results are ready. Now, we can consider reading more input.
+                        }
+                    }
+
+                    // If the work queue has capacity, try to read more from the source.
                     if self.work_queue.len() < 4 {
                         match self.read_and_dispatch_chunk() {
-                            Ok(true) => continue,
+                            Ok(true) => {
+                                // Successfully read and dispatched a chunk, loop to continue.
+                                continue;
+                            }
                             Ok(false) => {
                                 // Clean EOF from inner reader.
                                 // Send any remaining data as the final work unit.
@@ -247,38 +272,20 @@ impl<R: Read> LZMA2ReaderMT<R> {
                         }
                     }
 
-                    // Try to get a result without blocking first
-                    match self.result_rx.try_recv() {
+                    // Now we MUST wait for a result to make progress.
+                    match self.result_rx.recv() {
                         Ok((seq, result)) => {
                             if seq == self.next_sequence_to_return {
                                 self.next_sequence_to_return += 1;
                                 return Ok(Some(result));
                             } else {
                                 self.out_of_order_chunks.insert(seq, result);
+                                // We've made progress, loop to check the out_of_order_chunks
+                                continue;
                             }
                         }
-                        Err(mpsc::TryRecvError::Empty) => {
-                            // No results available, continue to try reading more or block
-                            if self.work_queue.len() >= 4 {
-                                // Queue is getting full, we must wait for results.
-                                match self.result_rx.recv() {
-                                    Ok((seq, result)) => {
-                                        if seq == self.next_sequence_to_return {
-                                            self.next_sequence_to_return += 1;
-                                            return Ok(Some(result));
-                                        } else {
-                                            self.out_of_order_chunks.insert(seq, result);
-                                        }
-                                    }
-                                    Err(_) => {
-                                        // All workers done, transition to draining.
-                                        self.state = State::Draining;
-                                    }
-                                }
-                            }
-                        }
-                        Err(mpsc::TryRecvError::Disconnected) => {
-                            // All workers done
+                        Err(_) => {
+                            // All workers are done.
                             self.state = State::Draining;
                         }
                     }
@@ -382,6 +389,7 @@ impl<R: Read> Read for LZMA2ReaderMT<R> {
 
         self.current_chunk = Cursor::new(chunk_data);
 
+        // Recursive call to read the new chunk data.
         self.read(buf)
     }
 }
