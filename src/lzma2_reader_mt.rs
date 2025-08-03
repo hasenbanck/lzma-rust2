@@ -139,7 +139,7 @@ impl<R: Read> LZMA2ReaderMT<R> {
             return Ok(false);
         }
 
-        let is_independent_chunk = control >= 0xC0;
+        let is_independent_chunk = control >= 0xE0 || control == 0x01;
 
         // Split work units before independent chunks (but not for the very first chunk).
         if is_independent_chunk && !self.current_work_unit.is_empty() {
