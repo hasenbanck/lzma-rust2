@@ -153,7 +153,7 @@ fn set_error(
     if guard.is_none() {
         *guard = Some(error);
     }
-    shutdown_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    shutdown_flag.store(true, std::sync::atomic::Ordering::Release);
 }
 
 pub(crate) struct LZMACoder {

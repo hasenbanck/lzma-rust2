@@ -3,7 +3,7 @@ use std::{
     io,
     io::{Cursor, Read},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::{self, Receiver, Sender},
         Arc, Mutex,
     },
@@ -40,6 +40,7 @@ enum State {
 pub struct LZMA2ReaderMT<R: Read> {
     inner: R,
     result_rx: Receiver<ResultUnit>,
+    result_tx: Sender<ResultUnit>,
     current_work_unit: Vec<u8>,
     next_sequence_to_dispatch: u64,
     next_sequence_to_return: u64,
@@ -50,6 +51,10 @@ pub struct LZMA2ReaderMT<R: Read> {
     error_store: Arc<Mutex<Option<io::Error>>>,
     state: State,
     work_queue: WorkStealingQueue<WorkUnit>,
+    active_workers: Arc<AtomicU32>,
+    max_workers: u32,
+    dict_size: u32,
+    preset_dict: Option<Arc<Vec<u8>>>,
     _worker_handles: Vec<thread::JoinHandle<()>>,
 }
 
@@ -59,42 +64,21 @@ impl<R: Read> LZMA2ReaderMT<R> {
     /// - `inner`: The reader to read compressed data from.
     /// - `dict_size`: The dictionary size in bytes, as specified in the stream properties.
     /// - `preset_dict`: An optional preset dictionary.
-    /// - `num_workers`: The number of worker threads to spawn for decompression. Currently capped at 256 Threads.
+    /// - `num_workers`: The maximum number of worker threads for decompression. Currently capped at 256 Threads.
     pub fn new(inner: R, dict_size: u32, preset_dict: Option<&[u8]>, num_workers: u32) -> Self {
-        let num_workers = num_workers.clamp(1, 256);
+        let max_workers = num_workers.clamp(1, 256);
 
         let work_queue = WorkStealingQueue::new();
         let (result_tx, result_rx) = mpsc::channel::<ResultUnit>();
         let shutdown_flag = Arc::new(AtomicBool::new(false));
         let error_store = Arc::new(Mutex::new(None));
+        let active_workers = Arc::new(AtomicU32::new(0));
+        let preset_dict = preset_dict.map(|s| s.to_vec()).map(Arc::new);
 
-        let mut worker_handles = Vec::with_capacity(num_workers as usize);
-
-        // Spawn Worker Threads
-        for _ in 0..num_workers {
-            let worker_handle = work_queue.worker();
-            let result_tx = result_tx.clone();
-            let shutdown_flag = Arc::clone(&shutdown_flag);
-            let error_store = Arc::clone(&error_store);
-            let preset_dict = preset_dict.map(|s| s.to_vec()).map(Arc::new);
-
-            let handle = thread::spawn(move || {
-                worker_thread_logic(
-                    worker_handle,
-                    result_tx,
-                    dict_size,
-                    preset_dict,
-                    shutdown_flag,
-                    error_store,
-                );
-            });
-
-            worker_handles.push(handle);
-        }
-
-        Self {
+        let mut reader = Self {
             inner,
             result_rx,
+            result_tx,
             current_work_unit: Vec::with_capacity(1024 * 1024),
             next_sequence_to_dispatch: 0,
             next_sequence_to_return: 0,
@@ -105,8 +89,40 @@ impl<R: Read> LZMA2ReaderMT<R> {
             error_store,
             state: State::Reading,
             work_queue,
-            _worker_handles: worker_handles,
-        }
+            active_workers,
+            max_workers,
+            dict_size,
+            preset_dict,
+            _worker_handles: Vec::new(),
+        };
+
+        reader.spawn_worker_thread();
+
+        reader
+    }
+
+    fn spawn_worker_thread(&mut self) {
+        let worker_handle = self.work_queue.worker();
+        let result_tx = self.result_tx.clone();
+        let shutdown_flag = Arc::clone(&self.shutdown_flag);
+        let error_store = Arc::clone(&self.error_store);
+        let active_workers = Arc::clone(&self.active_workers);
+        let preset_dict = self.preset_dict.clone();
+        let dict_size = self.dict_size;
+
+        let handle = thread::spawn(move || {
+            worker_thread_logic(
+                worker_handle,
+                result_tx,
+                dict_size,
+                preset_dict,
+                shutdown_flag,
+                error_store,
+                active_workers,
+            );
+        });
+
+        self._worker_handles.push(handle);
     }
 
     /// The count of independent streams found inside the compressed file.
@@ -203,6 +219,16 @@ impl<R: Read> LZMA2ReaderMT<R> {
                 &self.shutdown_flag,
             );
         }
+
+        // We spawn a new thread if we have work queued, no available workers, and haven't reached
+        // the maximal allowed parallelism yet.
+        let current_workers = self.active_workers.load(Ordering::Acquire);
+        let queue_len = self.work_queue.len();
+
+        if queue_len > 0 && current_workers < self.max_workers {
+            self.spawn_worker_thread();
+        }
+
         self.next_sequence_to_dispatch += 1;
     }
 
@@ -336,10 +362,14 @@ fn worker_thread_logic(
     preset_dict: Option<Arc<Vec<u8>>>,
     shutdown_flag: Arc<AtomicBool>,
     error_store: Arc<Mutex<Option<io::Error>>>,
+    active_workers: Arc<AtomicU32>,
 ) {
-    while !shutdown_flag.load(Ordering::Relaxed) {
+    while !shutdown_flag.load(Ordering::Acquire) {
         let (seq, work_unit_data) = match worker_handle.steal() {
-            Some(work) => work,
+            Some(work) => {
+                active_workers.fetch_add(1, Ordering::Release);
+                work
+            }
             None => {
                 // No more work available and queue is closed
                 break;
@@ -356,15 +386,18 @@ fn worker_thread_logic(
         let result = match reader.read_to_end(&mut decompressed_data) {
             Ok(_) => decompressed_data,
             Err(error) => {
+                active_workers.fetch_sub(1, Ordering::Release);
                 set_error(error, &error_store, &shutdown_flag);
                 return;
             }
         };
 
         if result_tx.send((seq, result)).is_err() {
-            // If the receiver is gone, we can just shut down.
+            active_workers.fetch_sub(1, Ordering::Release);
             return;
         }
+
+        active_workers.fetch_sub(1, Ordering::Release);
     }
 }
 
@@ -396,7 +429,7 @@ impl<R: Read> Read for LZMA2ReaderMT<R> {
 
 impl<R: Read> Drop for LZMA2ReaderMT<R> {
     fn drop(&mut self) {
-        self.shutdown_flag.store(true, Ordering::Relaxed);
+        self.shutdown_flag.store(true, Ordering::Release);
         self.work_queue.close();
         // Worker threads will exit when the work queue is closed.
         // JoinHandles will be dropped, which is fine since we set the shutdown flag,

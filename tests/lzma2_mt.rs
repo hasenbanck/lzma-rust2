@@ -1,4 +1,7 @@
-use std::io::{Cursor, Read, Write};
+use std::{
+    io::{Cursor, Read, Write},
+    num::NonZero,
+};
 
 use lzma_rust2::{LZMA2ReaderMT, LZMA2WriterMT, LZMAOptions, MIN_STREAM_SIZE};
 
@@ -8,11 +11,20 @@ static PG6800: &[u8] = include_bytes!("data/pg6800.txt");
 
 fn test_round_trip(data: &[u8], level: u32) {
     let option = LZMAOptions::with_preset(level);
+    let available_parallelism = std::thread::available_parallelism()
+        .unwrap_or(NonZero::new(1).unwrap())
+        .get()
+        .min(256) as u32;
 
     let mut compressed = Vec::new();
 
     {
-        let mut writer = LZMA2WriterMT::new(&mut compressed, &option, MIN_STREAM_SIZE, 4);
+        let mut writer = LZMA2WriterMT::new(
+            &mut compressed,
+            &option,
+            MIN_STREAM_SIZE,
+            available_parallelism,
+        );
         writer.write_all(data).unwrap();
         writer.finish().unwrap();
     }
@@ -20,7 +32,12 @@ fn test_round_trip(data: &[u8], level: u32) {
     let mut uncompressed = Vec::new();
 
     {
-        let mut reader = LZMA2ReaderMT::new(Cursor::new(compressed), option.dict_size, None, 4);
+        let mut reader = LZMA2ReaderMT::new(
+            Cursor::new(compressed),
+            option.dict_size,
+            None,
+            available_parallelism,
+        );
         reader.read_to_end(&mut uncompressed).unwrap();
         assert!(reader.stream_count() > 1);
     }

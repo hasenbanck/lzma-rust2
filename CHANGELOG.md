@@ -5,12 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.6.1 - UNRELEASED
+## 0.6.1 - 2025-08-03
 
 ### Fixed
 
 - Fixed issue with the MT reader discovered by the downstream sevenz-rust2 crate because of incorrect chunk cuts
   (https://github.com/hasenbanck/sevenz-rust2/issues/44).
+
+### Updated
+
+- The multithreading now works more efficient, since new threads are only spawned if really needed.
 
 ## 0.6.0 - 2025-07-26
 
