@@ -1,4 +1,4 @@
-//! LZMA/LZMA2 codec ported from [tukaani xz for java](https://tukaani.org/xz/java.html).
+//! LZMA / LZMA2 / XZ compression ported from [tukaani xz for java](https://tukaani.org/xz/java.html).
 //!
 //! This is a fork of the original, unmaintained lzma-rust crate to continue the development and
 //! maintenance.
@@ -61,9 +61,13 @@ mod range_dec;
 mod state;
 #[cfg(feature = "std")]
 mod work_queue;
+#[cfg(feature = "xz")]
+pub mod xz;
 
 #[cfg(feature = "encoder")]
 mod enc;
+
+pub mod filter;
 
 #[cfg(feature = "std")]
 mod lzma2_reader_mt;
@@ -94,6 +98,8 @@ pub use no_std::Read;
 #[cfg(not(feature = "std"))]
 pub use no_std::Write;
 use state::*;
+#[cfg(feature = "xz")]
+pub use xz::{CheckType, XZReader};
 
 /// Result type of the crate.
 #[cfg(feature = "std")]
