@@ -426,6 +426,7 @@ impl<R: Read + 'static> XZReader<R> {
                     .copied()
                     .zip(block_header.properties)
                     .filter_map(|(filter, property)| filter.map(|filter| (filter, property)))
+                    .rev()
                 {
                     chain_reader = match filter {
                         FilterType::Delta => {
