@@ -1,164 +1,424 @@
-use alloc::rc::Rc;
-use core::{cell::Cell, marker::PhantomData};
+use alloc::{boxed::Box, rc::Rc, vec, vec::Vec};
+use core::cell::{Cell, RefCell};
 
-use sha2::Digest;
-
-use super::{BlockHeader, CheckType, FilterType, StreamHeader, CRC32, CRC64};
+use super::{
+    count_multibyte_integer_size, count_multibyte_integer_size_for_value, encode_multibyte_integer,
+    parse_multibyte_integer, parse_multibyte_integer_from_reader, CheckType, ChecksumCalculator,
+    FilterType, IndexRecord, CRC32, XZ_FOOTER_MAGIC, XZ_MAGIC,
+};
 use crate::{
-    error_invalid_data,
+    error_invalid_data, error_invalid_input,
     filter::{bcj::BCJReader, delta::DeltaReader},
-    LZMA2Reader, Read, Result,
+    ByteReader, LZMA2Reader, Read, Result,
 };
 
-/// Trait for readers that can be "peeled" to extract their inner reader
-trait PeelableRead: Read {
-    fn peel(self: Box<Self>) -> Box<dyn PeelableRead>;
-    fn is_base_reader(&self) -> bool {
-        false
-    }
-    fn as_any(&self) -> &dyn std::any::Any;
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any>;
+/// XZ Index containing all block records and metadata.
+#[derive(Debug)]
+struct Index {
+    number_of_records: u64,
+    records: Vec<IndexRecord>,
 }
 
-/// Marker for the base reader
-struct BaseReader<R> {
-    inner: R,
-    compressed_bytes_read: Rc<Cell<u64>>,
-}
+impl Index {
+    fn parse<R: Read>(reader: &mut R) -> Result<Self> {
+        // sic! Index indicator is already parsed (0x00) in BlockHeader::parse.
 
-impl<R> BaseReader<R> {
-    fn new(inner: R, compressed_bytes_read: Rc<Cell<u64>>) -> Self {
-        Self {
-            inner,
-            compressed_bytes_read,
+        let number_of_records = parse_multibyte_integer_from_reader(reader)?;
+        let mut records = Vec::with_capacity(number_of_records as usize);
+
+        for _ in 0..number_of_records {
+            let unpadded_size = parse_multibyte_integer_from_reader(reader)?;
+            let uncompressed_size = parse_multibyte_integer_from_reader(reader)?;
+
+            if unpadded_size == 0 {
+                return Err(error_invalid_data("invalid index record unpadded size"));
+            }
+
+            records.push(IndexRecord {
+                unpadded_size,
+                uncompressed_size,
+            });
         }
-    }
 
-    fn into_inner(self) -> R {
-        self.inner
-    }
-}
+        // Skip index padding (0-3 null bytes to make multiple of 4).
+        let mut bytes_read = 1;
+        bytes_read += count_multibyte_integer_size_for_value(number_of_records);
+        for record in &records {
+            bytes_read += count_multibyte_integer_size_for_value(record.unpadded_size);
+            bytes_read += count_multibyte_integer_size_for_value(record.uncompressed_size);
+        }
 
-impl<R: Read> Read for BaseReader<R> {
-    #[inline(always)]
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let bytes_read = self.inner.read(buf)?;
-        self.compressed_bytes_read
-            .set(self.compressed_bytes_read.get() + bytes_read as u64);
-        Ok(bytes_read)
-    }
-}
+        let padding_needed = (4 - (bytes_read % 4)) % 4;
 
-impl<R: Read + 'static> PeelableRead for BaseReader<R> {
-    #[inline(always)]
-    fn peel(self: Box<Self>) -> Box<dyn PeelableRead> {
-        self
-    }
+        if padding_needed > 0 {
+            let mut padding_buf = [0u8; 3];
+            reader.read_exact(&mut padding_buf[..padding_needed])?;
 
-    #[inline(always)]
-    fn is_base_reader(&self) -> bool {
-        true
-    }
+            if !padding_buf[..padding_needed].iter().all(|&b| b == 0) {
+                return Err(error_invalid_data("invalid index padding"));
+            }
+        }
 
-    #[inline(always)]
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        let expected_crc = reader.read_u32()?;
 
-    #[inline(always)]
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
-        self
-    }
-}
+        // Calculate CRC32 over index data (excluding CRC32 itself).
+        let mut crc = CRC32.digest();
+        crc.update(&[0]);
 
-impl<R: PeelableRead + 'static> PeelableRead for BoundedReader<R> {
-    #[inline(always)]
-    fn peel(self: Box<Self>) -> Box<dyn PeelableRead> {
-        Box::new(self.inner)
-    }
+        // Add number of records.
+        let mut temp_buf = [0u8; 10];
+        let size = encode_multibyte_integer(number_of_records, &mut temp_buf)?;
+        crc.update(&temp_buf[..size]);
 
-    #[inline(always)]
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        // Add all records.
+        for record in &records {
+            let size = encode_multibyte_integer(record.unpadded_size, &mut temp_buf)?;
+            crc.update(&temp_buf[..size]);
+            let size = encode_multibyte_integer(record.uncompressed_size, &mut temp_buf)?;
+            crc.update(&temp_buf[..size]);
+        }
 
-    #[inline(always)]
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
-        self
-    }
-}
+        // Add padding.
+        match padding_needed {
+            1 => crc.update(&[0]),
+            2 => crc.update(&[0, 0]),
+            3 => crc.update(&[0, 0, 0]),
+            _ => {}
+        }
 
-impl<R: PeelableRead + 'static> PeelableRead for DeltaReader<R> {
-    #[inline(always)]
-    fn peel(self: Box<Self>) -> Box<dyn PeelableRead> {
-        Box::new(self.into_inner())
-    }
+        if expected_crc != crc.finalize() {
+            return Err(error_invalid_data("index CRC32 mismatch"));
+        }
 
-    #[inline(always)]
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    #[inline(always)]
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
-        self
+        Ok(Index {
+            number_of_records,
+            records,
+        })
     }
 }
 
-impl<R: PeelableRead + 'static> PeelableRead for BCJReader<R> {
-    #[inline(always)]
-    fn peel(self: Box<Self>) -> Box<dyn PeelableRead> {
-        Box::new(self.into_inner())
-    }
+/// XZ stream footer,
+#[derive(Debug)]
+struct StreamFooter {
+    pub backward_size: u32,
+    pub stream_flags: [u8; 2],
+}
 
-    #[inline(always)]
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+impl StreamFooter {
+    fn parse<R: Read>(reader: &mut R) -> Result<Self> {
+        let expected_crc = reader.read_u32()?;
 
-    #[inline(always)]
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
-        self
+        let backward_size = reader.read_u32()?;
+
+        let mut stream_flags = [0u8; 2];
+        reader.read_exact(&mut stream_flags)?;
+
+        // Verify CRC32 of backward size + stream flags.
+        let mut crc = CRC32.digest();
+        crc.update(&backward_size.to_le_bytes());
+        crc.update(&stream_flags);
+
+        if expected_crc != crc.finalize() {
+            return Err(error_invalid_data("stream footer CRC32 mismatch"));
+        }
+
+        let mut footer_magic = [0u8; 2];
+        reader.read_exact(&mut footer_magic)?;
+        if footer_magic != XZ_FOOTER_MAGIC {
+            return Err(error_invalid_data("invalid XZ footer magic bytes"));
+        }
+
+        Ok(StreamFooter {
+            backward_size,
+            stream_flags,
+        })
     }
 }
 
-impl<R: PeelableRead + 'static> PeelableRead for LZMA2Reader<R> {
-    #[inline(always)]
-    fn peel(self: Box<Self>) -> Box<dyn PeelableRead> {
-        Box::new(self.into_inner())
+/// XZ stream header (12 bytes total)
+#[derive(Debug)]
+struct StreamHeader {
+    check_type: CheckType,
+}
+
+impl StreamHeader {
+    /// Parse stream header from reader
+    fn parse<R: Read>(reader: &mut R) -> Result<Self> {
+        let mut magic = [0u8; 6];
+        reader.read_exact(&mut magic)?;
+        if magic != XZ_MAGIC {
+            return Err(error_invalid_data("invalid XZ magic bytes"));
+        }
+
+        Self::parse_flags_and_crc(reader)
     }
 
-    #[inline(always)]
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+    /// Parse stream flags and CRC32 after magic bytes have been read.
+    fn parse_flags_and_crc<R: Read>(reader: &mut R) -> Result<Self> {
+        let mut flags = [0u8; 2];
+        reader.read_exact(&mut flags)?;
 
-    #[inline(always)]
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
-        self
+        if flags[0] != 0 {
+            return Err(error_invalid_data("invalid XZ stream flags"));
+        }
+
+        let check_type = CheckType::from_byte(flags[1])?;
+
+        let expected_crc = reader.read_u32()?;
+
+        if expected_crc != CRC32.checksum(&flags) {
+            return Err(error_invalid_data("XZ stream header CRC32 mismatch"));
+        }
+
+        Ok(StreamHeader { check_type })
     }
 }
 
-impl PeelableRead for Box<dyn PeelableRead> {
-    #[inline(always)]
-    fn peel(self: Box<Self>) -> Box<dyn PeelableRead> {
-        // Remove one layer of boxing
-        *self
-    }
+/// XZ block header information
+#[derive(Debug)]
+struct BlockHeader {
+    compressed_size: Option<u64>,
+    uncompressed_size: Option<u64>,
+    filters: [Option<FilterType>; 4],
+    properties: [u32; 4],
+}
 
-    #[inline(always)]
-    fn is_base_reader(&self) -> bool {
-        (**self).is_base_reader()
-    }
+impl BlockHeader {
+    fn parse<R: Read>(reader: &mut R) -> Result<Option<Self>> {
+        let header_size_encoded = reader.read_u8()?;
 
-    #[inline(always)]
-    fn as_any(&self) -> &dyn std::any::Any {
-        (**self).as_any()
-    }
+        if header_size_encoded == 0 {
+            // If header size is 0, this indicates end of blocks (index follows).
+            return Ok(None);
+        }
 
-    #[inline(always)]
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
-        (*self).into_any()
+        let header_size = (header_size_encoded as usize + 1) * 4;
+        if !(8..=1024).contains(&header_size) {
+            return Err(error_invalid_data("invalid XZ block header size"));
+        }
+
+        // -1 because we already read the size byte.
+        let mut header_data = vec![0u8; header_size - 1];
+        reader.read_exact(&mut header_data)?;
+
+        let block_flags = header_data[0];
+        let num_filters = ((block_flags & 0x03) + 1) as usize;
+        let has_compressed_size = (block_flags & 0x40) != 0;
+        let has_uncompressed_size = (block_flags & 0x80) != 0;
+
+        let mut offset = 1;
+        let mut compressed_size = None;
+        let mut uncompressed_size = None;
+
+        // Parse optional compressed size.
+        if has_compressed_size {
+            if offset + 8 > header_data.len() {
+                return Err(error_invalid_data(
+                    "XZ block header too short for compressed size",
+                ));
+            }
+            compressed_size = Some(parse_multibyte_integer(&header_data[offset..])?);
+            offset += count_multibyte_integer_size(&header_data[offset..]);
+        }
+
+        if has_uncompressed_size {
+            if offset >= header_data.len() {
+                return Err(error_invalid_data(
+                    "XZ block header too short for uncompressed size",
+                ));
+            }
+            uncompressed_size = Some(parse_multibyte_integer(&header_data[offset..])?);
+            offset += count_multibyte_integer_size(&header_data[offset..]);
+        }
+
+        let mut filters = [None; 4];
+        let mut properties = [0; 4];
+
+        for i in 0..num_filters {
+            if offset >= header_data.len() {
+                return Err(error_invalid_data("XZ block header too short for filters"));
+            }
+
+            let filter_type =
+                FilterType::try_from(parse_multibyte_integer(&header_data[offset..])?)
+                    .map_err(|_| error_invalid_input("unsupported filter type found"))?;
+
+            offset += count_multibyte_integer_size(&header_data[offset..]);
+
+            let property = match filter_type {
+                FilterType::Delta => {
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "XZ block header too short for Delta properties",
+                        ));
+                    }
+
+                    let props_size = parse_multibyte_integer(&header_data[offset..])?;
+                    offset += count_multibyte_integer_size(&header_data[offset..]);
+
+                    if props_size != 1 {
+                        return Err(error_invalid_data("invalid Delta properties size"));
+                    }
+
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "XZ block header too short for Delta properties",
+                        ));
+                    }
+
+                    let distance_prop = header_data[offset];
+                    offset += 1;
+
+                    // Distance is encoded as byte value + 1, range [1, 256].
+                    (distance_prop as u32) + 1
+                }
+                FilterType::BcjX86
+                | FilterType::BcjPPC
+                | FilterType::BcjIA64
+                | FilterType::BcjARM
+                | FilterType::BcjARMThumb
+                | FilterType::BcjSPARC
+                | FilterType::BcjARM64
+                | FilterType::BcjRISCV => {
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "XZ block header too short for BCJ properties",
+                        ));
+                    }
+
+                    let props_size = parse_multibyte_integer(&header_data[offset..])?;
+                    offset += count_multibyte_integer_size(&header_data[offset..]);
+
+                    match props_size {
+                        0 => {
+                            // No start offset specified, use default (0).
+                            0
+                        }
+                        4 => {
+                            // 4-byte start offset specified.
+                            if offset + 4 > header_data.len() {
+                                return Err(error_invalid_data(
+                                    "XZ block header too short for BCJ start offset",
+                                ));
+                            }
+
+                            let start_offset_value = u32::from_le_bytes([
+                                header_data[offset],
+                                header_data[offset + 1],
+                                header_data[offset + 2],
+                                header_data[offset + 3],
+                            ]);
+                            offset += 4;
+
+                            // Validate alignment based on filter type.
+                            let bcj_alignment = match filter_type {
+                                FilterType::BcjX86 => 1,
+                                FilterType::BcjPPC => 4,
+                                FilterType::BcjIA64 => 16,
+                                FilterType::BcjARM => 4,
+                                FilterType::BcjARMThumb => 2,
+                                FilterType::BcjSPARC => 4,
+                                FilterType::BcjARM64 => 4,
+                                FilterType::BcjRISCV => 2,
+                                _ => unreachable!(),
+                            };
+
+                            if start_offset_value % bcj_alignment != 0 {
+                                return Err(error_invalid_data(
+                                    "BCJ start offset not aligned to filter requirements",
+                                ));
+                            }
+
+                            start_offset_value
+                        }
+                        _ => {
+                            return Err(error_invalid_data("invalid BCJ properties size"));
+                        }
+                    }
+                }
+                FilterType::LZMA2 => {
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "XZ block header too short for LZMA2 properties",
+                        ));
+                    }
+
+                    let props_size = parse_multibyte_integer(&header_data[offset..])?;
+                    offset += count_multibyte_integer_size(&header_data[offset..]);
+
+                    if props_size != 1 {
+                        return Err(error_invalid_data("invalid LZMA2 properties size"));
+                    }
+
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "XZ block header too short for LZMA2 properties",
+                        ));
+                    }
+
+                    let dict_size_prop = header_data[offset];
+                    offset += 1;
+
+                    if dict_size_prop > 40 {
+                        return Err(error_invalid_data("invalid LZMA2 dictionary size"));
+                    }
+
+                    if dict_size_prop == 40 {
+                        0xFFFFFFFF
+                    } else {
+                        let base = 2 | ((dict_size_prop & 1) as u32);
+                        base << (dict_size_prop / 2 + 11)
+                    }
+                }
+            };
+
+            filters[i] = Some(filter_type);
+            properties[i] = property;
+        }
+
+        if filters.iter().filter_map(|x| *x).next_back() != Some(FilterType::LZMA2) {
+            return Err(error_invalid_input(
+                "XZ block's last filter must be a LZMA2 filter",
+            ));
+        }
+
+        // Header must be padded so that the total header size matches the declared size.
+        // We need to pad until: 1 (size byte) + offset + 4 (CRC32) == header_size
+        let expected_offset = header_size - 1 - 4; // header_size - size_byte - crc32_size
+        while offset < expected_offset {
+            if offset >= header_data.len() || header_data[offset] != 0 {
+                return Err(error_invalid_data("invalid XZ block header padding"));
+            }
+            offset += 1;
+        }
+
+        // Last 4 bytes should be CRC32 of the header (excluding the CRC32 itself).
+        if offset + 4 != header_data.len() {
+            return Err(error_invalid_data("invalid XZ block header CRC32 position"));
+        }
+
+        let expected_crc = u32::from_le_bytes([
+            header_data[offset],
+            header_data[offset + 1],
+            header_data[offset + 2],
+            header_data[offset + 3],
+        ]);
+
+        // Calculate CRC32 of header size byte + header data (excluding CRC32).
+        let mut crc = CRC32.digest();
+        crc.update(&[header_size_encoded]);
+        crc.update(&header_data[..offset]);
+
+        if expected_crc != crc.finalize() {
+            return Err(error_invalid_data("XZ block header CRC32 mismatch"));
+        }
+
+        Ok(Some(BlockHeader {
+            compressed_size,
+            uncompressed_size,
+            filters,
+            properties,
+        }))
     }
 }
 
@@ -195,230 +455,98 @@ impl<R: Read> Read for BoundedReader<R> {
     }
 }
 
-/// A wrapper around a reader that calculates checksums while reading
-struct BlockReader<R> {
-    inner: R,
-    remaining_bytes: u64,
-    checksum_calculator: ChecksumCalculator,
+struct SharedReader<R> {
+    inner: Rc<RefCell<R>>,
+    compressed_bytes_read: Rc<Cell<u64>>,
+}
+
+/// A single-threaded XZ decompressor.
+pub struct XZReader<'reader, R> {
+    reader: Box<dyn Read + 'reader>,
+    stream_header: Option<StreamHeader>,
+    checksum_calculator: Option<ChecksumCalculator>,
     finished: bool,
+    allow_multiple_streams: bool,
+    blocks_processed: u64,
+    compressed_bytes_read: Rc<Cell<u64>>,
+    original_reader: Rc<RefCell<R>>,
 }
 
-impl<R> BlockReader<R> {
-    fn new(inner: R, block_size: Option<u64>, check_type: CheckType) -> Self {
+impl<R> SharedReader<R> {
+    fn new(inner: R, compressed_bytes_read: Rc<Cell<u64>>) -> Self {
         Self {
-            inner,
-            remaining_bytes: block_size.unwrap_or(u64::MAX),
-            checksum_calculator: ChecksumCalculator::new(check_type),
-            finished: false,
+            inner: Rc::new(RefCell::new(inner)),
+            compressed_bytes_read,
         }
-    }
-
-    fn verify_checksum(&self, expected: &[u8]) -> bool {
-        self.checksum_calculator.verify(expected)
-    }
-
-    fn is_finished(&self) -> bool {
-        self.finished
     }
 }
 
-impl<R: Read> Read for BlockReader<R> {
+impl<R: Read> Read for SharedReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        if self.finished || self.remaining_bytes == 0 {
-            return Ok(0);
-        }
-
-        let max_read = (buf.len() as u64).min(self.remaining_bytes) as usize;
-        let bytes_read = self.inner.read(&mut buf[..max_read])?;
-
-        if bytes_read == 0 {
-            self.finished = true;
-            return Ok(0);
-        }
-
-        self.checksum_calculator.update(&buf[..bytes_read]);
-        self.remaining_bytes -= bytes_read as u64;
-
-        if self.remaining_bytes == 0 {
-            self.finished = true;
-        }
-
+        let mut reader = self.inner.borrow_mut();
+        let bytes_read = reader.read(buf)?;
+        self.compressed_bytes_read
+            .set(self.compressed_bytes_read.get() + bytes_read as u64);
         Ok(bytes_read)
     }
 }
 
-/// Handles checksum calculation for different XZ check types
-enum ChecksumCalculator {
-    None,
-    Crc32(crc::Digest<'static, u32, crc::Table<16>>),
-    Crc64(crc::Digest<'static, u64, crc::Table<16>>),
-    Sha256(sha2::Sha256),
-}
-
-impl ChecksumCalculator {
-    fn new(check_type: CheckType) -> Self {
-        match check_type {
-            CheckType::None => Self::None,
-            CheckType::Crc32 => Self::Crc32(CRC32.digest()),
-            CheckType::Crc64 => Self::Crc64(CRC64.digest()),
-            CheckType::Sha256 => Self::Sha256(sha2::Sha256::new()),
-        }
-    }
-
-    fn update(&mut self, data: &[u8]) {
-        match self {
-            ChecksumCalculator::None => {}
-            ChecksumCalculator::Crc32(crc) => {
-                crc.update(data);
-            }
-            ChecksumCalculator::Crc64(crc) => {
-                crc.update(data);
-            }
-            ChecksumCalculator::Sha256(sha) => {
-                sha.update(data);
-            }
-        }
-    }
-
-    fn verify(&self, expected: &[u8]) -> bool {
-        match self {
-            ChecksumCalculator::None => true,
-            ChecksumCalculator::Crc32(crc) => {
-                if expected.len() != 4 {
-                    return false;
-                }
-
-                let expected_crc =
-                    u32::from_le_bytes([expected[0], expected[1], expected[2], expected[3]]);
-
-                let final_crc = crc.clone().finalize();
-
-                final_crc == expected_crc
-            }
-            ChecksumCalculator::Crc64(crc) => {
-                if expected.len() != 8 {
-                    return false;
-                }
-
-                let expected_crc = u64::from_le_bytes([
-                    expected[0],
-                    expected[1],
-                    expected[2],
-                    expected[3],
-                    expected[4],
-                    expected[5],
-                    expected[6],
-                    expected[7],
-                ]);
-
-                let final_crc = crc.clone().finalize();
-
-                final_crc == expected_crc
-            }
-            ChecksumCalculator::Sha256(sha) => {
-                if expected.len() != 32 {
-                    return false;
-                }
-
-                let final_sha = sha.clone().finalize();
-
-                &final_sha[..32] == expected
-            }
-        }
-    }
-
-    fn checksum_size(&self) -> usize {
-        match self {
-            ChecksumCalculator::None => 0,
-            ChecksumCalculator::Crc32(_) => 4,
-            ChecksumCalculator::Crc64(_) => 8,
-            ChecksumCalculator::Sha256(_) => 32,
-        }
-    }
-}
-
-/// XZ format decoder that wraps LZMA2 blocks
-pub struct XZReader<R> {
-    stream_header: Option<StreamHeader>,
-    current_reader: Option<Box<dyn PeelableRead>>,
-    current_block_remaining: u64,
-    current_checksum_calculator: Option<ChecksumCalculator>,
-    compressed_bytes_read: Rc<Cell<u64>>,
-    finished: bool,
-    _marker: PhantomData<R>,
-}
-
-// TODO: 'static doesn't allow to use XZReader with borrowed data!
-impl<R: Read + 'static> XZReader<R> {
-    /// Create a new XZ reader
-    pub fn new(inner: R) -> Self {
+impl<'reader, R: Read + 'reader> XZReader<'reader, R> {
+    /// Create a new [`XZReader`].
+    pub fn new(inner: R, allow_multiple_streams: bool) -> Self {
         let compressed_bytes_read = Rc::new(Cell::new(0));
+        let original_reader = Rc::new(RefCell::new(inner));
+        let reader = Box::new(SharedReader {
+            inner: Rc::clone(&original_reader),
+            compressed_bytes_read: Rc::clone(&compressed_bytes_read),
+        });
+
         Self {
+            reader,
             stream_header: None,
-            current_reader: Some(Box::new(BaseReader::new(
-                inner,
-                Rc::clone(&compressed_bytes_read),
-            ))),
-            current_block_remaining: 0,
-            current_checksum_calculator: None,
-            compressed_bytes_read,
+            checksum_calculator: None,
             finished: false,
-            _marker: PhantomData,
+            allow_multiple_streams,
+            blocks_processed: 0,
+            compressed_bytes_read,
+            original_reader,
         }
     }
 
-    /// Consume the XZReader and return the inner reader
-    pub fn into_inner(mut self) -> R {
-        match self.current_reader.take() {
-            Some(mut current_reader) => {
-                while !current_reader.is_base_reader() {
-                    current_reader = current_reader.peel();
-                }
+    /// Consume the XZReader and return the inner reader.
+    pub fn into_inner(self) -> R {
+        let Self {
+            reader,
+            original_reader,
+            ..
+        } = self;
 
-                let base_reader_any = current_reader.into_any();
+        drop(reader);
 
-                match base_reader_any.downcast::<BaseReader<R>>() {
-                    Ok(base_reader) => base_reader.into_inner(),
-                    Err(_) => panic!("failed to downcast to BaseReader"),
-                }
+        match Rc::try_unwrap(original_reader) {
+            Ok(refcell) => refcell.into_inner(),
+            Err(_) => {
+                panic!("failed to unwrap original reader - other references exists");
             }
-            None => panic!("current_reader is None"),
         }
     }
+}
 
-    /// Initialize by parsing the stream header
+impl<'reader, R: Read + 'reader> XZReader<'reader, R> {
     fn ensure_stream_header(&mut self) -> Result<()> {
         if self.stream_header.is_none() {
-            let current_reader = self
-                .current_reader
-                .as_mut()
-                .expect("current_reader not set");
-
-            let header = StreamHeader::parse(current_reader)?;
+            let header = StreamHeader::parse(&mut self.reader)?;
             self.stream_header = Some(header);
         }
         Ok(())
     }
 
-    /// Prepare the next block for reading
     fn prepare_next_block(&mut self) -> Result<bool> {
-        let current_reader = self
-            .current_reader
-            .as_mut()
-            .expect("current_reader not set");
-
-        match BlockHeader::parse(current_reader)? {
+        match BlockHeader::parse(&mut self.reader)? {
             Some(block_header) => {
-                self.current_block_remaining = block_header.uncompressed_size.unwrap_or(u64::MAX);
-
-                let base_reader = self.current_reader.take().expect("current_reader not set");
-
-                let mut chain_reader: Box<dyn PeelableRead> = match block_header.compressed_size {
-                    Some(compressed_size) => {
-                        Box::new(BoundedReader::new(base_reader, compressed_size))
-                    }
-                    None => base_reader,
-                };
+                static DUMMY: &[u8] = &[];
+                let mut chain_reader: Box<dyn Read + 'reader> =
+                    core::mem::replace(&mut self.reader, Box::new(DUMMY));
 
                 for (filter, property) in block_header
                     .filters
@@ -442,7 +570,8 @@ impl<R: Read + 'static> XZReader<R> {
                             Box::new(BCJReader::new_ppc(chain_reader, start_offset))
                         }
                         FilterType::BcjIA64 => {
-                            todo!()
+                            let start_offset = property as usize;
+                            Box::new(BCJReader::new_ia64(chain_reader, start_offset))
                         }
                         FilterType::BcjARM => {
                             let start_offset = property as usize;
@@ -461,7 +590,8 @@ impl<R: Read + 'static> XZReader<R> {
                             Box::new(BCJReader::new_arm64(chain_reader, start_offset))
                         }
                         FilterType::BcjRISCV => {
-                            todo!()
+                            let start_offset = property as usize;
+                            Box::new(BCJReader::new_riscv(chain_reader, start_offset))
                         }
                         FilterType::LZMA2 => {
                             let dict_size = property;
@@ -470,78 +600,180 @@ impl<R: Read + 'static> XZReader<R> {
                     };
                 }
 
-                self.current_reader = Some(chain_reader);
+                self.reader = chain_reader;
 
                 match self.stream_header.as_ref() {
                     Some(header) => {
-                        self.current_checksum_calculator =
-                            Some(ChecksumCalculator::new(header.check_type));
+                        self.checksum_calculator = Some(ChecksumCalculator::new(header.check_type));
                     }
                     None => {
                         panic!("stream_header not set");
                     }
                 }
 
+                self.blocks_processed += 1;
+
                 Ok(true)
             }
             None => {
-                // End of blocks reached, index follows
+                // End of blocks reached, index follows.
+                self.parse_index_and_footer()?;
+
+                if self.allow_multiple_streams && self.try_start_next_stream()? {
+                    return self.prepare_next_block();
+                }
+
                 self.finished = true;
                 Ok(false)
             }
         }
     }
 
-    /// Consume padding bytes (null bytes) until 4-byte alignment
     fn consume_padding(&mut self) -> Result<()> {
         let padding_needed = match (4 - (self.compressed_bytes_read.get() % 4)) % 4 {
             0 => return Ok(()),
             n => n as usize,
         };
 
-        let current_reader = self
-            .current_reader
-            .as_mut()
-            .expect("current_reader not set");
-
         let mut padding_buf = [0u8; 3];
 
-        let bytes_read = current_reader.read(&mut padding_buf[..padding_needed])?;
+        let bytes_read = self.reader.read(&mut padding_buf[..padding_needed])?;
 
         if bytes_read != padding_needed {
-            return Err(error_invalid_data("Incomplete XZ block padding"));
+            return Err(error_invalid_data("incomplete XZ block padding"));
         }
 
         if !padding_buf[..bytes_read].iter().all(|&byte| byte == 0) {
-            return Err(error_invalid_data("Invalid XZ block padding"));
+            return Err(error_invalid_data("invalid XZ block padding"));
         }
 
         Ok(())
     }
 
-    /// Consume and verify the block checksum.
     fn verify_block_checksum(&mut self) -> Result<()> {
-        if let Some(current_checksum_calculator) = self.current_checksum_calculator.as_mut() {
-            let current_reader = self
-                .current_reader
-                .as_mut()
-                .expect("current_reader not set");
+        let checksum_calculator = self
+            .checksum_calculator
+            .take()
+            .expect("checksum_calculator not set");
 
-            let checksum_size = current_checksum_calculator.checksum_size();
+        match checksum_calculator {
+            ChecksumCalculator::None => { /* Nothing to check */ }
+            ChecksumCalculator::Crc32(_) => {
+                let mut checksum = [0u8; 4];
+                self.reader.read_exact(&mut checksum)?;
 
-            let mut checksum = [0u8; 32];
-            current_reader.read_exact(&mut checksum[..checksum_size])?;
-
-            if !current_checksum_calculator.verify(&checksum[..checksum_size]) {
-                return Err(error_invalid_data("invalid block checksum"));
+                if !checksum_calculator.verify(&checksum) {
+                    return Err(error_invalid_data("invalid block checksum"));
+                }
             }
+            ChecksumCalculator::Crc64(_) => {
+                let mut checksum = [0u8; 8];
+                self.reader.read_exact(&mut checksum)?;
+
+                if !checksum_calculator.verify(&checksum) {
+                    return Err(error_invalid_data("invalid block checksum"));
+                }
+            }
+            ChecksumCalculator::Sha256(_) => {
+                let mut checksum = [0u8; 32];
+                self.reader.read_exact(&mut checksum)?;
+
+                if !checksum_calculator.verify(&checksum) {
+                    return Err(error_invalid_data("invalid block checksum"));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Look for the start of the next stream by reading bytes one at a time
+    /// and checking for the XZ magic sequence, allowing for stream padding.
+    fn try_start_next_stream(&mut self) -> Result<bool> {
+        let mut padding_bytes = 0;
+        let mut buffer = [0u8; 6];
+
+        loop {
+            let mut byte_buffer = [0u8; 1];
+            let read = self.reader.read(&mut byte_buffer)?;
+            if read == 0 {
+                // EOF reached, no more streams.
+                return Ok(false);
+            }
+
+            let byte = byte_buffer[0];
+
+            if byte == 0 {
+                // Potential stream padding.
+                padding_bytes += 1;
+                continue;
+            }
+
+            // Non-zero byte found - check if it starts XZ magic.
+            if byte == XZ_MAGIC[0] {
+                return Err(error_invalid_data("invalid data after stream"));
+            }
+
+            buffer[0] = byte;
+            let mut buffer_pos = 1;
+
+            // Read the rest of the magic bytes.
+            while buffer_pos < 6 {
+                match self.reader.read(&mut byte_buffer)? {
+                    0 => {
+                        return Err(error_invalid_data("incomplete XZ magic bytes"));
+                    }
+                    1 => {
+                        buffer[buffer_pos] = byte_buffer[0];
+                        buffer_pos += 1;
+                    }
+                    _ => unreachable!(),
+                }
+            }
+
+            if buffer != XZ_MAGIC {
+                return Err(error_invalid_data("invalid data after stream padding"));
+            }
+
+            if padding_bytes % 4 != 0 {
+                return Err(error_invalid_data("stream padding size not multiple of 4"));
+            }
+
+            let stream_header = StreamHeader::parse_flags_and_crc(&mut self.reader)?;
+
+            // Reset state for new stream.
+            self.stream_header = Some(stream_header);
+            self.blocks_processed = 0;
+
+            return Ok(true);
+        }
+    }
+
+    fn parse_index_and_footer(&mut self) -> Result<()> {
+        let index = Index::parse(&mut self.reader)?;
+
+        if index.number_of_records != self.blocks_processed {
+            return Err(error_invalid_data(
+                "number of blocks processed doesn't match index records",
+            ));
+        }
+
+        let stream_footer = StreamFooter::parse(&mut self.reader)?;
+
+        let header = self.stream_header.as_ref().expect("stream_header not set");
+
+        let header_flags = [0, header.check_type as u8];
+        if stream_footer.stream_flags != header_flags {
+            return Err(error_invalid_data(
+                "stream header and footer flags mismatch",
+            ));
         }
 
         Ok(())
     }
 }
 
-impl<R: Read + 'static> Read for XZReader<R> {
+impl<'reader, R: Read + 'reader> Read for XZReader<'reader, R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         if self.finished {
             return Ok(0);
@@ -550,101 +782,34 @@ impl<R: Read + 'static> Read for XZReader<R> {
         self.ensure_stream_header()?;
 
         loop {
-            if self.current_block_remaining != 0 {
-                let current_reader = self
-                    .current_reader
-                    .as_mut()
-                    .expect("current_reader not set");
-
-                let bytes_read = current_reader.read(buf)?;
+            if self.checksum_calculator.is_some() {
+                let bytes_read = self.reader.read(buf)?;
 
                 if bytes_read > 0 {
-                    if let Some(ref mut calc) = self.current_checksum_calculator {
+                    if let Some(ref mut calc) = self.checksum_calculator {
                         calc.update(&buf[..bytes_read]);
                     }
 
-                    self.current_block_remaining = self
-                        .current_block_remaining
-                        .saturating_sub(bytes_read as u64);
-
                     return Ok(bytes_read);
                 } else {
-                    // Current block is exhausted - peel back to base reader
-                    let mut current = self.current_reader.take().expect("current_reader not set");
+                    // Current block is finished.
+                    let shared_reader = Box::new(SharedReader {
+                        inner: Rc::clone(&self.original_reader),
+                        compressed_bytes_read: Rc::clone(&self.compressed_bytes_read),
+                    });
 
-                    while !current.is_base_reader() {
-                        current = current.peel();
-                    }
-
-                    self.current_reader = Some(current);
+                    self.reader = shared_reader;
 
                     self.consume_padding()?;
                     self.verify_block_checksum()?;
-
-                    self.current_checksum_calculator = None;
-                    self.current_block_remaining = 0;
                 }
             } else {
-                // TODO: We currently don't correctly handle reading multiple blocks.
-                //       Check the specification what we are expected to do here.
-
-                // No current block, prepare the next one
+                // No current block, prepare the next one.
                 if !self.prepare_next_block()? {
-                    // No more blocks, we're done
+                    // No more blocks, we're done.
                     return Ok(0);
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_checksum_calculator_crc32() {
-        let mut calc = ChecksumCalculator::new(CheckType::Crc32);
-        calc.update(b"123456789");
-
-        // CRC32 of "123456789" in little-endian format
-        let expected = [0x26, 0x39, 0xF4, 0xCB];
-        assert!(calc.verify(&expected));
-    }
-
-    #[test]
-    fn test_checksum_calculator_crc64() {
-        let mut calc = ChecksumCalculator::new(CheckType::Crc64);
-        calc.update(b"123456789");
-
-        // CRC64 of "123456789" in little-endian format
-        let expected = [250, 57, 25, 223, 187, 201, 93, 153];
-        assert!(calc.verify(&expected));
-    }
-
-    #[test]
-    fn test_checksum_calculator_sha256() {
-        let mut calc = ChecksumCalculator::new(CheckType::Sha256);
-        calc.update(b"123456789");
-
-        // SHA256 of "123456789"
-        let expected = [
-            21, 226, 176, 211, 195, 56, 145, 235, 176, 241, 239, 96, 158, 196, 25, 66, 12, 32, 227,
-            32, 206, 148, 198, 95, 188, 140, 51, 18, 68, 142, 178, 37,
-        ];
-        assert!(calc.verify(&expected));
-    }
-
-    #[test]
-    fn test_block_reader_limits() {
-        let data = b"Hello, world! This is a test.";
-        let mut reader = BlockReader::new(data.as_slice(), Some(5), CheckType::None);
-
-        let mut buf = [0u8; 10];
-        let bytes_read = reader.read(&mut buf).unwrap();
-
-        assert_eq!(bytes_read, 5);
-        assert_eq!(&buf[..5], b"Hello");
-        assert!(reader.is_finished());
     }
 }

@@ -16,9 +16,6 @@ use crate::{
     LZMAOptions,
 };
 
-/// The minimal size of a stream.
-pub const MIN_STREAM_SIZE: u64 = 1 << 18;
-
 /// A work unit for a worker thread.
 /// Contains the sequence number and the raw uncompressed data.
 type WorkUnit = (u64, Vec<u8>);
@@ -66,12 +63,12 @@ impl<W: Write> LZMA2WriterMT<W> {
     /// - `inner`: The writer to write compressed data to.
     /// - `options`: The LZMA2 options used for compressing.
     /// - `stream_size`: Minimal size of each independent stream. Used for multi-threading.
-    ///   Will be clamped to be at least [`MIN_STREAM_SIZE`].
+    ///   Will be clamped to be at least the dictionary size.
     /// - `num_workers`: The maximum number of worker threads for compression.
     ///   Currently capped at 256 Threads.
     pub fn new(inner: W, options: &LZMAOptions, stream_size: u64, num_workers: u32) -> Self {
         let max_workers = num_workers.clamp(1, 256);
-        let stream_size = stream_size.max(MIN_STREAM_SIZE);
+        let stream_size = stream_size.max(options.dict_size as u64);
 
         let work_queue = WorkStealingQueue::new();
         let (result_tx, result_rx) = mpsc::channel::<ResultUnit>();

@@ -2,7 +2,11 @@
 
 mod decode;
 
-use crate::{filter::bcj2::decode::Bcj2Decoder, Read};
+use alloc::{vec, vec::Vec};
+
+use decode::Bcj2Decoder;
+
+use crate::{error_invalid_data, Read};
 
 const BUF_SIZE: usize = 1 << 18;
 
@@ -92,7 +96,7 @@ impl<R> BCJ2Reader<R> {
 }
 
 impl<R: Read> Read for BCJ2Reader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
         let mut dest_buf = buf;
         if dest_buf.len() > self.uncompressed_size as usize {
             dest_buf = &mut dest_buf[..self.uncompressed_size as usize];
@@ -105,10 +109,7 @@ impl<R: Read> Read for BCJ2Reader<R> {
         let mut offset = 0;
         loop {
             if !self.decoder.decode(&mut self.base.bufs, dest_buf) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "bcj2 decode error",
-                ));
+                return Err(error_invalid_data("bcj2 decode error"));
             }
 
             {
@@ -135,10 +136,7 @@ impl<R: Read> Read for BCJ2Reader<R> {
                 self.decoder.bufs[self.decoder.state] = buf_index;
             }
             if !self.read_res[self.decoder.state] {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "bcj2 decode error:2",
-                ));
+                return Err(error_invalid_data("bcj2 decode error:2"));
             }
 
             loop {
@@ -166,10 +164,7 @@ impl<R: Read> Read for BCJ2Reader<R> {
                     if result_size != 0 {
                         return Ok(result_size);
                     }
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "bcj2 decode error:3",
-                    ));
+                    return Err(error_invalid_data("bcj2 decode error:3"));
                 }
                 total_read -= extra_size;
             }
@@ -178,16 +173,10 @@ impl<R: Read> Read for BCJ2Reader<R> {
 
         if self.uncompressed_size == 0 {
             if self.decoder.code != 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "bcj2 decode error:4",
-                ));
+                return Err(error_invalid_data("bcj2 decode error:4"));
             }
             if self.decoder.state != BCJ2_STREAM_MAIN && self.decoder.state != BCJ2_DEC_STATE_ORIG {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "bcj2 decode error:5",
-                ));
+                return Err(error_invalid_data("bcj2 decode error:5"));
             }
         }
         Ok(result_size)

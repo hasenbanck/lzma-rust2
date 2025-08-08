@@ -141,3 +141,27 @@ impl Write for Vec<u8> {
         Ok(())
     }
 }
+
+impl<R: Read + ?Sized> Read for alloc::boxed::Box<R> {
+    #[inline(always)]
+    fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
+        (**self).read(buf)
+    }
+
+    #[inline(always)]
+    fn read_exact(&mut self, buf: &mut [u8]) -> crate::Result<()> {
+        (**self).read_exact(buf)
+    }
+}
+
+impl<W: Write + ?Sized> Write for alloc::boxed::Box<W> {
+    #[inline(always)]
+    fn write(&mut self, buf: &[u8]) -> crate::Result<usize> {
+        (**self).write(buf)
+    }
+
+    #[inline(always)]
+    fn flush(&mut self) -> crate::Result<()> {
+        (**self).flush()
+    }
+}

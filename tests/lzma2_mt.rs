@@ -3,14 +3,18 @@ use std::{
     num::NonZero,
 };
 
-use lzma_rust2::{LZMA2ReaderMT, LZMA2WriterMT, LZMAOptions, MIN_STREAM_SIZE};
+use lzma_rust2::{LZMA2ReaderMT, LZMA2WriterMT, LZMAOptions};
 
-static EXECUTABLE: &[u8] = include_bytes!("data/executable.exe");
-static PG100: &[u8] = include_bytes!("data/pg100.txt");
-static PG6800: &[u8] = include_bytes!("data/pg6800.txt");
+static EXECUTABLE: &str = "tests/data/executable.exe";
+static PG100: &str = "tests/data/pg100.txt";
+static PG6800: &str = "tests/data/pg6800.txt";
 
-fn test_round_trip(data: &[u8], level: u32) {
+fn test_round_trip(path: &str, level: u32) {
+    let data = std::fs::read(path).unwrap();
+    let data_len = data.len() as u32;
+
     let option = LZMAOptions::with_preset(level);
+
     let available_parallelism = std::thread::available_parallelism()
         .unwrap_or(NonZero::new(1).unwrap())
         .get()
@@ -22,10 +26,10 @@ fn test_round_trip(data: &[u8], level: u32) {
         let mut writer = LZMA2WriterMT::new(
             &mut compressed,
             &option,
-            MIN_STREAM_SIZE,
+            option.dict_size as u64,
             available_parallelism,
         );
-        writer.write_all(data).unwrap();
+        writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }
 
@@ -39,7 +43,10 @@ fn test_round_trip(data: &[u8], level: u32) {
             available_parallelism,
         );
         reader.read_to_end(&mut uncompressed).unwrap();
-        assert!(reader.stream_count() > 1);
+
+        if option.dict_size < data_len {
+            assert!(reader.stream_count() > 1);
+        }
     }
 
     // We don't use assert_eq since the debug output would be too big.

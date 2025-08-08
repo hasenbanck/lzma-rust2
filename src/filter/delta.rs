@@ -1,5 +1,8 @@
 //! Delta filter.
 
+#[cfg(feature = "encoder")]
+use alloc::vec::Vec;
+
 use crate::Read;
 #[cfg(feature = "encoder")]
 use crate::Write;
@@ -65,7 +68,7 @@ impl<R> DeltaReader<R> {
 }
 
 impl<R: Read> Read for DeltaReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
         let n = self.inner.read(buf)?;
         if n == 0 {
             return Ok(n);
@@ -91,11 +94,15 @@ impl<W> DeltaWriter<W> {
             buffer: Vec::with_capacity(4096),
         }
     }
+
+    pub fn into_inner(self) -> W {
+        self.inner
+    }
 }
 
 #[cfg(feature = "encoder")]
 impl<W: Write> Write for DeltaWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> crate::Result<usize> {
         let data_size = buf.len();
 
         if data_size > self.buffer.len() {
@@ -107,12 +114,12 @@ impl<W: Write> Write for DeltaWriter<W> {
         self.inner.write(&self.buffer[..data_size])
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn flush(&mut self) -> crate::Result<()> {
         self.inner.flush()
     }
 }
 
-#[cfg(feature = "encoder")]
+#[cfg(all(feature = "encoder", feature = "std"))]
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;

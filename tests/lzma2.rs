@@ -2,18 +2,20 @@ use std::io::{Read, Write};
 
 use lzma_rust2::{LZMA2Reader, LZMA2Writer, LZMAOptions};
 
-static EXECUTABLE: &[u8] = include_bytes!("data/executable.exe");
-static PG100: &[u8] = include_bytes!("data/pg100.txt");
-static PG6800: &[u8] = include_bytes!("data/pg6800.txt");
+static EXECUTABLE: &str = "tests/data/executable.exe";
+static PG100: &str = "tests/data/pg100.txt";
+static PG6800: &str = "tests/data/pg6800.txt";
 
-fn test_round_trip(data: &[u8], level: u32) {
+fn test_round_trip(path: &str, level: u32) {
+    let data = std::fs::read(path).unwrap();
+
     let option = LZMAOptions::with_preset(level);
 
     let mut compressed = Vec::new();
 
     {
         let mut writer = LZMA2Writer::new(&mut compressed, &option);
-        writer.write_all(data).unwrap();
+        writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }
 

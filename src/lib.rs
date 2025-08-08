@@ -62,7 +62,7 @@ mod state;
 #[cfg(feature = "std")]
 mod work_queue;
 #[cfg(feature = "xz")]
-pub mod xz;
+mod xz;
 
 #[cfg(feature = "encoder")]
 mod enc;
@@ -100,6 +100,8 @@ pub use no_std::Write;
 use state::*;
 #[cfg(feature = "xz")]
 pub use xz::{CheckType, XZReader};
+#[cfg(all(feature = "xz", feature = "encoder"))]
+pub use xz::{XZOptions, XZWriter};
 
 /// Result type of the crate.
 #[cfg(feature = "std")]
@@ -398,6 +400,12 @@ fn error_unsupported(msg: &'static str) -> Error {
     Error::new(std::io::ErrorKind::Unsupported, msg)
 }
 
+#[cfg(feature = "std")]
+#[inline(always)]
+fn copy_error(error: &Error) -> Error {
+    Error::new(error.kind(), error.to_string())
+}
+
 #[cfg(not(feature = "std"))]
 #[inline(always)]
 fn error_other(msg: &'static str) -> Error {
@@ -426,4 +434,10 @@ fn error_out_of_memory(msg: &'static str) -> Error {
 #[inline(always)]
 fn error_unsupported(msg: &'static str) -> Error {
     Error::Unsupported(msg)
+}
+
+#[cfg(not(feature = "std"))]
+#[inline(always)]
+fn copy_error(error: &Error) -> Error {
+    *error
 }
