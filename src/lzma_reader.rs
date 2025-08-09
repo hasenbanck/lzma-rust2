@@ -67,6 +67,7 @@ pub struct LZMAReader<R> {
 }
 
 impl<R> LZMAReader<R> {
+    /// Unwraps the reader, returning the underlying reader.
     pub fn into_inner(self) -> R {
         self.rc.into_inner()
     }

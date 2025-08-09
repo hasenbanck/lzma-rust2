@@ -278,10 +278,12 @@ impl<W: Write> LZMA2WriterMT<W> {
         }
     }
 
+    /// Returns a mutable reference to the underlying writer.
     pub fn inner(&mut self) -> &mut W {
         self.inner.as_mut().expect("inner is empty")
     }
 
+    /// Finishes the compression and returns the underlying writer.
     pub fn finish(mut self) -> io::Result<W> {
         self.send_work_unit()?;
 

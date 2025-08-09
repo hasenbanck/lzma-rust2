@@ -32,6 +32,7 @@ impl BCJFilter {
 
 const FILTER_BUF_SIZE: usize = 4096;
 
+/// Reader that applies BCJ (Branch/Call/Jump) filtering to compressed data.
 pub struct BCJReader<R> {
     inner: R,
     filter: BCJFilter,
@@ -61,45 +62,54 @@ impl<R> BCJReader<R> {
         }
     }
 
+    /// Unwraps the reader, returning the underlying reader.
     pub fn into_inner(self) -> R {
         self.inner
     }
 
+    /// Creates a new BCJ reader for x86 instruction filtering.
     #[inline]
     pub fn new_x86(inner: R, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_x86(start_pos, false))
     }
 
+    /// Creates a new BCJ reader for ARM instruction filtering.
     #[inline]
     pub fn new_arm(inner: R, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_arm(start_pos, false))
     }
 
+    /// Creates a new BCJ reader for ARM64 instruction filtering.
     #[inline]
     pub fn new_arm64(inner: R, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_arm64(start_pos, false))
     }
 
+    /// Creates a new BCJ reader for ARM Thumb instruction filtering.
     #[inline]
     pub fn new_arm_thumb(inner: R, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_arm_thumb(start_pos, false))
     }
 
+    /// Creates a new BCJ reader for PowerPC instruction filtering.
     #[inline]
     pub fn new_ppc(inner: R, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_power_pc(start_pos, false))
     }
 
+    /// Creates a new BCJ reader for SPARC instruction filtering.
     #[inline]
     pub fn new_sparc(inner: R, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_sparc(start_pos, false))
     }
 
+    /// Creates a new BCJ reader for IA-64 instruction filtering.
     #[inline]
     pub fn new_ia64(inner: R, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_ia64(start_pos, false))
     }
 
+    /// Creates a new BCJ reader for RISC-V instruction filtering.
     #[inline]
     pub fn new_riscv(inner: R, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_riscv(start_pos, false))
@@ -181,6 +191,7 @@ impl<R: Read> Read for BCJReader<R> {
     }
 }
 
+/// Writer that applies BCJ (Branch/Call/Jump) filtering to data before compression.
 #[cfg(feature = "encoder")]
 pub struct BCJWriter<W> {
     inner: W,
@@ -198,45 +209,54 @@ impl<W> BCJWriter<W> {
         }
     }
 
+    /// Unwraps the writer, returning the underlying writer.
     pub fn into_inner(self) -> W {
         self.inner
     }
 
+    /// Creates a new BCJ writer for x86 instruction filtering.
     #[inline]
     pub fn new_x86(inner: W, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_x86(start_pos, true))
     }
 
+    /// Creates a new BCJ writer for ARM instruction filtering.
     #[inline]
     pub fn new_arm(inner: W, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_arm(start_pos, true))
     }
 
+    /// Creates a new BCJ writer for ARM64 instruction filtering.
     #[inline]
     pub fn new_arm64(inner: W, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_arm64(start_pos, true))
     }
 
+    /// Creates a new BCJ writer for ARM Thumb instruction filtering.
     #[inline]
     pub fn new_arm_thumb(inner: W, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_arm_thumb(start_pos, true))
     }
 
+    /// Creates a new BCJ writer for PowerPC instruction filtering.
     #[inline]
     pub fn new_ppc(inner: W, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_power_pc(start_pos, true))
     }
 
+    /// Creates a new BCJ writer for SPARC instruction filtering.
     #[inline]
     pub fn new_sparc(inner: W, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_sparc(start_pos, true))
     }
 
+    /// Creates a new BCJ writer for IA-64 instruction filtering.
     #[inline]
     pub fn new_ia64(inner: W, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_ia64(start_pos, true))
     }
 
+    /// Creates a new BCJ writer for RISC-V instruction filtering.
     #[inline]
     pub fn new_riscv(inner: W, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_riscv(start_pos, true))

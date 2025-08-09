@@ -41,6 +41,7 @@ const fn bcj2_is_32bit_stream(s: usize) -> bool {
     (s) == BCJ2_STREAM_CALL || (s) == BCJ2_STREAM_JUMP
 }
 
+/// BCJ2 coder for x86 executables with separate streams for different instruction types.
 pub struct Bcj2Coder {
     bufs: Vec<u8>,
 }
@@ -61,6 +62,7 @@ impl Default for Bcj2Coder {
     }
 }
 
+/// Reader for BCJ2-filtered data with multiple input streams.
 pub struct BCJ2Reader<R> {
     base: Bcj2Coder,
     inputs: Vec<R>,
@@ -71,6 +73,7 @@ pub struct BCJ2Reader<R> {
 }
 
 impl<R> BCJ2Reader<R> {
+    /// Creates a new BCJ2 reader with the given input streams and expected output size.
     pub fn new(inputs: Vec<R>, uncompressed_size: u64) -> Self {
         Self {
             base: Default::default(),

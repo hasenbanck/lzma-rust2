@@ -87,7 +87,7 @@ fn decode_dict_size(encoded: u8) -> Result<u32> {
     let base_log2 = (encoded & 0x1F) as u32;
     let fraction_num = (encoded >> 5) as u32;
 
-    if base_log2 < 12 || base_log2 > 29 {
+    if !(12..=29).contains(&base_log2) {
         return Err(error_invalid_data("invalid LZIP dictionary size base"));
     }
 
@@ -104,7 +104,7 @@ fn decode_dict_size(encoded: u8) -> Result<u32> {
 
     let dict_size = base_size - fraction_size;
 
-    if dict_size < MIN_DICT_SIZE || dict_size > MAX_DICT_SIZE {
+    if !(MIN_DICT_SIZE..=MAX_DICT_SIZE).contains(&dict_size) {
         return Err(error_invalid_data("LZIP dictionary size out of range"));
     }
 
@@ -117,7 +117,7 @@ fn decode_dict_size(encoded: u8) -> Result<u32> {
 /// - Bits 4-0: base 2 logarithm of the base size (12 to 29)
 /// - Bits 7-5: numerator of the fraction (0 to 7) to subtract from base size
 fn encode_dict_size(dict_size: u32) -> Result<u8> {
-    if dict_size < MIN_DICT_SIZE || dict_size > MAX_DICT_SIZE {
+    if !(MIN_DICT_SIZE..=MAX_DICT_SIZE).contains(&dict_size) {
         return Err(error_invalid_input(
             "LZIP dictionary size out of valid range",
         ));
@@ -147,7 +147,7 @@ fn encode_dict_size(dict_size: u32) -> Result<u8> {
 
         if fraction_unit > 0 {
             // Round up.
-            fraction_num = (diff + fraction_unit - 1) / fraction_unit;
+            fraction_num = diff.div_ceil(fraction_unit);
             if fraction_num > 7 {
                 // Need to use a larger base.
                 base_log2 += 1;

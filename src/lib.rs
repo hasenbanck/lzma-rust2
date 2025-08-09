@@ -48,6 +48,7 @@
 
 // TODO: There is a lot of code left that only the "encode" feature uses.
 #![allow(dead_code)]
+#![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(not(feature = "std"), no_std)]
 

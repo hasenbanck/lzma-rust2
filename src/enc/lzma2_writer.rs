@@ -10,14 +10,23 @@ use crate::Write;
 /// Encoder settings when compressing with LZMA and LZMA2.
 #[derive(Debug, Clone)]
 pub struct LZMAOptions {
+    /// Dictionary size in bytes.
     pub dict_size: u32,
+    /// Number of literal context bits (0-8).
     pub lc: u32,
+    /// Number of literal position bits (0-4).
     pub lp: u32,
+    /// Number of position bits (0-4).
     pub pb: u32,
+    /// Compression mode.
     pub mode: EncodeMode,
+    /// Match finder nice length.
     pub nice_len: u32,
+    /// Match finder type.
     pub mf: MFType,
+    /// Match finder depth limit.
     pub depth_limit: i32,
+    /// Preset dictionary data.
     pub preset_dict: Option<Vec<u8>>,
 }
 
@@ -28,16 +37,22 @@ impl Default for LZMAOptions {
 }
 
 impl LZMAOptions {
+    /// Default number of literal context bits.
     pub const LC_DEFAULT: u32 = 3;
 
+    /// Default number of literal position bits.
     pub const LP_DEFAULT: u32 = 0;
 
+    /// Default number of position bits.
     pub const PB_DEFAULT: u32 = 2;
 
+    /// Maximum match finder nice length.
     pub const NICE_LEN_MAX: u32 = 273;
 
+    /// Minimum match finder nice length.
     pub const NICE_LEN_MIN: u32 = 8;
 
+    /// Default dictionary size (8MB).
     pub const DICT_SIZE_DEFAULT: u32 = 8 << 20;
 
     const PRESET_TO_DICT_SIZE: &'static [u32] = &[
@@ -55,6 +70,7 @@ impl LZMAOptions {
 
     const PRESET_TO_DEPTH_LIMIT: &'static [i32] = &[4, 8, 24, 48];
 
+    /// Creates new LZMA encoding options with specified parameters.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         dict_size: u32,
@@ -124,12 +140,14 @@ impl LZMAOptions {
         }
     }
 
+    /// Returns the estimated memory usage in kilobytes for these options.
     pub fn get_memory_usage(&self) -> u32 {
         let dict_size = self.dict_size;
         let extra_size_before = get_extra_size_before(dict_size);
         70 + LZMAEncoder::get_mem_usage(self.mode, dict_size, extra_size_before, self.mf)
     }
 
+    /// Returns the LZMA properties byte for these options.
     #[inline(always)]
     pub fn get_props(&self) -> u8 {
         ((self.pb * 5 + self.lp) * 9 + self.lc) as u8
@@ -157,6 +175,7 @@ pub struct LZMA2Writer<W: Write> {
 }
 
 impl<W: Write> LZMA2Writer<W> {
+    /// Creates a new LZMA2 writer that will write compressed data to the given writer.
     pub fn new(inner: W, options: &LZMAOptions) -> Self {
         let dict_size = options.dict_size;
         let rc = RangeEncoder::new_buffer(COMPRESSED_SIZE_MAX as usize);
@@ -268,10 +287,12 @@ impl<W: Write> LZMA2Writer<W> {
         Ok(())
     }
 
+    /// Unwraps the writer, returning the underlying writer.
     pub fn into_inner(self) -> W {
         self.inner
     }
 
+    /// Finishes the compression and returns the underlying writer.
     pub fn finish(mut self) -> crate::Result<W> {
         self.lzma.lz.set_finishing();
 

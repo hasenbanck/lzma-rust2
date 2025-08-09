@@ -49,12 +49,14 @@ impl Delta {
     }
 }
 
+/// Reader that applies delta filtering to decompress data.
 pub struct DeltaReader<R> {
     inner: R,
     delta: Delta,
 }
 
 impl<R> DeltaReader<R> {
+    /// Creates a new delta reader with the specified distance.
     pub fn new(inner: R, distance: usize) -> Self {
         Self {
             inner,
@@ -62,6 +64,7 @@ impl<R> DeltaReader<R> {
         }
     }
 
+    /// Unwraps the reader, returning the underlying reader.
     pub fn into_inner(self) -> R {
         self.inner
     }
@@ -79,6 +82,7 @@ impl<R: Read> Read for DeltaReader<R> {
 }
 
 #[cfg(feature = "encoder")]
+/// Writer that applies delta filtering before compression.
 pub struct DeltaWriter<W> {
     inner: W,
     delta: Delta,
@@ -87,6 +91,7 @@ pub struct DeltaWriter<W> {
 
 #[cfg(feature = "encoder")]
 impl<W> DeltaWriter<W> {
+    /// Creates a new delta writer with the specified distance.
     pub fn new(inner: W, distance: usize) -> Self {
         Self {
             inner,
@@ -95,6 +100,7 @@ impl<W> DeltaWriter<W> {
         }
     }
 
+    /// Unwraps the writer, returning the underlying writer.
     pub fn into_inner(self) -> W {
         self.inner
     }

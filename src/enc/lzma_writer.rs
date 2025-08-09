@@ -33,6 +33,7 @@ pub struct LZMAWriter<W: Write> {
 }
 
 impl<W: Write> LZMAWriter<W> {
+    /// Creates a new LZMA writer with full control over formatting options.
     pub fn new(
         mut out: W,
         options: &LZMAOptions,
@@ -85,6 +86,7 @@ impl<W: Write> LZMAWriter<W> {
         })
     }
 
+    /// Creates a new LZMA writer that includes a header with the specified input size.
     #[inline]
     pub fn new_use_header(
         out: W,
@@ -94,6 +96,7 @@ impl<W: Write> LZMAWriter<W> {
         Self::new(out, options, true, input_size.is_none(), input_size)
     }
 
+    /// Creates a new LZMA writer without a header.
     #[inline]
     pub fn new_no_header(
         out: W,
@@ -103,20 +106,24 @@ impl<W: Write> LZMAWriter<W> {
         Self::new(out, options, false, use_end_marker, None)
     }
 
+    /// Returns the LZMA properties byte.
     #[inline]
     pub fn props(&self) -> u8 {
         self.props
     }
 
+    /// Returns the number of uncompressed bytes written so far.
     #[inline]
     pub fn get_uncompressed_size(&self) -> u64 {
         self.current_uncompressed_size
     }
 
+    /// Unwraps the writer, returning the underlying writer.
     pub fn into_inner(self) -> W {
         self.rc.into_inner()
     }
 
+    /// Finishes the compression and returns the underlying writer.
     pub fn finish(mut self) -> crate::Result<W> {
         if let Some(exp) = self.expected_uncompressed_size {
             if exp != self.current_uncompressed_size {
