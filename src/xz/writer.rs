@@ -1,6 +1,8 @@
 use alloc::{boxed::Box, rc::Rc, vec::Vec};
-use core::cell::{Cell, RefCell};
-use std::num::NonZeroU64;
+use core::{
+    cell::{Cell, RefCell},
+    num::NonZeroU64,
+};
 
 use sha2::Digest;
 
@@ -438,7 +440,7 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
         let header_size = total_size_needed.div_ceil(4) * 4;
         let header_size_encoded = ((header_size / 4) - 1) as u8;
 
-        self.write_u8(header_size_encoded)?;
+        self.writer.write_u8(header_size_encoded)?;
         self.writer.write_all(&header_data)?;
 
         let padding_needed = header_size - 1 - header_data.len() - 4;
