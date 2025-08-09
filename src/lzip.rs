@@ -8,11 +8,16 @@ mod reader_mt;
 #[cfg(feature = "encoder")]
 mod writer;
 
+#[cfg(all(feature = "encoder", feature = "std"))]
+mod writer_mt;
+
 pub use reader::LZIPReader;
 #[cfg(feature = "std")]
 pub use reader_mt::LZIPReaderMT;
 #[cfg(feature = "encoder")]
 pub use writer::{LZIPOptions, LZIPWriter};
+#[cfg(all(feature = "encoder", feature = "std"))]
+pub use writer_mt::LZIPWriterMT;
 
 use crate::{error_invalid_data, error_invalid_input, ByteReader, Read, Result};
 

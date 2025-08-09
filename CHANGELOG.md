@@ -9,12 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added single threaded encoder and decoder for the LZIP file format.
+- Added single threaded and multithreaded encoder and decoder for the LZIP file format.
 
 ### Changed
 
 - All reader only provide access to the inner reader by the "into_inner()" method.
 - Changed block size of XZOptions to NonZero type.
+
+### Fixed
+
+- Fixed unbounded spawning of threads when using the multithreaded version of LZMA2 encoder & decoder.
 
 ## 0.7.0 - 2025-08-08
 

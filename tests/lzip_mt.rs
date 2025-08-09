@@ -3,7 +3,7 @@ use std::{
     num::{NonZero, NonZeroU64},
 };
 
-use lzma_rust2::{LZIPOptions, LZIPReaderMT, LZIPWriter};
+use lzma_rust2::{LZIPOptions, LZIPReaderMT, LZIPWriterMT};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
@@ -25,7 +25,7 @@ fn test_round_trip(path: &str, level: u32) {
     let mut compressed = Vec::new();
 
     {
-        let mut writer = LZIPWriter::new(&mut compressed, options).unwrap();
+        let mut writer = LZIPWriterMT::new(&mut compressed, options, available_parallelism).unwrap();
         writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }

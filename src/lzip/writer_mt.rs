@@ -9,19 +9,18 @@ use std::{
     thread,
 };
 
-use super::LZMA2Writer;
+use super::{LZIPOptions, LZIPWriter};
 use crate::{
     set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
-    ByteWriter, LZMAOptions,
 };
 
 /// A work unit for a worker thread.
-/// Contains the sequence number and the raw uncompressed data.
+/// Contains the sequence number and the raw uncompressed data for a single LZIP member.
 type WorkUnit = (u64, Vec<u8>);
 
 /// A result unit from a worker thread.
-/// Contains the sequence number and the compressed data.
+/// Contains the sequence number and the compressed LZIP member data.
 type ResultUnit = (u64, Vec<u8>);
 
 enum State {
@@ -36,14 +35,14 @@ enum State {
     Error,
 }
 
-/// A multi-threaded LZMA2 compressor.
-pub struct LZMA2WriterMT<W: Write> {
+/// A multi-threaded LZIP compressor.
+pub struct LZIPWriterMT<W: Write> {
     inner: Option<W>,
-    options: LZMAOptions,
+    options: LZIPOptions,
     result_rx: Receiver<ResultUnit>,
     result_tx: Sender<ResultUnit>,
     current_work_unit: Vec<u8>,
-    stream_size: u64,
+    member_size: u64,
     next_sequence_to_dispatch: u64,
     next_sequence_to_write: u64,
     last_sequence_id: Option<u64>,
@@ -57,18 +56,25 @@ pub struct LZMA2WriterMT<W: Write> {
     worker_handles: Vec<thread::JoinHandle<()>>,
 }
 
-impl<W: Write> LZMA2WriterMT<W> {
-    /// Creates a new multi-threaded LZMA2 writer.
+impl<W: Write> LZIPWriterMT<W> {
+    /// Creates a new multi-threaded LZIP writer.
     ///
     /// - `inner`: The writer to write compressed data to.
-    /// - `options`: The LZMA2 options used for compressing.
-    /// - `stream_size`: Minimal size of each independent stream. Used for multi-threading.
-    ///   Will be clamped to be at least the dictionary size.
+    /// - `options`: The LZIP options used for compressing.
     /// - `num_workers`: The maximum number of worker threads for compression.
-    ///   Currently capped at 256 Threads.
-    pub fn new(inner: W, options: LZMAOptions, stream_size: u64, num_workers: u32) -> Self {
+    ///   Currently capped at 256 threads.
+    pub fn new(inner: W, options: LZIPOptions, num_workers: u32) -> io::Result<Self> {
         let max_workers = num_workers.clamp(1, 256);
-        let stream_size = stream_size.max(options.dict_size as u64);
+
+        // Determine the member size for work units
+        let member_size = if let Some(size) = options.member_size {
+            size.get()
+        } else {
+            // Default to dictionary size for single-member mode, but use a reasonable work unit size
+            (options.lzma_options.dict_size as u64)
+                .max(64 * 1024)
+                .min(1024 * 1024)
+        };
 
         let work_queue = WorkStealingQueue::new();
         let (result_tx, result_rx) = mpsc::channel::<ResultUnit>();
@@ -81,8 +87,8 @@ impl<W: Write> LZMA2WriterMT<W> {
             options,
             result_rx,
             result_tx,
-            current_work_unit: Vec::with_capacity((stream_size as usize).min(1024 * 1024)),
-            stream_size,
+            current_work_unit: Vec::with_capacity((member_size as usize).min(1024 * 1024)),
+            member_size,
             next_sequence_to_dispatch: 0,
             next_sequence_to_write: 0,
             last_sequence_id: None,
@@ -98,7 +104,7 @@ impl<W: Write> LZMA2WriterMT<W> {
 
         writer.spawn_worker_thread();
 
-        writer
+        Ok(writer)
     }
 
     fn spawn_worker_thread(&mut self) {
@@ -289,10 +295,16 @@ impl<W: Write> LZMA2WriterMT<W> {
     pub fn finish(mut self) -> io::Result<W> {
         self.send_work_unit()?;
 
-        // No data was provided to compress.
+        // If no data was provided to compress, write an empty LZIP file (single empty member).
         if self.next_sequence_to_dispatch == 0 {
             let mut inner = self.inner.take().expect("inner is empty");
-            inner.write_u8(0x00)?;
+
+            let mut options = self.options.clone();
+            options.member_size = None;
+            let lzip_writer = LZIPWriter::new(Vec::new(), options)?;
+            let empty_member = lzip_writer.finish()?;
+
+            inner.write_all(&empty_member)?;
             inner.flush()?;
 
             self.shutdown_flag.store(true, Ordering::Release);
@@ -312,8 +324,6 @@ impl<W: Write> LZMA2WriterMT<W> {
         }
 
         let mut inner = self.inner.take().expect("inner is empty");
-
-        inner.write_u8(0x00)?;
         inner.flush()?;
 
         self.shutdown_flag.store(true, Ordering::Release);
@@ -327,7 +337,7 @@ impl<W: Write> LZMA2WriterMT<W> {
 fn worker_thread_logic(
     worker_handle: WorkerHandle<WorkUnit>,
     result_tx: Sender<ResultUnit>,
-    options: LZMAOptions,
+    options: LZIPOptions,
     shutdown_flag: Arc<AtomicBool>,
     error_store: Arc<Mutex<Option<io::Error>>>,
     active_workers: Arc<AtomicU32>,
@@ -346,14 +356,19 @@ fn worker_thread_logic(
 
         let mut compressed_buffer = Vec::new();
 
-        let mut options_with_reset = options.clone();
-        options_with_reset.preset_dict = None;
+        let mut single_member_options = options.clone();
+        single_member_options.member_size = None;
 
-        let mut writer = LZMA2Writer::new(&mut compressed_buffer, &options_with_reset);
-
-        let result = match writer.write_all(&work_unit_data) {
-            Ok(_) => match writer.flush() {
-                Ok(_) => compressed_buffer,
+        let result = match LZIPWriter::new(&mut compressed_buffer, single_member_options) {
+            Ok(mut writer) => match writer.write_all(&work_unit_data) {
+                Ok(_) => match writer.finish() {
+                    Ok(_) => compressed_buffer,
+                    Err(error) => {
+                        active_workers.fetch_sub(1, Ordering::Release);
+                        set_error(error, &error_store, &shutdown_flag);
+                        return;
+                    }
+                },
                 Err(error) => {
                     active_workers.fetch_sub(1, Ordering::Release);
                     set_error(error, &error_store, &shutdown_flag);
@@ -376,7 +391,7 @@ fn worker_thread_logic(
     }
 }
 
-impl<W: Write> Write for LZMA2WriterMT<W> {
+impl<W: Write> Write for LZIPWriterMT<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -393,10 +408,10 @@ impl<W: Write> Write for LZMA2WriterMT<W> {
         let mut remaining_buf = buf;
 
         while !remaining_buf.is_empty() {
-            let stream_remaining =
-                self.stream_size
+            let member_remaining =
+                self.member_size
                     .saturating_sub(self.current_work_unit.len() as u64) as usize;
-            let to_write = remaining_buf.len().min(stream_remaining);
+            let to_write = remaining_buf.len().min(member_remaining);
 
             if to_write > 0 {
                 self.current_work_unit
@@ -405,7 +420,7 @@ impl<W: Write> Write for LZMA2WriterMT<W> {
                 remaining_buf = &remaining_buf[to_write..];
             }
 
-            if self.current_work_unit.len() >= self.stream_size as usize {
+            if self.current_work_unit.len() >= self.member_size as usize {
                 self.send_work_unit()?;
             }
 
@@ -448,7 +463,7 @@ impl<W: Write> Write for LZMA2WriterMT<W> {
     }
 }
 
-impl<W: Write> Drop for LZMA2WriterMT<W> {
+impl<W: Write> Drop for LZIPWriterMT<W> {
     fn drop(&mut self) {
         self.shutdown_flag.store(true, Ordering::Release);
         self.work_queue.close();
