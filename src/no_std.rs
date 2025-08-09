@@ -5,13 +5,21 @@ use alloc::vec::Vec;
 /// Will get removed once `std::io::Read` and `std::io::Write` are available for `no_std`.
 #[derive(Debug, Copy, Clone)]
 pub enum Error {
+    /// End of file reached unexpectedly.
     EOF,
+    /// Operation was interrupted.
     Interrupted,
+    /// Invalid data encountered.
     InvalidData(&'static str),
+    /// Invalid input provided.
     InvalidInput(&'static str),
+    /// Out of memory error.
     OutOfMemory(&'static str),
+    /// Other error.
     Other(&'static str),
+    /// Unsupported operation.
     Unsupported(&'static str),
+    /// Could not write any bytes.
     WriteZero(&'static str),
 }
 
@@ -19,8 +27,10 @@ pub enum Error {
 ///
 /// Will get removed once there is a standard way in either `core` or `alloc`.
 pub trait Read {
+    /// Read some bytes from this source into the specified buffer.
     fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize>;
 
+    /// Read the exact number of bytes required to fill the buffer.
     fn read_exact(&mut self, buf: &mut [u8]) -> crate::Result<()> {
         default_read_exact(self, buf)
     }
@@ -72,9 +82,12 @@ impl Read for &[u8] {
 ///
 /// Will get removed once there is a standard way in either `core` or `alloc`.
 pub trait Write {
+    /// Write a buffer into this writer.
     fn write(&mut self, buf: &[u8]) -> crate::Result<usize>;
+    /// Flush this output stream.
     fn flush(&mut self) -> crate::Result<()>;
 
+    /// Attempts to write an entire buffer into this writer.
     fn write_all(&mut self, mut buf: &[u8]) -> crate::Result<()> {
         while !buf.is_empty() {
             match self.write(buf) {
