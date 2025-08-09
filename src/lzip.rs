@@ -2,10 +2,15 @@
 
 mod reader;
 
+#[cfg(feature = "std")]
+mod reader_mt;
+
 #[cfg(feature = "encoder")]
 mod writer;
 
 pub use reader::LZIPReader;
+#[cfg(feature = "std")]
+pub use reader_mt::LZIPReaderMT;
 #[cfg(feature = "encoder")]
 pub use writer::{LZIPOptions, LZIPWriter};
 

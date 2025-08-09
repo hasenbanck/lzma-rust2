@@ -54,7 +54,7 @@ pub struct LZMA2WriterMT<W: Write> {
     work_queue: WorkStealingQueue<WorkUnit>,
     active_workers: Arc<AtomicU32>,
     max_workers: u32,
-    _worker_handles: Vec<thread::JoinHandle<()>>,
+    worker_handles: Vec<thread::JoinHandle<()>>,
 }
 
 impl<W: Write> LZMA2WriterMT<W> {
@@ -93,7 +93,7 @@ impl<W: Write> LZMA2WriterMT<W> {
             work_queue,
             active_workers,
             max_workers,
-            _worker_handles: Vec::new(),
+            worker_handles: Vec::new(),
         };
 
         writer.spawn_worker_thread();
@@ -120,7 +120,7 @@ impl<W: Write> LZMA2WriterMT<W> {
             );
         });
 
-        self._worker_handles.push(handle);
+        self.worker_handles.push(handle);
     }
 
     /// Sends the current work unit to the workers, blocking if the queue is full.
@@ -167,10 +167,12 @@ impl<W: Write> LZMA2WriterMT<W> {
 
         // We spawn a new thread if we have work queued, no available workers, and haven't reached
         // the maximal allowed parallelism yet.
-        let current_workers = self.active_workers.load(Ordering::Acquire);
+        let spawned_workers = self.worker_handles.len() as u32;
+        let active_workers = self.active_workers.load(Ordering::Acquire);
         let queue_len = self.work_queue.len();
 
-        if queue_len > 0 && current_workers < self.max_workers {
+        if queue_len > 0 && active_workers == spawned_workers && spawned_workers < self.max_workers
+        {
             self.spawn_worker_thread();
         }
 

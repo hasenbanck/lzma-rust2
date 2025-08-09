@@ -89,6 +89,8 @@ pub use enc::*;
 pub use lz::MFType;
 #[cfg(feature = "lzip")]
 pub use lzip::LZIPReader;
+#[cfg(all(feature = "lzip", feature = "std"))]
+pub use lzip::LZIPReaderMT;
 #[cfg(all(feature = "lzip", feature = "encoder"))]
 pub use lzip::{LZIPOptions, LZIPWriter};
 pub use lzma2_reader::{get_memory_usage as lzma2_get_memory_usage, LZMA2Reader};
