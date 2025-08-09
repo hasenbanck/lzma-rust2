@@ -11,9 +11,9 @@ use std::{
 
 use super::LZMA2Writer;
 use crate::{
-    set_error,
+    error_invalid_input, set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
-    ByteWriter, LZMAOptions,
+    ByteWriter, LZMA2Options,
 };
 
 /// A work unit for a worker thread.
@@ -39,11 +39,11 @@ enum State {
 /// A multi-threaded LZMA2 compressor.
 pub struct LZMA2WriterMT<W: Write> {
     inner: Option<W>,
-    options: LZMAOptions,
+    options: LZMA2Options,
+    stream_size: usize,
     result_rx: Receiver<ResultUnit>,
     result_tx: Sender<ResultUnit>,
     current_work_unit: Vec<u8>,
-    stream_size: u64,
     next_sequence_to_dispatch: u64,
     next_sequence_to_write: u64,
     last_sequence_id: Option<u64>,
@@ -61,14 +61,20 @@ impl<W: Write> LZMA2WriterMT<W> {
     /// Creates a new multi-threaded LZMA2 writer.
     ///
     /// - `inner`: The writer to write compressed data to.
-    /// - `options`: The LZMA2 options used for compressing.
-    /// - `stream_size`: Minimal size of each independent stream. Used for multi-threading.
-    ///   Will be clamped to be at least the dictionary size.
+    /// - `options`: The LZMA2 options used for compressing. Stream size must be set when using the
+    ///   multi-threaded encoder. If you need just one stream, then use the single-threaded encoder.
     /// - `num_workers`: The maximum number of worker threads for compression.
     ///   Currently capped at 256 Threads.
-    pub fn new(inner: W, options: LZMAOptions, stream_size: u64, num_workers: u32) -> Self {
+    pub fn new(inner: W, options: LZMA2Options, num_workers: u32) -> crate::Result<Self> {
         let max_workers = num_workers.clamp(1, 256);
-        let stream_size = stream_size.max(options.dict_size as u64);
+
+        let stream_size = match options.stream_size {
+            None => return Err(error_invalid_input("stream size must be set")),
+            Some(stream_size) => stream_size.get().max(options.lzma_options.dict_size as u64),
+        };
+
+        let stream_size = usize::try_from(stream_size)
+            .map_err(|_| error_invalid_input("stream size bigger than usize"))?;
 
         let work_queue = WorkStealingQueue::new();
         let (result_tx, result_rx) = mpsc::channel::<ResultUnit>();
@@ -79,10 +85,10 @@ impl<W: Write> LZMA2WriterMT<W> {
         let mut writer = Self {
             inner: Some(inner),
             options,
+            stream_size,
             result_rx,
             result_tx,
-            current_work_unit: Vec::with_capacity((stream_size as usize).min(1024 * 1024)),
-            stream_size,
+            current_work_unit: Vec::with_capacity(stream_size),
             next_sequence_to_dispatch: 0,
             next_sequence_to_write: 0,
             last_sequence_id: None,
@@ -98,7 +104,7 @@ impl<W: Write> LZMA2WriterMT<W> {
 
         writer.spawn_worker_thread();
 
-        writer
+        Ok(writer)
     }
 
     fn spawn_worker_thread(&mut self) {
@@ -107,7 +113,9 @@ impl<W: Write> LZMA2WriterMT<W> {
         let shutdown_flag = Arc::clone(&self.shutdown_flag);
         let error_store = Arc::clone(&self.error_store);
         let active_workers = Arc::clone(&self.active_workers);
-        let options = self.options.clone();
+        let mut options = self.options.clone();
+
+        options.lzma_options.preset_dict = None;
 
         let handle = thread::spawn(move || {
             worker_thread_logic(
@@ -327,7 +335,7 @@ impl<W: Write> LZMA2WriterMT<W> {
 fn worker_thread_logic(
     worker_handle: WorkerHandle<WorkUnit>,
     result_tx: Sender<ResultUnit>,
-    options: LZMAOptions,
+    options: LZMA2Options,
     shutdown_flag: Arc<AtomicBool>,
     error_store: Arc<Mutex<Option<io::Error>>>,
     active_workers: Arc<AtomicU32>,
@@ -346,10 +354,7 @@ fn worker_thread_logic(
 
         let mut compressed_buffer = Vec::new();
 
-        let mut options_with_reset = options.clone();
-        options_with_reset.preset_dict = None;
-
-        let mut writer = LZMA2Writer::new(&mut compressed_buffer, &options_with_reset);
+        let mut writer = LZMA2Writer::new(&mut compressed_buffer, &options);
 
         let result = match writer.write_all(&work_unit_data) {
             Ok(_) => match writer.flush() {
@@ -393,9 +398,9 @@ impl<W: Write> Write for LZMA2WriterMT<W> {
         let mut remaining_buf = buf;
 
         while !remaining_buf.is_empty() {
-            let stream_remaining =
-                self.stream_size
-                    .saturating_sub(self.current_work_unit.len() as u64) as usize;
+            let stream_remaining = self
+                .stream_size
+                .saturating_sub(self.current_work_unit.len());
             let to_write = remaining_buf.len().min(stream_remaining);
 
             if to_write > 0 {
@@ -405,7 +410,7 @@ impl<W: Write> Write for LZMA2WriterMT<W> {
                 remaining_buf = &remaining_buf[to_write..];
             }
 
-            if self.current_work_unit.len() >= self.stream_size as usize {
+            if self.current_work_unit.len() >= self.stream_size {
                 self.send_work_unit()?;
             }
 

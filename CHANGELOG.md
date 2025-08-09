@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - All reader only provide access to the inner reader by the "into_inner()" method.
 - Changed block size of XZOptions to NonZero type.
+- LZMA2Writer now take a LZMA2Option struct. This enables both the LZMA2Writer and LZMA2WriterMT to encode multiple
+  streams for multi-threaded decoding.
 
 ### Fixed
 

@@ -14,7 +14,7 @@ use crate::{
     enc::{LZMA2Writer, LZMAOptions},
     error_invalid_data, error_invalid_input,
     filter::{bcj::BCJWriter, delta::DeltaWriter},
-    ByteWriter, Result, Write,
+    ByteWriter, LZMA2Options, Result, Write,
 };
 
 trait FinishableWriter: Write {
@@ -104,11 +104,12 @@ impl FinishableWriter for DummyWriter {
 /// Configuration options for XZ compression.
 #[derive(Debug, Clone)]
 pub struct XZOptions {
-    /// LZMA2 compression options.
-    pub lzma2_options: LZMAOptions,
+    /// LZMA compression options.
+    pub lzma_options: LZMAOptions,
     /// Checksum type to use.
     pub check_type: CheckType,
     /// Maximum uncompressed size for each block (None = single block).
+    /// Will get clamped to be at least the dict size to not waste memory.
     pub block_size: Option<NonZeroU64>,
     /// Pre-filter to use (at most 3).
     pub filters: Vec<FilterConfig>,
@@ -117,7 +118,7 @@ pub struct XZOptions {
 impl Default for XZOptions {
     fn default() -> Self {
         Self {
-            lzma2_options: LZMAOptions::default(),
+            lzma_options: LZMAOptions::default(),
             check_type: CheckType::Crc32,
             block_size: None,
             filters: Vec::new(),
@@ -129,7 +130,7 @@ impl XZOptions {
     /// Create options with specific preset and checksum type.
     pub fn with_preset(preset: u32) -> Self {
         Self {
-            lzma2_options: LZMAOptions::with_preset(preset),
+            lzma_options: LZMAOptions::with_preset(preset),
             check_type: CheckType::Crc64,
             block_size: None,
             filters: Vec::new(),
@@ -182,6 +183,12 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
             return Err(error_invalid_input(
                 "XZ allows only at most 3 pre-filters plus LZMA2",
             ));
+        }
+
+        if let Some(block_size) = options.block_size.as_mut() {
+            *block_size =
+                NonZeroU64::new(block_size.get().max(options.lzma_options.dict_size as u64))
+                    .expect("block size is zero");
         }
 
         // Last filter is always LZMA2.
@@ -303,7 +310,11 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
                     Box::new(BCJWriter::new_riscv(chain_writer, start_offset))
                 }
                 FilterType::LZMA2 => {
-                    Box::new(LZMA2Writer::new(chain_writer, &self.options.lzma2_options))
+                    let options = LZMA2Options {
+                        lzma_options: self.options.lzma_options.clone(),
+                        ..Default::default()
+                    };
+                    Box::new(LZMA2Writer::new(chain_writer, &options))
                 }
             };
         }
@@ -428,7 +439,7 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
                     let size = encode_multibyte_integer(1, &mut temp_buf)?;
                     header_data.extend_from_slice(&temp_buf[..size]);
 
-                    let dict_size = self.options.lzma2_options.dict_size;
+                    let dict_size = self.options.lzma_options.dict_size;
                     let dict_size_prop = self.encode_lzma2_dict_size(dict_size)?;
                     header_data.push(dict_size_prop);
                 }

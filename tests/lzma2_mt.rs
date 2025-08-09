@@ -1,9 +1,9 @@
 use std::{
     io::{Cursor, Read, Write},
-    num::NonZero,
+    num::{NonZero, NonZeroU64},
 };
 
-use lzma_rust2::{LZMA2ReaderMT, LZMA2WriterMT, LZMAOptions};
+use lzma_rust2::{LZMA2Options, LZMA2ReaderMT, LZMA2WriterMT};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
@@ -13,8 +13,9 @@ fn test_round_trip(path: &str, level: u32) {
     let data = std::fs::read(path).unwrap();
     let data_len = data.len() as u32;
 
-    let option = LZMAOptions::with_preset(level);
-    let dict_size = option.dict_size;
+    let mut option = LZMA2Options::with_preset(level);
+    let dict_size = option.lzma_options.dict_size;
+    option.set_stream_size(NonZeroU64::new(dict_size as u64));
 
     let available_parallelism = std::thread::available_parallelism()
         .unwrap_or(NonZero::new(1).unwrap())
@@ -24,12 +25,8 @@ fn test_round_trip(path: &str, level: u32) {
     let mut compressed = Vec::new();
 
     {
-        let mut writer = LZMA2WriterMT::new(
-            &mut compressed,
-            option,
-            dict_size as u64,
-            available_parallelism,
-        );
+        let mut writer =
+            LZMA2WriterMT::new(&mut compressed, option, available_parallelism).unwrap();
         writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }

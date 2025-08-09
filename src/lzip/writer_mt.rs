@@ -11,7 +11,7 @@ use std::{
 
 use super::{LZIPOptions, LZIPWriter};
 use crate::{
-    set_error,
+    error_invalid_input, set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
 };
 
@@ -42,7 +42,7 @@ pub struct LZIPWriterMT<W: Write> {
     result_rx: Receiver<ResultUnit>,
     result_tx: Sender<ResultUnit>,
     current_work_unit: Vec<u8>,
-    member_size: u64,
+    member_size: usize,
     next_sequence_to_dispatch: u64,
     next_sequence_to_write: u64,
     last_sequence_id: Option<u64>,
@@ -60,21 +60,20 @@ impl<W: Write> LZIPWriterMT<W> {
     /// Creates a new multi-threaded LZIP writer.
     ///
     /// - `inner`: The writer to write compressed data to.
-    /// - `options`: The LZIP options used for compressing.
+    /// - `options`: The LZIP options used for compressing. Member size must be set when using the
+    ///   multi-threaded encoder. If you need just one member, then use the single-threaded encoder.
     /// - `num_workers`: The maximum number of worker threads for compression.
     ///   Currently capped at 256 threads.
     pub fn new(inner: W, options: LZIPOptions, num_workers: u32) -> io::Result<Self> {
         let max_workers = num_workers.clamp(1, 256);
 
-        // Determine the member size for work units
-        let member_size = if let Some(size) = options.member_size {
-            size.get()
-        } else {
-            // Default to dictionary size for single-member mode, but use a reasonable work unit size
-            (options.lzma_options.dict_size as u64)
-                .max(64 * 1024)
-                .min(1024 * 1024)
+        let member_size = match options.member_size {
+            None => return Err(error_invalid_input("member size must be set")),
+            Some(member_size) => member_size.get().max(options.lzma_options.dict_size as u64),
         };
+
+        let member_size = usize::try_from(member_size)
+            .map_err(|_| error_invalid_input("member size bigger than usize"))?;
 
         let work_queue = WorkStealingQueue::new();
         let (result_tx, result_rx) = mpsc::channel::<ResultUnit>();
@@ -301,7 +300,7 @@ impl<W: Write> LZIPWriterMT<W> {
 
             let mut options = self.options.clone();
             options.member_size = None;
-            let lzip_writer = LZIPWriter::new(Vec::new(), options)?;
+            let lzip_writer = LZIPWriter::new(Vec::new(), options);
             let empty_member = lzip_writer.finish()?;
 
             inner.write_all(&empty_member)?;
@@ -359,16 +358,10 @@ fn worker_thread_logic(
         let mut single_member_options = options.clone();
         single_member_options.member_size = None;
 
-        let result = match LZIPWriter::new(&mut compressed_buffer, single_member_options) {
-            Ok(mut writer) => match writer.write_all(&work_unit_data) {
-                Ok(_) => match writer.finish() {
-                    Ok(_) => compressed_buffer,
-                    Err(error) => {
-                        active_workers.fetch_sub(1, Ordering::Release);
-                        set_error(error, &error_store, &shutdown_flag);
-                        return;
-                    }
-                },
+        let mut writer = LZIPWriter::new(&mut compressed_buffer, single_member_options);
+        let result = match writer.write_all(&work_unit_data) {
+            Ok(_) => match writer.finish() {
+                Ok(_) => compressed_buffer,
                 Err(error) => {
                     active_workers.fetch_sub(1, Ordering::Release);
                     set_error(error, &error_store, &shutdown_flag);
@@ -408,9 +401,9 @@ impl<W: Write> Write for LZIPWriterMT<W> {
         let mut remaining_buf = buf;
 
         while !remaining_buf.is_empty() {
-            let member_remaining =
-                self.member_size
-                    .saturating_sub(self.current_work_unit.len() as u64) as usize;
+            let member_remaining = self
+                .member_size
+                .saturating_sub(self.current_work_unit.len());
             let to_write = remaining_buf.len().min(member_remaining);
 
             if to_write > 0 {
@@ -420,7 +413,7 @@ impl<W: Write> Write for LZIPWriterMT<W> {
                 remaining_buf = &remaining_buf[to_write..];
             }
 
-            if self.current_work_unit.len() >= self.member_size as usize {
+            if self.current_work_unit.len() >= self.member_size {
                 self.send_work_unit()?;
             }
 

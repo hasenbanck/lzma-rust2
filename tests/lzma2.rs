@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 
-use lzma_rust2::{LZMA2Reader, LZMA2Writer, LZMAOptions};
+use lzma_rust2::{LZMA2Options, LZMA2Reader, LZMA2Writer};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
@@ -9,7 +9,8 @@ static PG6800: &str = "tests/data/pg6800.txt";
 fn test_round_trip(path: &str, level: u32) {
     let data = std::fs::read(path).unwrap();
 
-    let option = LZMAOptions::with_preset(level);
+    let option = LZMA2Options::with_preset(level);
+    let dict_size = option.lzma_options.dict_size;
 
     let mut compressed = Vec::new();
 
@@ -22,7 +23,7 @@ fn test_round_trip(path: &str, level: u32) {
     let mut uncompressed = Vec::new();
 
     {
-        let mut reader = LZMA2Reader::new(compressed.as_slice(), option.dict_size, None);
+        let mut reader = LZMA2Reader::new(compressed.as_slice(), dict_size, None);
         reader.read_to_end(&mut uncompressed).unwrap();
     }
 

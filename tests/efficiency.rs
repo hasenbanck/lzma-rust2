@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 
 use liblzma::{bufread::*, stream::*};
-use lzma_rust2::{LZMA2Writer, LZMAOptions, LZMAWriter};
+use lzma_rust2::{LZMA2Options, LZMA2Writer, LZMAOptions, LZMAWriter};
 
 fn compress_liblzma_lzma1(level: u32, data: &[u8]) -> Vec<u8> {
     let mut compressed = Vec::new();
@@ -31,7 +31,7 @@ fn compress_liblzma_lzma2(level: u32, data: &[u8]) -> Vec<u8> {
 
 fn compress_lzmarust2_lzma2(level: u32, data: &[u8]) -> Vec<u8> {
     let mut compressed = Vec::new();
-    let options = LZMAOptions::with_preset(level);
+    let options = LZMA2Options::with_preset(level);
     let mut writer = LZMA2Writer::new(&mut compressed, &options);
     writer.write_all(data).unwrap();
     writer.finish().unwrap();

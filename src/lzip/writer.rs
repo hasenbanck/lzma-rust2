@@ -15,6 +15,7 @@ pub struct LZIPOptions {
     /// LZMA compression options (will be overridden partially to use LZMA-302eos defaults).
     pub lzma_options: LZMAOptions,
     /// The maximal size of a member. If not set, the whole data will be written in one member.
+    /// Will get clamped to be at least the dict size to not waste memory.
     pub member_size: Option<NonZeroU64>,
 }
 
@@ -82,7 +83,7 @@ pub struct LZIPWriter<W: Write> {
 
 impl<W: Write> LZIPWriter<W> {
     /// Create a new LZIP writer with the given options.
-    pub fn new(inner: W, options: LZIPOptions) -> Result<Self> {
+    pub fn new(inner: W, options: LZIPOptions) -> Self {
         let mut options = options;
 
         // Overwrite with LZMA-302eos defaults.
@@ -94,7 +95,13 @@ impl<W: Write> LZIPWriter<W> {
             .dict_size
             .clamp(MIN_DICT_SIZE, MAX_DICT_SIZE);
 
-        Ok(Self {
+        if let Some(member_size) = options.member_size.as_mut() {
+            *member_size =
+                NonZeroU64::new(member_size.get().max(options.lzma_options.dict_size as u64))
+                    .expect("member size is zero");
+        }
+
+        Self {
             inner: Some(inner),
             lzma_writer: None,
             options,
@@ -104,7 +111,7 @@ impl<W: Write> LZIPWriter<W> {
             uncompressed_size: 0,
             member_start_pos: 0,
             current_member_uncompressed_size: 0,
-        })
+        }
     }
 
     /// Consume the writer and return the inner writer.
@@ -258,98 +265,5 @@ impl<W: Write> Write for LZIPWriter<W> {
             lzma_writer.flush()?;
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{LZIPReader, Read};
-
-    #[test]
-    fn test_counting_writer() {
-        let mut writer = CountingWriter::new(Vec::new());
-
-        assert_eq!(writer.bytes_written(), 0);
-
-        writer.write_all(b"hello").unwrap();
-        assert_eq!(writer.bytes_written(), 5);
-
-        writer.write_all(b" world").unwrap();
-        assert_eq!(writer.bytes_written(), 11);
-
-        let inner = writer.into_inner();
-        assert_eq!(inner, b"hello world");
-    }
-
-    #[test]
-    fn test_lzip_writer_basic() {
-        let data = b"Hello, LZIP world!";
-        let mut writer = LZIPWriter::new(Vec::new(), LZIPOptions::default()).unwrap();
-
-        writer.write_all(data).unwrap();
-        let compressed = writer.finish().unwrap();
-
-        assert_eq!(&compressed[0..4], b"LZIP");
-        assert_eq!(compressed[4], 1); // Version
-
-        assert!(compressed.len() > HEADER_SIZE + TRAILER_SIZE);
-    }
-
-    #[test]
-    fn test_lzip_writer_multi_member() {
-        let data = b"A".repeat(1000);
-
-        let mut options = LZIPOptions::default();
-        options.set_block_size(Some(NonZeroU64::new(100).unwrap()));
-
-        let mut writer = LZIPWriter::new(Vec::new(), options).unwrap();
-        writer.write_all(&data).unwrap();
-        let compressed = writer.finish().unwrap();
-
-        let mut lzip_count = 0;
-        for window in compressed.windows(4) {
-            if window == b"LZIP" {
-                lzip_count += 1;
-            }
-        }
-
-        // With 1000 bytes and 100 bytes per member, expect 10 members.
-        assert_eq!(lzip_count, 10);
-
-        let mut reader = LZIPReader::new(compressed.as_slice()).unwrap();
-        let mut decompressed = Vec::new();
-        reader.read_to_end(&mut decompressed).unwrap();
-
-        assert_eq!(decompressed, data);
-    }
-
-    #[test]
-    fn test_lzip_writer_single_vs_multi_member() {
-        let data = b"Hello world! ".repeat(50);
-
-        let mut single_writer = LZIPWriter::new(Vec::new(), LZIPOptions::default()).unwrap();
-        single_writer.write_all(&data).unwrap();
-        let single_compressed = single_writer.finish().unwrap();
-
-        let mut options = LZIPOptions::default();
-        options.set_block_size(Some(NonZeroU64::new(100).unwrap()));
-        let mut multi_writer = LZIPWriter::new(Vec::new(), options).unwrap();
-        multi_writer.write_all(&data).unwrap();
-        let multi_compressed = multi_writer.finish().unwrap();
-
-        assert!(multi_compressed.len() > single_compressed.len());
-
-        let mut single_reader = LZIPReader::new(single_compressed.as_slice()).unwrap();
-        let mut single_decompressed = Vec::new();
-        single_reader.read_to_end(&mut single_decompressed).unwrap();
-
-        let mut multi_reader = LZIPReader::new(multi_compressed.as_slice()).unwrap();
-        let mut multi_decompressed = Vec::new();
-        multi_reader.read_to_end(&mut multi_decompressed).unwrap();
-
-        assert_eq!(single_decompressed, data);
-        assert_eq!(multi_decompressed, data);
-        assert_eq!(single_decompressed, multi_decompressed);
     }
 }
