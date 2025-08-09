@@ -6,22 +6,6 @@ use super::{
 use crate::{error_invalid_input, error_unsupported, Write};
 
 /// A single-threaded LZMA2 compressor.
-///
-/// # Examples
-/// ```
-/// use std::io::Write;
-///
-/// use lzma_rust2::{LZMAOptions, LZMAWriter};
-///
-/// let s = b"Hello, world!";
-/// let mut out = Vec::new();
-/// let mut options = LZMAOptions::with_preset(6);
-/// options.dict_size = LZMAOptions::DICT_SIZE_DEFAULT;
-///
-/// let mut w = LZMAWriter::new_no_header(&mut out, &options, false).unwrap();
-/// w.write_all(s).unwrap();
-/// w.finish().unwrap();
-/// ```
 pub struct LZMAWriter<W: Write> {
     rc: RangeEncoder<W>,
     lzma: LZMAEncoder,

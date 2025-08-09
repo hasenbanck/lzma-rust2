@@ -14,12 +14,12 @@ fn multi_writer_lzma2() {
 
     let mut option = LZMA2Options::with_preset(LEVEL);
     let dict_size = option.lzma_options.dict_size;
-    option.set_stream_size(NonZeroU64::new(dict_size as u64));
+    option.set_chunk_size(NonZeroU64::new(dict_size as u64));
 
     let mut compressed = Vec::new();
 
     {
-        let mut writer = LZMA2Writer::new(&mut compressed, &option);
+        let mut writer = LZMA2Writer::new(&mut compressed, option);
         writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }
@@ -29,7 +29,7 @@ fn multi_writer_lzma2() {
     {
         let mut reader = LZMA2ReaderMT::new(Cursor::new(compressed), dict_size, None, 1);
         reader.read_to_end(&mut uncompressed).unwrap();
-        assert!(reader.stream_count() > 1);
+        assert!(reader.chunk_count() > 1);
     }
 
     // We don't use assert_eq since the debug output would be too big.
@@ -42,7 +42,7 @@ fn multi_writer_lzip2() {
 
     let mut option = LZIPOptions::with_preset(LEVEL);
     let dict_size = option.lzma_options.dict_size;
-    option.set_block_size(NonZeroU64::new(dict_size as u64));
+    option.set_member_size(NonZeroU64::new(dict_size as u64));
 
     let mut compressed = Vec::new();
 

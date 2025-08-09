@@ -91,10 +91,10 @@ pub use lz::MFType;
 pub use lzip::LZIPReader;
 #[cfg(all(feature = "lzip", feature = "std"))]
 pub use lzip::LZIPReaderMT;
-#[cfg(all(feature = "lzip", feature = "encoder"))]
-pub use lzip::{LZIPOptions, LZIPWriter};
 #[cfg(all(feature = "lzip", feature = "encoder", feature = "std"))]
 pub use lzip::LZIPWriterMT;
+#[cfg(all(feature = "lzip", feature = "encoder"))]
+pub use lzip::{LZIPOptions, LZIPWriter};
 pub use lzma2_reader::{get_memory_usage as lzma2_get_memory_usage, LZMA2Reader};
 #[cfg(feature = "std")]
 pub use lzma2_reader_mt::LZMA2ReaderMT;

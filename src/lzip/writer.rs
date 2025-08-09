@@ -29,7 +29,7 @@ impl LZIPOptions {
     }
 
     /// Set the maximum member size (None means a single member, which is the default).
-    pub fn set_block_size(&mut self, member_size: Option<NonZeroU64>) {
+    pub fn set_member_size(&mut self, member_size: Option<NonZeroU64>) {
         self.member_size = member_size;
     }
 }

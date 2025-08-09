@@ -15,7 +15,7 @@ fn test_round_trip(path: &str, level: u32) {
     let mut compressed = Vec::new();
 
     {
-        let mut writer = LZMA2Writer::new(&mut compressed, &option);
+        let mut writer = LZMA2Writer::new(&mut compressed, option);
         writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }

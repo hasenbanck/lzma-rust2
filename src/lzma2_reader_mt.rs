@@ -125,9 +125,9 @@ impl<R: Read> LZMA2ReaderMT<R> {
         self.worker_handles.push(handle);
     }
 
-    /// The count of independent streams found inside the compressed file.
+    /// The count of independent chunks found inside the compressed file.
     /// This is effectively tha maximum parallelization possible.
-    pub fn stream_count(&self) -> u64 {
+    pub fn chunk_count(&self) -> u64 {
         self.next_sequence_to_return
     }
 

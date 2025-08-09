@@ -20,12 +20,13 @@ fn test_round_trip(path: &str, level: u32) {
 
     let mut options = LZIPOptions::with_preset(level);
     let dict_size = options.lzma_options.dict_size;
-    options.set_block_size(NonZeroU64::new(dict_size as u64));
+    options.set_member_size(NonZeroU64::new(dict_size as u64));
 
     let mut compressed = Vec::new();
 
     {
-        let mut writer = LZIPWriterMT::new(&mut compressed, options, available_parallelism).unwrap();
+        let mut writer =
+            LZIPWriterMT::new(&mut compressed, options, available_parallelism).unwrap();
         writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }

@@ -314,7 +314,7 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
                         lzma_options: self.options.lzma_options.clone(),
                         ..Default::default()
                     };
-                    Box::new(LZMA2Writer::new(chain_writer, &options))
+                    Box::new(LZMA2Writer::new(chain_writer, options))
                 }
             };
         }

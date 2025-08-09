@@ -160,10 +160,10 @@ impl LZMAOptions {
 pub struct LZMA2Options {
     /// LZMA compression options.
     pub lzma_options: LZMAOptions,
-    /// The size of each independent stream in bytes.
-    /// If not set, the whole data will be written as one stream.
+    /// The size of each independent chunk in bytes.
+    /// If not set, the whole data will be written as one chunk.
     /// Will get clamped to be at least the dict size to not waste memory.
-    pub stream_size: Option<NonZeroU64>,
+    pub chunk_size: Option<NonZeroU64>,
 }
 
 impl LZMA2Options {
@@ -171,14 +171,14 @@ impl LZMA2Options {
     pub fn with_preset(preset: u32) -> Self {
         Self {
             lzma_options: LZMAOptions::with_preset(preset),
-            stream_size: None,
+            chunk_size: None,
         }
     }
 
-    /// Set the stream size (None means a single stream, which is the default).
-    /// Stream size will be clamped to be at least the dictionary size.
-    pub fn set_stream_size(&mut self, stream_size: Option<NonZeroU64>) {
-        self.stream_size = stream_size;
+    /// Set the chunk size (None means a single chunk, which is the default).
+    /// Chunk size will be clamped to be at least the dictionary size.
+    pub fn set_chunk_size(&mut self, chunk_size: Option<NonZeroU64>) {
+        self.chunk_size = chunk_size;
     }
 }
 
@@ -189,7 +189,7 @@ pub fn get_extra_size_before(dict_size: u32) -> u32 {
     COMPRESSED_SIZE_MAX.saturating_sub(dict_size)
 }
 
-/// A single-threaded LZMA2 compressor that supports multiple independent streams.
+/// A single-threaded LZMA2 compressor.
 pub struct LZMA2Writer<W: Write> {
     inner: W,
     rc: RangeEncoder<RangeEncoderBuffer>,
@@ -199,15 +199,15 @@ pub struct LZMA2Writer<W: Write> {
     state_reset_needed: bool,
     props_needed: bool,
     pending_size: u32,
-    stream_size: Option<u64>,
+    chunk_size: Option<u64>,
     uncompressed_size: u64,
-    force_independent_stream: bool,
+    force_independent_chunk: bool,
     options: LZMA2Options,
 }
 
 impl<W: Write> LZMA2Writer<W> {
     /// Creates a new LZMA2 writer that will write compressed data to the given writer.
-    pub fn new(inner: W, options: &LZMA2Options) -> Self {
+    pub fn new(inner: W, options: LZMA2Options) -> Self {
         let lzma_options = &options.lzma_options;
         let dict_size = lzma_options.dict_size;
 
@@ -229,7 +229,7 @@ impl<W: Write> LZMA2Writer<W> {
             dict_reset_needed = false;
         }
 
-        let stream_size = options.stream_size.map(|s| s.get().max(dict_size as u64));
+        let chunk_size = options.chunk_size.map(|s| s.get().max(dict_size as u64));
 
         Self {
             inner,
@@ -241,22 +241,22 @@ impl<W: Write> LZMA2Writer<W> {
             state_reset_needed: true,
             props_needed: true,
             pending_size: 0,
-            stream_size,
+            chunk_size,
             uncompressed_size: 0,
-            force_independent_stream: false,
-            options: options.clone(),
+            force_independent_chunk: false,
+            options,
         }
     }
 
-    fn should_start_independent_stream(&self) -> bool {
-        if let Some(stream_size) = self.stream_size {
-            self.uncompressed_size >= stream_size
+    fn should_start_independent_chunk(&self) -> bool {
+        if let Some(chunk_size) = self.chunk_size {
+            self.uncompressed_size >= chunk_size
         } else {
             false
         }
     }
 
-    fn start_independent_stream(&mut self) -> crate::Result<()> {
+    fn start_independent_chunk(&mut self) -> crate::Result<()> {
         self.lzma.lz.set_flushing();
 
         while self.pending_size > 0 {
@@ -264,7 +264,7 @@ impl<W: Write> LZMA2Writer<W> {
             self.write_chunk()?;
         }
 
-        self.force_independent_stream = true;
+        self.force_independent_chunk = true;
         self.dict_reset_needed = true;
         self.state_reset_needed = true;
         self.props_needed = true;
@@ -291,8 +291,8 @@ impl<W: Write> LZMA2Writer<W> {
     }
 
     fn write_lzma(&mut self, uncompressed_size: u32, compressed_size: u32) -> crate::Result<()> {
-        let mut control = if self.props_needed || self.force_independent_stream {
-            if self.dict_reset_needed || self.force_independent_stream {
+        let mut control = if self.props_needed || self.force_independent_chunk {
+            if self.dict_reset_needed || self.force_independent_chunk {
                 0x80 + (3 << 5)
             } else {
                 0x80 + (2 << 5)
@@ -321,7 +321,7 @@ impl<W: Write> LZMA2Writer<W> {
         self.props_needed = false;
         self.state_reset_needed = false;
         self.dict_reset_needed = false;
-        self.force_independent_stream = false;
+        self.force_independent_chunk = false;
         Ok(())
     }
 
@@ -396,8 +396,8 @@ impl<W: Write> Write for LZMA2Writer<W> {
 
         let mut off = 0;
         while len > 0 {
-            if self.should_start_independent_stream() {
-                self.start_independent_stream()?;
+            if self.should_start_independent_chunk() {
+                self.start_independent_chunk()?;
             }
 
             let used = self.lzma.lz.fill_window(&buf[off..(off + len)]);

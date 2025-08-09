@@ -32,7 +32,7 @@ fn compress_liblzma_lzma2(level: u32, data: &[u8]) -> Vec<u8> {
 fn compress_lzmarust2_lzma2(level: u32, data: &[u8]) -> Vec<u8> {
     let mut compressed = Vec::new();
     let options = LZMA2Options::with_preset(level);
-    let mut writer = LZMA2Writer::new(&mut compressed, &options);
+    let mut writer = LZMA2Writer::new(&mut compressed, options);
     writer.write_all(data).unwrap();
     writer.finish().unwrap();
     compressed
