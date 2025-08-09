@@ -1,4 +1,4 @@
-# LZMA / LZMA2 / XZ in native Rust
+# LZMA / LZMA2 / LZIP / XZ in native Rust
 
 [![Crate](https://img.shields.io/crates/v/lzma-rust2.svg)](https://crates.io/crates/lzma-rust2)
 [![Documentation](https://docs.rs/lzma-rust2/badge.svg)](https://docs.rs/lzma-rust2)

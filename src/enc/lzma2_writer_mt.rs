@@ -66,7 +66,7 @@ impl<W: Write> LZMA2WriterMT<W> {
     ///   Will be clamped to be at least the dictionary size.
     /// - `num_workers`: The maximum number of worker threads for compression.
     ///   Currently capped at 256 Threads.
-    pub fn new(inner: W, options: &LZMAOptions, stream_size: u64, num_workers: u32) -> Self {
+    pub fn new(inner: W, options: LZMAOptions, stream_size: u64, num_workers: u32) -> Self {
         let max_workers = num_workers.clamp(1, 256);
         let stream_size = stream_size.max(options.dict_size as u64);
 
@@ -78,7 +78,7 @@ impl<W: Write> LZMA2WriterMT<W> {
 
         let mut writer = Self {
             inner: Some(inner),
-            options: options.clone(),
+            options,
             result_rx,
             result_tx,
             current_work_unit: Vec::with_capacity((stream_size as usize).min(1024 * 1024)),

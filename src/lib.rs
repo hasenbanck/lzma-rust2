@@ -88,6 +88,8 @@ pub use enc::*;
 pub use lz::MFType;
 #[cfg(feature = "lzip")]
 pub use lzip::LZIPReader;
+#[cfg(all(feature = "lzip", feature = "encoder"))]
+pub use lzip::{LZIPOptions, LZIPWriter};
 pub use lzma2_reader::{get_memory_usage as lzma2_get_memory_usage, LZMA2Reader};
 #[cfg(feature = "std")]
 pub use lzma2_reader_mt::LZMA2ReaderMT;
@@ -330,6 +332,16 @@ trait ByteReader {
     fn read_u64(&mut self) -> Result<u64>;
 }
 
+trait ByteWriter {
+    fn write_u8(&mut self, value: u8) -> Result<()>;
+
+    fn write_u16(&mut self, value: u16) -> Result<()>;
+
+    fn write_u32(&mut self, value: u32) -> Result<()>;
+
+    fn write_u64(&mut self, value: u64) -> Result<()>;
+}
+
 impl<T: Read> ByteReader for T {
     #[inline(always)]
     fn read_u8(&mut self) -> Result<u8> {
@@ -371,6 +383,28 @@ impl<T: Read> ByteReader for T {
         let mut buf = [0; 8];
         self.read_exact(buf.as_mut())?;
         Ok(u64::from_le_bytes(buf))
+    }
+}
+
+impl<T: Write> ByteWriter for T {
+    #[inline(always)]
+    fn write_u8(&mut self, value: u8) -> Result<()> {
+        self.write_all(&[value])
+    }
+
+    #[inline(always)]
+    fn write_u16(&mut self, value: u16) -> Result<()> {
+        self.write_all(&value.to_le_bytes())
+    }
+
+    #[inline(always)]
+    fn write_u32(&mut self, value: u32) -> Result<()> {
+        self.write_all(&value.to_le_bytes())
+    }
+
+    #[inline(always)]
+    fn write_u64(&mut self, value: u64) -> Result<()> {
+        self.write_all(&value.to_le_bytes())
     }
 }
 

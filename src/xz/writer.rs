@@ -1,5 +1,6 @@
 use alloc::{boxed::Box, rc::Rc, vec::Vec};
 use core::cell::{Cell, RefCell};
+use std::num::NonZeroU64;
 
 use sha2::Digest;
 
@@ -106,7 +107,7 @@ pub struct XZOptions {
     /// Checksum type to use.
     pub check_type: CheckType,
     /// Maximum uncompressed size for each block (None = single block).
-    pub block_size: Option<u64>,
+    pub block_size: Option<NonZeroU64>,
     /// Pre-filter to use (at most 3).
     pub filters: Vec<FilterConfig>,
 }
@@ -139,7 +140,7 @@ impl XZOptions {
     }
 
     /// Set the maximum block size (None means a single block, which is the default).
-    pub fn set_block_size(&mut self, block_size: Option<u64>) {
+    pub fn set_block_size(&mut self, block_size: Option<NonZeroU64>) {
         self.block_size = block_size;
     }
 
@@ -313,7 +314,7 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
 
     fn should_finish_block(&self) -> bool {
         if let Some(block_size) = self.options.block_size {
-            self.block_uncompressed_size >= block_size
+            self.block_uncompressed_size >= block_size.get()
         } else {
             false
         }

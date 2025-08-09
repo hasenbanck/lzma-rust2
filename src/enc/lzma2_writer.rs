@@ -144,17 +144,6 @@ pub fn get_extra_size_before(dict_size: u32) -> u32 {
 }
 
 /// A single-threaded LZMA2 compressor.
-///
-/// # Examples
-/// ```
-/// use std::io::Write;
-///
-/// use lzma_rust2::{LZMA2Writer, LZMAOptions};
-///
-/// let mut writer = LZMA2Writer::new(Vec::new(), &LZMAOptions::default());
-/// writer.write_all(b"hello world").unwrap();
-/// writer.finish().unwrap();
-/// ```
 pub struct LZMA2Writer<W: Write> {
     inner: W,
     rc: RangeEncoder<RangeEncoderBuffer>,
