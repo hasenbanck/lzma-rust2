@@ -1,8 +1,5 @@
-#[cfg(not(feature = "optimization"))]
 use alloc::{vec, vec::Vec};
 
-#[cfg(feature = "optimization")]
-use super::AlignedMemoryI32;
 use super::{
     extend_match,
     hash234::Hash234,
@@ -13,9 +10,6 @@ use super::{
 /// Hash Chain with 4-byte matching
 pub(crate) struct HC4 {
     hash: Hash234,
-    #[cfg(feature = "optimization")]
-    chain: AlignedMemoryI32,
-    #[cfg(not(feature = "optimization"))]
     chain: Vec<i32>,
     depth_limit: i32,
     cyclic_size: i32,
@@ -29,12 +23,7 @@ impl HC4 {
     }
 
     pub(crate) fn new(dict_size: u32, nice_len: u32, depth_limit: i32) -> Self {
-        #[cfg(feature = "optimization")]
-        let chain = AlignedMemoryI32::new(dict_size as usize + 1);
-        #[cfg(not(feature = "optimization"))]
         let chain = vec![0; dict_size as usize + 1];
-
-        assert!(chain.len() >= (dict_size as usize + 1));
 
         Self {
             hash: Hash234::new(dict_size),

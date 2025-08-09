@@ -1,8 +1,5 @@
-#[cfg(not(feature = "optimization"))]
 use alloc::{vec, vec::Vec};
 
-#[cfg(feature = "optimization")]
-use super::AlignedMemoryI32;
 use super::LZEncoder;
 
 const HASH2_SIZE: u32 = 1 << 10;
@@ -11,17 +8,8 @@ const HASH3_SIZE: u32 = 1 << 16;
 const HASH3_MASK: u32 = HASH3_SIZE - 1;
 
 pub struct Hash234 {
-    #[cfg(feature = "optimization")]
-    hash2_table: AlignedMemoryI32,
-    #[cfg(feature = "optimization")]
-    hash3_table: AlignedMemoryI32,
-    #[cfg(feature = "optimization")]
-    hash4_table: AlignedMemoryI32,
-    #[cfg(not(feature = "optimization"))]
     hash2_table: Vec<i32>,
-    #[cfg(not(feature = "optimization"))]
     hash3_table: Vec<i32>,
-    #[cfg(not(feature = "optimization"))]
     hash4_table: Vec<i32>,
     hash4_size: u32,
     hash4_mask: u32,
@@ -53,23 +41,9 @@ impl Hash234 {
         let hash4_size = Self::get_hash4_size(dict_size);
         let hash4_mask = hash4_size - 1;
 
-        #[cfg(feature = "optimization")]
-        let hash2_table = AlignedMemoryI32::new(HASH2_SIZE as usize);
-        #[cfg(feature = "optimization")]
-        let hash3_table = AlignedMemoryI32::new(HASH3_SIZE as usize);
-        #[cfg(feature = "optimization")]
-        let hash4_table = AlignedMemoryI32::new(hash4_size as usize);
-
-        #[cfg(not(feature = "optimization"))]
         let hash2_table = vec![0; HASH2_SIZE as usize];
-        #[cfg(not(feature = "optimization"))]
         let hash3_table = vec![0; HASH3_SIZE as usize];
-        #[cfg(not(feature = "optimization"))]
         let hash4_table = vec![0; hash4_size as usize];
-
-        assert!(hash2_table.len() >= HASH2_SIZE as usize);
-        assert!(hash3_table.len() >= HASH3_SIZE as usize);
-        assert!(hash4_table.len() >= hash4_size as usize);
 
         Self {
             hash4_mask,

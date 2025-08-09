@@ -1,19 +1,12 @@
-#[cfg(not(feature = "optimization"))]
 use alloc::{vec, vec::Vec};
 
-#[cfg(feature = "optimization")]
-use super::AlignedMemoryI32;
 use super::{extend_match, hash234::Hash234, LZEncoder, MatchFind, Matches};
 
 /// Binary Tree with 4-byte matching
 pub(crate) struct BT4 {
     hash: Hash234,
-    #[cfg(feature = "optimization")]
-    tree: AlignedMemoryI32,
-    #[cfg(not(feature = "optimization"))]
     tree: Vec<i32>,
     depth_limit: i32,
-
     cyclic_size: i32,
     cyclic_pos: i32,
     lz_pos: i32,
@@ -30,12 +23,7 @@ impl BT4 {
     pub(crate) fn new(dict_size: u32, nice_len: u32, depth_limit: i32) -> Self {
         let cyclic_size = dict_size as i32 + 1;
 
-        #[cfg(feature = "optimization")]
-        let tree = AlignedMemoryI32::new(cyclic_size as usize * 2);
-        #[cfg(not(feature = "optimization"))]
         let tree = vec![0; cyclic_size as usize * 2];
-
-        assert!(tree.len() >= cyclic_size as usize * 2);
 
         Self {
             hash: Hash234::new(dict_size),
