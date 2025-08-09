@@ -12,7 +12,7 @@ use crate::{
     enc::{LZMA2Writer, LZMAOptions},
     error_invalid_data, error_invalid_input,
     filter::{bcj::BCJWriter, delta::DeltaWriter},
-    Result, Write,
+    ByteWriter, Result, Write,
 };
 
 trait FinishableWriter: Write {
@@ -242,7 +242,7 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
         self.writer.write_all(&stream_flags)?;
 
         let crc = CRC32.checksum(&stream_flags);
-        self.writer.write_all(&crc.to_le_bytes())?;
+        self.writer.write_u32(crc)?;
 
         self.header_written = true;
 
@@ -438,7 +438,7 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
         let header_size = total_size_needed.div_ceil(4) * 4;
         let header_size_encoded = ((header_size / 4) - 1) as u8;
 
-        self.writer.write_all(&[header_size_encoded])?;
+        self.write_u8(header_size_encoded)?;
         self.writer.write_all(&header_data)?;
 
         let padding_needed = header_size - 1 - header_data.len() - 4;
@@ -456,7 +456,7 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
             _ => {}
         }
 
-        self.writer.write_all(&crc.finalize().to_le_bytes())?;
+        self.writer.write_u32(crc.finalize())?;
 
         Ok(())
     }
@@ -525,7 +525,7 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
 
     fn write_index(&mut self) -> Result<()> {
         // Index indicator (0x00).
-        self.writer.write_all(&[0x00])?;
+        self.writer.write_u8(0x00)?;
 
         let mut index_data = Vec::new();
 
@@ -558,7 +558,7 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
             _ => {}
         }
 
-        self.writer.write_all(&crc.finalize().to_le_bytes())?;
+        self.writer.write_u32(crc.finalize())?;
 
         Ok(())
     }
@@ -587,8 +587,8 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
         crc.update(&backward_size.to_le_bytes());
         crc.update(&stream_flags);
 
-        self.writer.write_all(&crc.finalize().to_le_bytes())?;
-        self.writer.write_all(&backward_size.to_le_bytes())?;
+        self.writer.write_u32(crc.finalize())?;
+        self.writer.write_u32(backward_size)?;
         self.writer.write_all(&stream_flags)?;
         self.writer.write_all(&XZ_FOOTER_MAGIC)?;
 

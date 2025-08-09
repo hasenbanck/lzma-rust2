@@ -135,7 +135,7 @@ impl<W: Write> LZIPWriter<W> {
         writer.write_all(&[LZIP_VERSION])?;
 
         let dict_size_byte = encode_dict_size(self.options.lzma_options.dict_size)?;
-        writer.write_all(&[dict_size_byte])?;
+        writer.write_u8(dict_size_byte)?;
 
         let counting_writer = CountingWriter::new(writer);
 

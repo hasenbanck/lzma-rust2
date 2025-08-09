@@ -13,7 +13,7 @@ use super::LZMA2Writer;
 use crate::{
     set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
-    LZMAOptions,
+    ByteWriter, LZMAOptions,
 };
 
 /// A work unit for a worker thread.
@@ -290,7 +290,7 @@ impl<W: Write> LZMA2WriterMT<W> {
         // No data was provided to compress
         if self.next_sequence_to_dispatch == 0 {
             let mut inner = self.inner.take().expect("inner is empty");
-            inner.write_all(&[0x00])?;
+            inner.write_u8(0x00)?;
             inner.flush()?;
 
             self.shutdown_flag.store(true, Ordering::Release);
@@ -311,7 +311,7 @@ impl<W: Write> LZMA2WriterMT<W> {
 
         let mut inner = self.inner.take().expect("inner is empty");
 
-        inner.write_all(&[0x00])?;
+        inner.write_u8(0x00)?;
         inner.flush()?;
 
         self.shutdown_flag.store(true, Ordering::Release);

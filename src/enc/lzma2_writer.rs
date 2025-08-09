@@ -5,7 +5,7 @@ use super::{
     lz::MFType,
     range_enc::{RangeEncoder, RangeEncoderBuffer},
 };
-use crate::Write;
+use crate::{ByteWriter, Write};
 
 /// Encoder settings when compressing with LZMA and LZMA2.
 #[derive(Debug, Clone)]
@@ -301,7 +301,7 @@ impl<W: Write> LZMA2Writer<W> {
             self.write_chunk()?;
         }
 
-        self.inner.write_all(&[0x00])?;
+        self.inner.write_u8(0x00)?;
 
         Ok(self.inner)
     }
