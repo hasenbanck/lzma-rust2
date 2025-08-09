@@ -53,14 +53,6 @@ impl<R> LZMA2Reader<R> {
     pub fn into_inner(self) -> R {
         self.inner
     }
-
-    pub fn get_ref(&self) -> &R {
-        &self.inner
-    }
-
-    pub fn get_mut(&mut self) -> &mut R {
-        &mut self.inner
-    }
 }
 
 impl<R: Read> LZMA2Reader<R> {

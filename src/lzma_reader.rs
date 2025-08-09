@@ -1,6 +1,6 @@
 use super::{
     decoder::LZMADecoder, error_invalid_data, error_invalid_input, error_out_of_memory,
-    lz::LZDecoder, range_dec::RangeDecoder, ByteReader, LZMA2Reader, Read, DICT_SIZE_MAX,
+    lz::LZDecoder, range_dec::RangeDecoder, ByteReader, Read, DICT_SIZE_MAX,
 };
 
 /// Calculates the memory usage in KiB required for LZMA decompression from properties byte.
@@ -69,14 +69,6 @@ pub struct LZMAReader<R> {
 impl<R> LZMAReader<R> {
     pub fn into_inner(self) -> R {
         self.rc.into_inner()
-    }
-
-    pub fn get_ref(&self) -> &R {
-        self.rc.get_ref()
-    }
-
-    pub fn get_mut(&mut self) -> &mut R {
-        self.rc.get_mut()
     }
 }
 

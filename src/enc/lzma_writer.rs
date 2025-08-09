@@ -113,8 +113,8 @@ impl<W: Write> LZMAWriter<W> {
         self.current_uncompressed_size
     }
 
-    pub fn inner(&mut self) -> &mut W {
-        self.rc.inner()
+    pub fn into_inner(self) -> W {
+        self.rc.into_inner()
     }
 
     pub fn finish(mut self) -> crate::Result<W> {

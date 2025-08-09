@@ -3,7 +3,7 @@
 [![Crate](https://img.shields.io/crates/v/lzma-rust2.svg)](https://crates.io/crates/lzma-rust2)
 [![Documentation](https://docs.rs/lzma-rust2/badge.svg)](https://docs.rs/lzma-rust2)
 
-LZMA / LZMA2 / XZ compression ported from [tukaani xz for java](https://tukaani.org/xz/java.html).
+LZMA / LZMA2 / LZIP/ XZ compression ported from [tukaani xz for java](https://tukaani.org/xz/java.html).
 
 This is a fork of the original, unmaintained lzma-rust crate to continue the development and maintenance.
 

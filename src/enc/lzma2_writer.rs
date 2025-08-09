@@ -279,8 +279,8 @@ impl<W: Write> LZMA2Writer<W> {
         Ok(())
     }
 
-    pub fn inner(&mut self) -> &mut W {
-        &mut self.inner
+    pub fn into_inner(self) -> W {
+        self.inner
     }
 
     pub fn finish(mut self) -> crate::Result<W> {

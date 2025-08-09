@@ -1,7 +1,7 @@
 use alloc::{vec, vec::Vec};
 
 use crate::{
-    error_invalid_input, ByteReader, LZMA2Reader, Read, BIT_MODEL_TOTAL_BITS, MOVE_BITS,
+    error_eof, error_invalid_input, ByteReader, Read, BIT_MODEL_TOTAL_BITS, MOVE_BITS,
     RC_BIT_MODEL_OFFSET, SHIFT_BITS,
 };
 
@@ -14,14 +14,6 @@ pub(crate) struct RangeDecoder<R> {
 impl<R> RangeDecoder<R> {
     pub(crate) fn into_inner(self) -> R {
         self.inner
-    }
-
-    pub(crate) fn get_ref(&self) -> &R {
-        &self.inner
-    }
-
-    pub(crate) fn get_mut(&mut self) -> &mut R {
-        &mut self.inner
     }
 }
 
@@ -37,9 +29,9 @@ impl RangeDecoder<RangeDecoderBuffer> {
 
 impl<R: RangeReader> RangeDecoder<R> {
     pub(crate) fn new_stream(mut inner: R) -> crate::Result<Self> {
-        let b = inner.read_u8();
+        let b = inner.try_read_u8()?;
         if b != 0x00 {
-            return Err(error_invalid_input("range decoder first byte is 0"));
+            return Err(error_invalid_input("range decoder first byte is not zero"));
         }
         let code = inner.read_u32_be()?;
         Ok(Self {
@@ -387,6 +379,8 @@ impl RangeDecoderBuffer {
 pub(crate) trait RangeReader {
     fn read_u8(&mut self) -> u8;
 
+    fn try_read_u8(&mut self) -> crate::Result<u8>;
+
     fn read_u32_be(&mut self) -> crate::Result<u32>;
 
     #[inline(always)]
@@ -420,6 +414,12 @@ impl<T: Read> RangeReader for T {
         }
     }
 
+    fn try_read_u8(&mut self) -> crate::Result<u8> {
+        let mut buf = [0; 1];
+        self.read_exact(&mut buf)?;
+        Ok(buf[0])
+    }
+
     #[inline(always)]
     fn read_u32_be(&mut self) -> crate::Result<u32> {
         let mut buf = [0; 4];
@@ -439,6 +439,10 @@ impl RangeReader for RangeDecoderBuffer {
         let byte = *self.buf.get(self.pos).unwrap_or(&0);
         self.pos += 1;
         byte
+    }
+
+    fn try_read_u8(&mut self) -> crate::Result<u8> {
+        self.buf.get(self.pos).copied().ok_or_else(error_eof)
     }
 
     #[inline(always)]

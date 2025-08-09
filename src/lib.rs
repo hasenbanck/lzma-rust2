@@ -1,4 +1,4 @@
-//! LZMA / LZMA2 / XZ compression ported from [tukaani xz for java](https://tukaani.org/xz/java.html).
+//! LZMA / LZMA2 / LZIP / XZ compression ported from [tukaani xz for java](https://tukaani.org/xz/java.html).
 //!
 //! This is a fork of the original, unmaintained lzma-rust crate to continue the development and
 //! maintenance.
@@ -55,6 +55,8 @@ extern crate alloc;
 
 mod decoder;
 mod lz;
+#[cfg(feature = "lzip")]
+mod lzip;
 mod lzma2_reader;
 mod lzma_reader;
 mod range_dec;
@@ -84,6 +86,8 @@ pub(crate) use std::io::Write;
 #[cfg(feature = "encoder")]
 pub use enc::*;
 pub use lz::MFType;
+#[cfg(feature = "lzip")]
+pub use lzip::LZIPReader;
 pub use lzma2_reader::{get_memory_usage as lzma2_get_memory_usage, LZMA2Reader};
 #[cfg(feature = "std")]
 pub use lzma2_reader_mt::LZMA2ReaderMT;
@@ -372,6 +376,12 @@ impl<T: Read> ByteReader for T {
 
 #[cfg(feature = "std")]
 #[inline(always)]
+fn error_eof() -> Error {
+    Error::new(std::io::ErrorKind::UnexpectedEof, "unexpected EOF")
+}
+
+#[cfg(feature = "std")]
+#[inline(always)]
 fn error_other(msg: &'static str) -> Error {
     Error::other(msg)
 }
@@ -404,6 +414,12 @@ fn error_unsupported(msg: &'static str) -> Error {
 #[inline(always)]
 fn copy_error(error: &Error) -> Error {
     Error::new(error.kind(), error.to_string())
+}
+
+#[cfg(not(feature = "std"))]
+#[inline(always)]
+fn error_eof() -> Error {
+    Error::EOF
 }
 
 #[cfg(not(feature = "std"))]
