@@ -1,14 +1,28 @@
 use alloc::{vec, vec::Vec};
 
 use crate::{
-    error_invalid_input, ByteReader, Read, BIT_MODEL_TOTAL_BITS, MOVE_BITS, RC_BIT_MODEL_OFFSET,
-    SHIFT_BITS,
+    error_invalid_input, ByteReader, LZMA2Reader, Read, BIT_MODEL_TOTAL_BITS, MOVE_BITS,
+    RC_BIT_MODEL_OFFSET, SHIFT_BITS,
 };
 
 pub(crate) struct RangeDecoder<R> {
     inner: R,
     range: u32,
     code: u32,
+}
+
+impl<R> RangeDecoder<R> {
+    pub(crate) fn into_inner(self) -> R {
+        self.inner
+    }
+
+    pub(crate) fn get_ref(&self) -> &R {
+        &self.inner
+    }
+
+    pub(crate) fn get_mut(&mut self) -> &mut R {
+        &mut self.inner
+    }
 }
 
 impl RangeDecoder<RangeDecoderBuffer> {
