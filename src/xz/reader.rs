@@ -3,8 +3,8 @@ use core::cell::{Cell, RefCell};
 
 use super::{
     count_multibyte_integer_size, count_multibyte_integer_size_for_value, encode_multibyte_integer,
-    parse_multibyte_integer, parse_multibyte_integer_from_reader, CheckType, ChecksumCalculator,
-    FilterType, IndexRecord, CRC32, XZ_FOOTER_MAGIC, XZ_MAGIC,
+    parse_multibyte_integer, parse_multibyte_integer_from_reader, update_crc_with_padding,
+    CheckType, ChecksumCalculator, FilterType, IndexRecord, CRC32, XZ_FOOTER_MAGIC, XZ_MAGIC,
 };
 use crate::{
     error_invalid_data, error_invalid_input,
@@ -78,13 +78,7 @@ impl Index {
             crc.update(&temp_buf[..size]);
         }
 
-        // Add padding.
-        match padding_needed {
-            1 => crc.update(&[0]),
-            2 => crc.update(&[0, 0]),
-            3 => crc.update(&[0, 0, 0]),
-            _ => {}
-        }
+        update_crc_with_padding(&mut crc, padding_needed);
 
         if expected_crc != crc.finalize() {
             return Err(error_invalid_data("index CRC32 mismatch"));

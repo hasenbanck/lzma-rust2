@@ -285,9 +285,9 @@ impl<W: Write> LZIPWriterMT<W> {
         }
     }
 
-    /// Returns a mutable reference to the underlying writer.
-    pub fn inner(&mut self) -> &mut W {
-        self.inner.as_mut().expect("inner is empty")
+    /// Consume the LZIP2WriterMT and return the inner writer.
+    pub fn into_inner(mut self) -> W {
+        self.inner.take().expect("inner is empty")
     }
 
     /// Finishes the compression and returns the underlying writer.

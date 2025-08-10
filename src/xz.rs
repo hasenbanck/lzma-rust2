@@ -3,13 +3,17 @@
 mod reader;
 #[cfg(feature = "encoder")]
 mod writer;
+#[cfg(all(feature = "encoder", feature = "std"))]
+mod writer_mt;
 
 pub use reader::XZReader;
 use sha2::Digest;
 #[cfg(feature = "encoder")]
 pub use writer::{XZOptions, XZWriter};
+#[cfg(all(feature = "encoder", feature = "std"))]
+pub use writer_mt::XZWriterMT;
 
-use crate::{error_invalid_data, ByteReader, Read, Result};
+use crate::{error_invalid_data, error_invalid_input, ByteReader, ByteWriter, Read, Write};
 
 const CRC32: crc::Crc<u32, crc::Table<16>> =
     crc::Crc::<u32, crc::Table<16>>::new(&crc::CRC_32_ISO_HDLC);
@@ -123,13 +127,23 @@ pub enum CheckType {
 }
 
 impl CheckType {
-    fn from_byte(byte: u8) -> Result<Self> {
+    fn from_byte(byte: u8) -> crate::Result<Self> {
         match byte {
             0x00 => Ok(CheckType::None),
             0x01 => Ok(CheckType::Crc32),
             0x04 => Ok(CheckType::Crc64),
             0x0A => Ok(CheckType::Sha256),
             _ => Err(error_invalid_data("unsupported XZ check type")),
+        }
+    }
+
+    #[cfg(feature = "encoder")]
+    fn checksum_size(self) -> u64 {
+        match self {
+            CheckType::None => 0,
+            CheckType::Crc32 => 4,
+            CheckType::Crc64 => 8,
+            CheckType::Sha256 => 32,
         }
     }
 }
@@ -161,7 +175,7 @@ pub enum FilterType {
 impl TryFrom<u64> for FilterType {
     type Error = ();
 
-    fn try_from(value: u64) -> core::result::Result<Self, Self::Error> {
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
         match value {
             0x03 => Ok(FilterType::Delta),
             0x04 => Ok(FilterType::BcjX86),
@@ -179,7 +193,7 @@ impl TryFrom<u64> for FilterType {
 }
 
 /// Parse XZ multibyte integer (variable length encoding).
-fn parse_multibyte_integer(data: &[u8]) -> Result<u64> {
+fn parse_multibyte_integer(data: &[u8]) -> crate::Result<u64> {
     let mut result = 0u64;
     let mut shift = 0;
 
@@ -209,8 +223,7 @@ fn count_multibyte_integer_size(data: &[u8]) -> usize {
     data.len()
 }
 
-/// Parse multibyte integer directly.
-fn parse_multibyte_integer_from_reader<R: Read>(reader: &mut R) -> Result<u64> {
+fn parse_multibyte_integer_from_reader<R: Read>(reader: &mut R) -> crate::Result<u64> {
     let mut result = 0u64;
     let mut shift = 0;
 
@@ -233,7 +246,6 @@ fn parse_multibyte_integer_from_reader<R: Read>(reader: &mut R) -> Result<u64> {
     Err(error_invalid_data("XZ multibyte integer too long"))
 }
 
-/// Count the number of bytes needed to encode a multibyte integer value.
 fn count_multibyte_integer_size_for_value(mut value: u64) -> usize {
     if value == 0 {
         return 1;
@@ -247,8 +259,7 @@ fn count_multibyte_integer_size_for_value(mut value: u64) -> usize {
     count
 }
 
-/// Encode a multibyte integer into a buffer.
-fn encode_multibyte_integer(mut value: u64, buf: &mut [u8]) -> Result<usize> {
+fn encode_multibyte_integer(mut value: u64, buf: &mut [u8]) -> crate::Result<usize> {
     if value > (u64::MAX / 2) {
         return Err(error_invalid_data("value too big to encode"));
     }
@@ -268,7 +279,7 @@ fn encode_multibyte_integer(mut value: u64, buf: &mut [u8]) -> Result<usize> {
     Ok(i)
 }
 
-/// Handles checksum calculation for different XZ check types
+/// Handles checksum calculation for different XZ check types.
 enum ChecksumCalculator {
     None,
     Crc32(crc::Digest<'static, u32, crc::Table<16>>),
@@ -347,6 +358,258 @@ impl ChecksumCalculator {
             }
         }
     }
+
+    #[cfg(feature = "encoder")]
+    fn finalize_to_bytes(self) -> Vec<u8> {
+        match self {
+            ChecksumCalculator::None => Vec::new(),
+            ChecksumCalculator::Crc32(crc) => crc.finalize().to_le_bytes().to_vec(),
+            ChecksumCalculator::Crc64(crc) => crc.finalize().to_le_bytes().to_vec(),
+            ChecksumCalculator::Sha256(sha) => sha.finalize().to_vec(),
+        }
+    }
+}
+
+#[cfg(feature = "encoder")]
+fn write_xz_stream_header<W: Write + ?Sized>(
+    mut writer: &mut W,
+    check_type: CheckType,
+) -> crate::Result<()> {
+    writer.write_all(&XZ_MAGIC)?;
+
+    let stream_flags = [0u8, check_type as u8];
+    writer.write_all(&stream_flags)?;
+
+    let crc = CRC32.checksum(&stream_flags);
+    writer.write_u32(crc)?;
+
+    Ok(())
+}
+
+#[cfg(feature = "encoder")]
+fn encode_lzma2_dict_size(dict_size: u32) -> crate::Result<u8> {
+    if dict_size < 4096 {
+        return Err(error_invalid_input("LZMA2 dictionary size too small"));
+    }
+
+    if dict_size == 0xFFFFFFFF {
+        return Ok(40);
+    }
+
+    // Find the appropriate property value.
+    for prop in 0u8..40 {
+        let base = 2 | ((prop & 1) as u32);
+        let size = base << (prop / 2 + 11);
+
+        if size >= dict_size {
+            return Ok(prop);
+        }
+    }
+
+    Err(error_invalid_input("LZMA2 dictionary size too large"))
+}
+
+fn update_crc_with_padding(crc: &mut crc::Digest<'_, u32, crc::Table<16>>, padding_needed: usize) {
+    match padding_needed {
+        1 => crc.update(&[0]),
+        2 => crc.update(&[0, 0]),
+        3 => crc.update(&[0, 0, 0]),
+        _ => {}
+    }
+}
+
+#[cfg(feature = "encoder")]
+fn add_padding<W: Write + ?Sized>(writer: &mut W, padding_needed: usize) -> crate::Result<()> {
+    match padding_needed {
+        1 => writer.write_all(&[0]),
+        2 => writer.write_all(&[0, 0]),
+        3 => writer.write_all(&[0, 0, 0]),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(feature = "encoder")]
+fn generate_block_header_data(
+    filters: &[FilterConfig],
+    lzma_dict_size: u32,
+) -> crate::Result<Vec<u8>> {
+    let mut header_data = Vec::new();
+    let num_filters = filters.len();
+
+    if num_filters > 4 {
+        return Err(error_invalid_input("too many filters in chain (maximum 4)"));
+    }
+
+    // Block flags: no compressed size, no uncompressed size, filter count
+    let block_flags = (num_filters - 1) as u8; // -1 because 0 means 1 filter, 3 means 4 filters
+    header_data.push(block_flags);
+
+    let mut temp_buf = [0u8; 10];
+
+    for filter_config in filters {
+        // Write filter ID.
+        let filter_id = match filter_config.filter_type {
+            FilterType::Delta => 0x03,
+            FilterType::BcjX86 => 0x04,
+            FilterType::BcjPPC => 0x05,
+            FilterType::BcjIA64 => 0x06,
+            FilterType::BcjARM => 0x07,
+            FilterType::BcjARMThumb => 0x08,
+            FilterType::BcjSPARC => 0x09,
+            FilterType::BcjARM64 => 0x0A,
+            FilterType::BcjRISCV => 0x0B,
+            FilterType::LZMA2 => 0x21,
+        };
+        let size = encode_multibyte_integer(filter_id, &mut temp_buf)?;
+        header_data.extend_from_slice(&temp_buf[..size]);
+
+        // Write filter properties.
+        match filter_config.filter_type {
+            FilterType::Delta => {
+                // Properties size (1 byte)
+                let size = encode_multibyte_integer(1, &mut temp_buf)?;
+                header_data.extend_from_slice(&temp_buf[..size]);
+                // Distance property (encoded as distance - 1)
+                let distance_prop = (filter_config.property - 1) as u8;
+                header_data.push(distance_prop);
+            }
+            FilterType::BcjX86
+            | FilterType::BcjPPC
+            | FilterType::BcjIA64
+            | FilterType::BcjARM
+            | FilterType::BcjARMThumb
+            | FilterType::BcjSPARC
+            | FilterType::BcjARM64
+            | FilterType::BcjRISCV => {
+                if filter_config.property == 0 {
+                    // No start offset.
+                    let size = encode_multibyte_integer(0, &mut temp_buf)?;
+                    header_data.extend_from_slice(&temp_buf[..size]);
+                } else {
+                    // 4-byte start offset.
+                    let size = encode_multibyte_integer(4, &mut temp_buf)?;
+                    header_data.extend_from_slice(&temp_buf[..size]);
+                    header_data.extend_from_slice(&filter_config.property.to_le_bytes());
+                }
+            }
+            FilterType::LZMA2 => {
+                let size = encode_multibyte_integer(1, &mut temp_buf)?;
+                header_data.extend_from_slice(&temp_buf[..size]);
+
+                let dict_size_prop = encode_lzma2_dict_size(lzma_dict_size)?;
+                header_data.push(dict_size_prop);
+            }
+        }
+    }
+
+    Ok(header_data)
+}
+
+#[cfg(feature = "encoder")]
+fn write_xz_block_header<W: Write + ?Sized>(
+    mut writer: &mut W,
+    filters: &[FilterConfig],
+    lzma_dict_size: u32,
+) -> crate::Result<u64> {
+    let header_data = generate_block_header_data(filters, lzma_dict_size)?;
+
+    // Calculate header size (including size byte and CRC32, rounded up to multiple of 4)
+    let total_size_needed: usize = 1 + header_data.len() + 4;
+    let header_size = total_size_needed.div_ceil(4) * 4;
+    let header_size_encoded = ((header_size / 4) - 1) as u8;
+
+    let padding_needed = header_size - 1 - header_data.len() - 4;
+
+    // Calculate and write CRC32 of header size byte + header data + padding
+    let mut crc = CRC32.digest();
+    crc.update(&[header_size_encoded]);
+    crc.update(&header_data);
+    update_crc_with_padding(&mut crc, padding_needed);
+
+    let crc_value = crc.finalize();
+
+    // Now write everything to the writer
+    writer.write_u8(header_size_encoded)?;
+    writer.write_all(&header_data)?;
+    add_padding(writer, padding_needed)?;
+    writer.write_u32(crc_value)?;
+
+    Ok(header_size as u64)
+}
+
+#[cfg(feature = "encoder")]
+fn write_xz_index<W: Write + ?Sized>(
+    mut writer: &mut W,
+    index_records: &[IndexRecord],
+) -> crate::Result<()> {
+    let mut index_data = Vec::new();
+
+    let mut temp_buf = [0u8; 10];
+    let size = encode_multibyte_integer(index_records.len() as u64, &mut temp_buf)?;
+    index_data.extend_from_slice(&temp_buf[..size]);
+
+    for record in index_records {
+        let size = encode_multibyte_integer(record.unpadded_size, &mut temp_buf)?;
+        index_data.extend_from_slice(&temp_buf[..size]);
+
+        let size = encode_multibyte_integer(record.uncompressed_size, &mut temp_buf)?;
+        index_data.extend_from_slice(&temp_buf[..size]);
+    }
+
+    let bytes_written = 1 + index_data.len(); // indicator + index data
+    let padding_needed = (4 - (bytes_written % 4)) % 4;
+
+    let mut crc = CRC32.digest();
+    crc.update(&[0x00]);
+    crc.update(&index_data);
+    update_crc_with_padding(&mut crc, padding_needed);
+
+    let crc_value = crc.finalize();
+
+    // Index indicator (0x00).
+    writer.write_u8(0x00)?;
+    writer.write_all(&index_data)?;
+    add_padding(writer, padding_needed)?;
+    writer.write_u32(crc_value)?;
+
+    Ok(())
+}
+
+#[cfg(feature = "encoder")]
+fn write_xz_stream_footer<W: Write + ?Sized>(
+    mut writer: &mut W,
+    index_records: &[IndexRecord],
+    check_type: CheckType,
+) -> crate::Result<()> {
+    // Calculate backward size (index size in 4-byte blocks).
+    let mut index_size = 1; // indicator
+    index_size += count_multibyte_integer_size_for_value(index_records.len() as u64);
+
+    for record in index_records {
+        index_size += count_multibyte_integer_size_for_value(record.unpadded_size);
+        index_size += count_multibyte_integer_size_for_value(record.uncompressed_size);
+    }
+
+    let padding_needed = (4 - (index_size % 4)) % 4;
+    index_size += padding_needed;
+    index_size += 4; // CRC32
+
+    let backward_size = ((index_size / 4) - 1) as u32;
+
+    // Stream flags (same as header).
+    let stream_flags = [0u8, check_type as u8];
+
+    // Calculate CRC32 of backward size + stream flags
+    let mut crc = CRC32.digest();
+    crc.update(&backward_size.to_le_bytes());
+    crc.update(&stream_flags);
+
+    writer.write_u32(crc.finalize())?;
+    writer.write_u32(backward_size)?;
+    writer.write_all(&stream_flags)?;
+    writer.write_all(&XZ_FOOTER_MAGIC)?;
+
+    Ok(())
 }
 
 #[cfg(test)]
