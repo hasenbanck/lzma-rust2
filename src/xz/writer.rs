@@ -650,7 +650,23 @@ impl<'writer, W: Write + 'writer> Write for XZWriter<'writer, W> {
                 self.prepare_next_block()?;
             }
 
-            let written = self.writer.write(remaining)?;
+            let max_write_size = match self.options.block_size {
+                Some(block_size) => {
+                    let remaining_capacity = block_size
+                        .get()
+                        .saturating_sub(self.block_uncompressed_size);
+                    remaining.len().min(remaining_capacity as usize)
+                }
+                None => remaining.len(),
+            };
+
+            if max_write_size == 0 {
+                // Block is full, finish it and continue.
+                continue;
+            }
+
+            let chunk_to_write = &remaining[..max_write_size];
+            let written = self.writer.write(chunk_to_write)?;
 
             self.checksum_calculator.update(&remaining[..written]);
 

@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed unbounded spawning of threads when using the multithreaded version of LZMA2 encoder & decoder.
 - Fixed performance regression on linux as reported by @chenxiaolong (#10)
 - Fixed compatibility with liblzma when creating XZ files as reported by @chenxiaolong (#14)
+- XZWriter properly writes out multiple blocks respecting the block_size.
 
 ## 0.7.0 - 2025-08-08
 
