@@ -170,6 +170,7 @@ pub struct XZWriter<'writer, W: Write> {
     finished: bool,
     total_uncompressed_pos: u64,
     current_block_start_pos: u64,
+    current_block_header_size: u64,
     compressed_bytes_written: Rc<Cell<u64>>,
     original_writer: Rc<RefCell<W>>,
 }
@@ -218,6 +219,7 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
             finished: false,
             total_uncompressed_pos: 0,
             current_block_start_pos: 0,
+            current_block_header_size: 0,
         })
     }
 
@@ -363,7 +365,8 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
         self.add_padding(padding_needed as usize)?;
         self.write_block_checksum()?;
 
-        let unpadded_size = block_compressed_size + self.get_checksum_size();
+        let unpadded_size =
+            self.current_block_header_size + block_compressed_size + self.get_checksum_size();
         self.index_records.push(IndexRecord {
             unpadded_size,
             uncompressed_size: self.block_uncompressed_size,
@@ -450,6 +453,8 @@ impl<'writer, W: Write + 'writer> XZWriter<'writer, W> {
         let total_size_needed = 1 + header_data.len() + 4;
         let header_size = total_size_needed.div_ceil(4) * 4;
         let header_size_encoded = ((header_size / 4) - 1) as u8;
+
+        self.current_block_header_size = header_size as u64;
 
         self.writer.write_u8(header_size_encoded)?;
         self.writer.write_all(&header_data)?;
