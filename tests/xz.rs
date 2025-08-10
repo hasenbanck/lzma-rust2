@@ -19,8 +19,8 @@ fn test_round_trip(path: &str, level: u32) {
         writer.finish().unwrap();
     }
 
+    // Test decompression with our own reader
     let mut uncompressed = Vec::new();
-
     {
         let mut reader = XZReader::new(compressed.as_slice(), false);
         reader.read_to_end(&mut uncompressed).unwrap();
@@ -28,6 +28,16 @@ fn test_round_trip(path: &str, level: u32) {
 
     // We don't use assert_eq since the debug output would be too big.
     assert!(uncompressed.as_slice() == data);
+
+    // Also test decompression with liblzma to ensure compatibility
+    let mut liblzma_uncompressed = Vec::new();
+    {
+        use liblzma::read::XzDecoder;
+        let mut decoder = XzDecoder::new(compressed.as_slice());
+        decoder.read_to_end(&mut liblzma_uncompressed).unwrap();
+    }
+
+    assert!(liblzma_uncompressed.as_slice() == data);
 }
 
 #[test]
