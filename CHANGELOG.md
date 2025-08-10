@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.8.0 - 2025-08-XX
+## 0.8.0 - 2025-08-10
 
 ### Added
 
@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Renamed LZMA2's "independent work unit" naming from "stream" to "chunk" to not consume it with XZ streams.
+- Renamed LZMA2's "independent work unit" naming from "stream" to "chunk" to not confuse it with XZ streams.
 - LZMA2Writer now take a LZMA2Option struct. This enables both the LZMA2Writer and LZMA2WriterMT to encode multiple
   chunks for multi-threaded decoding.
 - Changed block size of XZOptions to NonZero type.
@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fixed unbounded spawning of threads when using the multithreaded version of LZMA2 encoder & decoder.
+- Fixed performance regression on linux as reported by @chenxiaolong (#10)
+- Fixed compatibility with liblzma when creating XZ files as reported by @chenxiaolong (#14)
 
 ## 0.7.0 - 2025-08-08
 
