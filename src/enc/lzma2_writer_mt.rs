@@ -388,10 +388,7 @@ impl<W: Write> Write for LZMA2WriterMT<W> {
         }
 
         if !matches!(self.state, State::Writing) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Cannot write after finishing",
-            ));
+            return Err(error_invalid_input("cannot write after finishing"));
         }
 
         let mut total_written = 0;
@@ -441,7 +438,7 @@ impl<W: Write> Write for LZMA2WriterMT<W> {
                 None => {
                     return Err(io::Error::new(
                         io::ErrorKind::BrokenPipe,
-                        "Compression stream ended unexpectedly during flush",
+                        "compression stream ended unexpectedly during flush",
                     ));
                 }
             }

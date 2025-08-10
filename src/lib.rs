@@ -109,6 +109,8 @@ pub use no_std::Read;
 #[cfg(not(feature = "std"))]
 pub use no_std::Write;
 use state::*;
+#[cfg(all(feature = "xz", feature = "std"))]
+pub use xz::XZReaderMT;
 #[cfg(all(feature = "xz", feature = "encoder", feature = "std"))]
 pub use xz::XZWriterMT;
 #[cfg(feature = "xz")]

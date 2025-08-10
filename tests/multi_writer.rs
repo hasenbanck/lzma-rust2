@@ -3,7 +3,10 @@ use std::{
     num::NonZeroU64,
 };
 
-use lzma_rust2::{LZIPOptions, LZIPReaderMT, LZIPWriter, LZMA2Options, LZMA2ReaderMT, LZMA2Writer};
+use lzma_rust2::{
+    LZIPOptions, LZIPReaderMT, LZIPWriter, LZMA2Options, LZMA2ReaderMT, LZMA2Writer, XZOptions,
+    XZReaderMT, XZWriter,
+};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 const LEVEL: u32 = 3;
@@ -64,30 +67,30 @@ fn multi_writer_lzip2() {
     assert!(uncompressed.as_slice() == data);
 }
 
-// #[test]
-// fn multi_writer_xz() {
-//     let data = std::fs::read(EXECUTABLE).unwrap();
-//
-//     let mut option = XZOptions::with_preset(LEVEL);
-//     let dict_size = option.lzma_options.dict_size;
-//     option.set_block_size(NonZeroU64::new(dict_size as u64));
-//
-//     let mut compressed = Vec::new();
-//
-//     {
-//         let mut writer = XZWriter::new(&mut compressed, option).unwrap();
-//         writer.write_all(&data).unwrap();
-//         writer.finish().unwrap();
-//     }
-//
-//     let mut uncompressed = Vec::new();
-//
-//     {
-//         let mut reader = XZReaderMT::new(Cursor::new(compressed), 1).unwrap();
-//         reader.read_to_end(&mut uncompressed).unwrap();
-//         assert!(reader.block_count() > 1);
-//     }
-//
-//     // We don't use assert_eq since the debug output would be too big.
-//     assert!(uncompressed.as_slice() == data);
-// }
+#[test]
+fn multi_writer_xz() {
+    let data = std::fs::read(EXECUTABLE).unwrap();
+
+    let mut option = XZOptions::with_preset(LEVEL);
+    let dict_size = option.lzma_options.dict_size;
+    option.set_block_size(NonZeroU64::new(dict_size as u64));
+
+    let mut compressed = Vec::new();
+
+    {
+        let mut writer = XZWriter::new(&mut compressed, option).unwrap();
+        writer.write_all(&data).unwrap();
+        writer.finish().unwrap();
+    }
+
+    let mut uncompressed = Vec::new();
+
+    {
+        let mut reader = XZReaderMT::new(Cursor::new(compressed), false, 1).unwrap();
+        reader.read_to_end(&mut uncompressed).unwrap();
+        assert!(reader.block_count() > 1);
+    }
+
+    // We don't use assert_eq since the debug output would be too big.
+    assert!(uncompressed.as_slice() == data);
+}

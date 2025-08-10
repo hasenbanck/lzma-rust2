@@ -1,35 +1,65 @@
 //! XZ format decoder and encoder implementation.
 
 mod reader;
+#[cfg(feature = "std")]
+mod reader_mt;
 #[cfg(feature = "encoder")]
 mod writer;
 #[cfg(all(feature = "encoder", feature = "std"))]
 mod writer_mt;
 
 pub use reader::XZReader;
+#[cfg(feature = "std")]
+pub use reader_mt::XZReaderMT;
 use sha2::Digest;
 #[cfg(feature = "encoder")]
 pub use writer::{XZOptions, XZWriter};
 #[cfg(all(feature = "encoder", feature = "std"))]
 pub use writer_mt::XZWriterMT;
 
-use crate::{error_invalid_data, error_invalid_input, ByteReader, ByteWriter, Read, Write};
+use crate::{
+    error_invalid_data, error_invalid_input,
+    filter::{bcj::BCJReader, delta::DeltaReader},
+    ByteReader, ByteWriter, LZMA2Reader, Read, Write,
+};
 
 const CRC32: crc::Crc<u32, crc::Table<16>> =
     crc::Crc::<u32, crc::Table<16>>::new(&crc::CRC_32_ISO_HDLC);
 const CRC64: crc::Crc<u64, crc::Table<16>> = crc::Crc::<u64, crc::Table<16>>::new(&crc::CRC_64_XZ);
 
-/// XZ stream magic bytes: 0xFD, '7', 'z', 'X', 'Z', 0x00
 const XZ_MAGIC: [u8; 6] = [0xFD, b'7', b'z', b'X', b'Z', 0x00];
 
-/// XZ stream footer magic bytes.
 const XZ_FOOTER_MAGIC: [u8; 2] = [b'Y', b'Z'];
 
-/// XZ Index record containing block metadata.
 #[derive(Debug, Clone)]
-pub(crate) struct IndexRecord {
+struct IndexRecord {
     unpadded_size: u64,
     uncompressed_size: u64,
+}
+
+#[derive(Debug)]
+struct Index {
+    pub number_of_records: u64,
+    pub records: Vec<IndexRecord>,
+}
+
+#[derive(Debug)]
+struct StreamHeader {
+    pub check_type: CheckType,
+}
+
+#[derive(Debug)]
+struct StreamFooter {
+    pub backward_size: u32,
+    pub stream_flags: [u8; 2],
+}
+
+#[derive(Debug)]
+struct BlockHeader {
+    compressed_size: Option<u64>,
+    uncompressed_size: Option<u64>,
+    filters: [Option<FilterType>; 4],
+    properties: [u32; 4],
 }
 
 /// Configuration for a filter in the XZ filter chain.
@@ -111,6 +141,66 @@ impl FilterConfig {
             property: start_pos,
         }
     }
+}
+
+fn create_filter_chain<'reader>(
+    mut chain_reader: Box<dyn Read + 'reader>,
+    filters: &[Option<FilterType>],
+    properties: &[u32],
+) -> Box<dyn Read + 'reader> {
+    for (filter, property) in filters
+        .iter()
+        .copied()
+        .zip(properties)
+        .filter_map(|(filter, property)| filter.map(|filter| (filter, *property)))
+        .rev()
+    {
+        let new_reader: Box<dyn Read> = match filter {
+            FilterType::Delta => {
+                let distance = property as usize;
+                Box::new(DeltaReader::new(chain_reader, distance))
+            }
+            FilterType::BcjX86 => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_x86(chain_reader, start_offset))
+            }
+            FilterType::BcjPPC => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_ppc(chain_reader, start_offset))
+            }
+            FilterType::BcjIA64 => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_ia64(chain_reader, start_offset))
+            }
+            FilterType::BcjARM => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_arm(chain_reader, start_offset))
+            }
+            FilterType::BcjARMThumb => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_arm_thumb(chain_reader, start_offset))
+            }
+            FilterType::BcjSPARC => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_sparc(chain_reader, start_offset))
+            }
+            FilterType::BcjARM64 => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_arm64(chain_reader, start_offset))
+            }
+            FilterType::BcjRISCV => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_riscv(chain_reader, start_offset))
+            }
+            FilterType::LZMA2 => {
+                let dict_size = property;
+                Box::new(LZMA2Reader::new(chain_reader, dict_size, None))
+            }
+        };
+        chain_reader = new_reader;
+    }
+
+    chain_reader
 }
 
 /// Supported checksum types in XZ format.
@@ -279,6 +369,411 @@ fn encode_multibyte_integer(mut value: u64, buf: &mut [u8]) -> crate::Result<usi
     Ok(i)
 }
 
+impl BlockHeader {
+    fn parse<R: Read>(reader: &mut R) -> crate::Result<Option<Self>> {
+        let header_size_encoded = reader.read_u8()?;
+
+        if header_size_encoded == 0 {
+            // If header size is 0, this indicates end of blocks (index follows).
+            return Ok(None);
+        }
+
+        let header_size = (header_size_encoded as usize + 1) * 4;
+        if !(8..=1024).contains(&header_size) {
+            return Err(error_invalid_data("invalid XZ block header size"));
+        }
+
+        // -1 because we already read the size byte.
+        let mut header_data = vec![0u8; header_size - 1];
+        reader.read_exact(&mut header_data)?;
+
+        let block_flags = header_data[0];
+        let num_filters = ((block_flags & 0x03) + 1) as usize;
+        let has_compressed_size = (block_flags & 0x40) != 0;
+        let has_uncompressed_size = (block_flags & 0x80) != 0;
+
+        let mut offset = 1;
+        let mut compressed_size = None;
+        let mut uncompressed_size = None;
+
+        // Parse optional compressed size.
+        if has_compressed_size {
+            if offset + 8 > header_data.len() {
+                return Err(error_invalid_data(
+                    "XZ block header too short for compressed size",
+                ));
+            }
+            compressed_size = Some(parse_multibyte_integer(&header_data[offset..])?);
+            offset += count_multibyte_integer_size(&header_data[offset..]);
+        }
+
+        if has_uncompressed_size {
+            if offset >= header_data.len() {
+                return Err(error_invalid_data(
+                    "XZ block header too short for uncompressed size",
+                ));
+            }
+            uncompressed_size = Some(parse_multibyte_integer(&header_data[offset..])?);
+            offset += count_multibyte_integer_size(&header_data[offset..]);
+        }
+
+        let mut filters = [None; 4];
+        let mut properties = [0; 4];
+
+        for i in 0..num_filters {
+            if offset >= header_data.len() {
+                return Err(error_invalid_data("XZ block header too short for filters"));
+            }
+
+            let filter_type =
+                FilterType::try_from(parse_multibyte_integer(&header_data[offset..])?)
+                    .map_err(|_| error_invalid_input("unsupported filter type found"))?;
+
+            offset += count_multibyte_integer_size(&header_data[offset..]);
+
+            let property = match filter_type {
+                FilterType::Delta => {
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "XZ block header too short for Delta properties",
+                        ));
+                    }
+
+                    let props_size = parse_multibyte_integer(&header_data[offset..])?;
+                    offset += count_multibyte_integer_size(&header_data[offset..]);
+
+                    if props_size != 1 {
+                        return Err(error_invalid_data("invalid Delta properties size"));
+                    }
+
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "XZ block header too short for Delta properties",
+                        ));
+                    }
+
+                    let distance_prop = header_data[offset];
+                    offset += 1;
+
+                    // Distance is encoded as byte value + 1, range [1, 256].
+                    (distance_prop as u32) + 1
+                }
+                FilterType::BcjX86
+                | FilterType::BcjPPC
+                | FilterType::BcjIA64
+                | FilterType::BcjARM
+                | FilterType::BcjARMThumb
+                | FilterType::BcjSPARC
+                | FilterType::BcjARM64
+                | FilterType::BcjRISCV => {
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "XZ block header too short for BCJ properties",
+                        ));
+                    }
+
+                    let props_size = parse_multibyte_integer(&header_data[offset..])?;
+                    offset += count_multibyte_integer_size(&header_data[offset..]);
+
+                    match props_size {
+                        0 => {
+                            // No start offset specified, use default (0).
+                            0
+                        }
+                        4 => {
+                            // 4-byte start offset specified.
+                            if offset + 4 > header_data.len() {
+                                return Err(error_invalid_data(
+                                    "XZ block header too short for BCJ start offset",
+                                ));
+                            }
+
+                            let start_offset_value = u32::from_le_bytes([
+                                header_data[offset],
+                                header_data[offset + 1],
+                                header_data[offset + 2],
+                                header_data[offset + 3],
+                            ]);
+                            offset += 4;
+
+                            // Validate alignment based on filter type.
+                            let bcj_alignment = match filter_type {
+                                FilterType::BcjX86 => 1,
+                                FilterType::BcjPPC => 4,
+                                FilterType::BcjIA64 => 16,
+                                FilterType::BcjARM => 4,
+                                FilterType::BcjARMThumb => 2,
+                                FilterType::BcjSPARC => 4,
+                                FilterType::BcjARM64 => 4,
+                                FilterType::BcjRISCV => 2,
+                                _ => unreachable!(),
+                            };
+
+                            if start_offset_value % bcj_alignment != 0 {
+                                return Err(error_invalid_data(
+                                    "BCJ start offset not aligned to filter requirements",
+                                ));
+                            }
+
+                            start_offset_value
+                        }
+                        _ => {
+                            return Err(error_invalid_data("invalid BCJ properties size"));
+                        }
+                    }
+                }
+                FilterType::LZMA2 => {
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "XZ block header too short for LZMA2 properties",
+                        ));
+                    }
+
+                    let props_size = parse_multibyte_integer(&header_data[offset..])?;
+                    offset += count_multibyte_integer_size(&header_data[offset..]);
+
+                    if props_size != 1 {
+                        return Err(error_invalid_data("invalid LZMA2 properties size"));
+                    }
+
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "XZ block header too short for LZMA2 properties",
+                        ));
+                    }
+
+                    let dict_size_prop = header_data[offset];
+                    offset += 1;
+
+                    if dict_size_prop > 40 {
+                        return Err(error_invalid_data("invalid LZMA2 dictionary size"));
+                    }
+
+                    if dict_size_prop == 40 {
+                        0xFFFFFFFF
+                    } else {
+                        let base = 2 | ((dict_size_prop & 1) as u32);
+                        base << (dict_size_prop / 2 + 11)
+                    }
+                }
+            };
+
+            filters[i] = Some(filter_type);
+            properties[i] = property;
+        }
+
+        if filters.iter().filter_map(|x| *x).next_back() != Some(FilterType::LZMA2) {
+            return Err(error_invalid_input(
+                "XZ block's last filter must be a LZMA2 filter",
+            ));
+        }
+
+        // Header must be padded so that the total header size matches the declared size.
+        // We need to pad until: 1 (size byte) + offset + 4 (CRC32) == header_size
+        let expected_offset = header_size - 1 - 4; // header_size - size_byte - crc32_size
+        while offset < expected_offset {
+            if offset >= header_data.len() || header_data[offset] != 0 {
+                return Err(error_invalid_data("invalid XZ block header padding"));
+            }
+            offset += 1;
+        }
+
+        // Last 4 bytes should be CRC32 of the header (excluding the CRC32 itself).
+        if offset + 4 != header_data.len() {
+            return Err(error_invalid_data("invalid XZ block header CRC32 position"));
+        }
+
+        let expected_crc = u32::from_le_bytes([
+            header_data[offset],
+            header_data[offset + 1],
+            header_data[offset + 2],
+            header_data[offset + 3],
+        ]);
+
+        // Calculate CRC32 of header size byte + header data (excluding CRC32).
+        let mut crc = CRC32.digest();
+        crc.update(&[header_size_encoded]);
+        crc.update(&header_data[..offset]);
+
+        if expected_crc != crc.finalize() {
+            return Err(error_invalid_data("XZ block header CRC32 mismatch"));
+        }
+
+        Ok(Some(BlockHeader {
+            compressed_size,
+            uncompressed_size,
+            filters,
+            properties,
+        }))
+    }
+
+    pub fn parse_from_slice(
+        block_data: &[u8],
+    ) -> crate::Result<([Option<FilterType>; 4], [u32; 4], usize)> {
+        if block_data.is_empty() {
+            return Err(error_invalid_data("Empty block data"));
+        }
+
+        let header_size_encoded = block_data[0];
+        if header_size_encoded == 0 {
+            return Err(error_invalid_data("Invalid block header size"));
+        }
+
+        let header_size = (header_size_encoded as usize + 1) * 4;
+        if header_size > block_data.len() {
+            return Err(error_invalid_data("Block data too short for header"));
+        }
+
+        let header_data = &block_data[1..header_size];
+        let block_flags = header_data[0];
+        let num_filters = ((block_flags & 0x03) + 1) as usize;
+        let has_compressed_size = (block_flags & 0x40) != 0;
+        let has_uncompressed_size = (block_flags & 0x80) != 0;
+
+        let mut offset = 1;
+
+        // Skip optional compressed size.
+        if has_compressed_size {
+            if offset >= header_data.len() {
+                return Err(error_invalid_data(
+                    "Block header too short for compressed size",
+                ));
+            }
+            offset += count_multibyte_integer_size(&header_data[offset..]);
+        }
+
+        // Skip optional uncompressed size.
+        if has_uncompressed_size {
+            if offset >= header_data.len() {
+                return Err(error_invalid_data(
+                    "Block header too short for uncompressed size",
+                ));
+            }
+            offset += count_multibyte_integer_size(&header_data[offset..]);
+        }
+
+        let mut filters = [None; 4];
+        let mut properties = [0; 4];
+
+        // Parse filters.
+        for i in 0..num_filters {
+            if offset >= header_data.len() {
+                return Err(error_invalid_data("Block header too short for filters"));
+            }
+
+            let filter_id = parse_multibyte_integer(&header_data[offset..])?;
+            let filter_type = FilterType::try_from(filter_id)
+                .map_err(|_| error_invalid_data("Unsupported filter type"))?;
+
+            offset += count_multibyte_integer_size(&header_data[offset..]);
+
+            let property = match filter_type {
+                FilterType::Delta => {
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "Block header too short for Delta properties",
+                        ));
+                    }
+
+                    let props_size = parse_multibyte_integer(&header_data[offset..])?;
+                    offset += count_multibyte_integer_size(&header_data[offset..]);
+
+                    if props_size != 1 {
+                        return Err(error_invalid_data("Invalid Delta properties size"));
+                    }
+
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "Block header too short for Delta properties",
+                        ));
+                    }
+
+                    let distance_prop = header_data[offset];
+                    offset += 1;
+                    (distance_prop as u32) + 1
+                }
+                FilterType::BcjX86
+                | FilterType::BcjPPC
+                | FilterType::BcjIA64
+                | FilterType::BcjARM
+                | FilterType::BcjARMThumb
+                | FilterType::BcjSPARC
+                | FilterType::BcjARM64
+                | FilterType::BcjRISCV => {
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "Block header too short for BCJ properties",
+                        ));
+                    }
+
+                    let props_size = parse_multibyte_integer(&header_data[offset..])?;
+                    offset += count_multibyte_integer_size(&header_data[offset..]);
+
+                    match props_size {
+                        0 => 0,
+                        4 => {
+                            if offset + 4 > header_data.len() {
+                                return Err(error_invalid_data(
+                                    "Block header too short for BCJ start offset",
+                                ));
+                            }
+
+                            let start_offset = u32::from_le_bytes([
+                                header_data[offset],
+                                header_data[offset + 1],
+                                header_data[offset + 2],
+                                header_data[offset + 3],
+                            ]);
+                            offset += 4;
+                            start_offset
+                        }
+                        _ => return Err(error_invalid_data("Invalid BCJ properties size")),
+                    }
+                }
+                FilterType::LZMA2 => {
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "Block header too short for LZMA2 properties",
+                        ));
+                    }
+
+                    let props_size = parse_multibyte_integer(&header_data[offset..])?;
+                    offset += count_multibyte_integer_size(&header_data[offset..]);
+
+                    if props_size != 1 {
+                        return Err(error_invalid_data("Invalid LZMA2 properties size"));
+                    }
+
+                    if offset >= header_data.len() {
+                        return Err(error_invalid_data(
+                            "Block header too short for LZMA2 properties",
+                        ));
+                    }
+
+                    let dict_size_prop = header_data[offset];
+                    offset += 1;
+
+                    if dict_size_prop > 40 {
+                        return Err(error_invalid_data("Invalid LZMA2 dictionary size"));
+                    }
+
+                    if dict_size_prop == 40 {
+                        0xFFFFFFFF
+                    } else {
+                        let base = 2 | ((dict_size_prop & 1) as u32);
+                        base << (dict_size_prop / 2 + 11)
+                    }
+                }
+            };
+
+            filters[i] = Some(filter_type);
+            properties[i] = property;
+        }
+
+        Ok((filters, properties, header_size))
+    }
+}
+
 /// Handles checksum calculation for different XZ check types.
 enum ChecksumCalculator {
     None,
@@ -367,6 +862,141 @@ impl ChecksumCalculator {
             ChecksumCalculator::Crc64(crc) => crc.finalize().to_le_bytes().to_vec(),
             ChecksumCalculator::Sha256(sha) => sha.finalize().to_vec(),
         }
+    }
+}
+
+impl StreamHeader {
+    fn parse<R: Read>(reader: &mut R) -> crate::Result<Self> {
+        let mut magic = [0u8; 6];
+        reader.read_exact(&mut magic)?;
+        if magic != XZ_MAGIC {
+            return Err(error_invalid_data("invalid XZ magic bytes"));
+        }
+
+        Self::parse_stream_header_flags_and_crc(reader)
+    }
+
+    pub(crate) fn parse_stream_header_flags_and_crc<R: Read>(
+        reader: &mut R,
+    ) -> crate::Result<Self> {
+        let mut flags = [0u8; 2];
+        reader.read_exact(&mut flags)?;
+
+        if flags[0] != 0 {
+            return Err(error_invalid_data("invalid XZ stream flags"));
+        }
+
+        let check_type = CheckType::from_byte(flags[1])?;
+
+        let expected_crc = reader.read_u32()?;
+
+        if expected_crc != CRC32.checksum(&flags) {
+            return Err(error_invalid_data("XZ stream header CRC32 mismatch"));
+        }
+
+        Ok(StreamHeader { check_type })
+    }
+}
+
+impl StreamFooter {
+    pub(crate) fn parse<R: Read>(reader: &mut R) -> crate::Result<Self> {
+        let expected_crc = reader.read_u32()?;
+
+        let backward_size = reader.read_u32()?;
+
+        let mut stream_flags = [0u8; 2];
+        reader.read_exact(&mut stream_flags)?;
+
+        // Verify CRC32 of backward size + stream flags.
+        let mut crc = CRC32.digest();
+        crc.update(&backward_size.to_le_bytes());
+        crc.update(&stream_flags);
+
+        if expected_crc != crc.finalize() {
+            return Err(error_invalid_data("stream footer CRC32 mismatch"));
+        }
+
+        let mut footer_magic = [0u8; 2];
+        reader.read_exact(&mut footer_magic)?;
+        if footer_magic != XZ_FOOTER_MAGIC {
+            return Err(error_invalid_data("invalid XZ footer magic bytes"));
+        }
+
+        Ok(StreamFooter {
+            backward_size,
+            stream_flags,
+        })
+    }
+}
+
+impl Index {
+    pub(crate) fn parse<R: Read>(reader: &mut R) -> crate::Result<Index> {
+        // sic! index indicator already consumed
+        let number_of_records = parse_multibyte_integer_from_reader(reader)?;
+        let mut records = Vec::with_capacity(number_of_records as usize);
+
+        for _ in 0..number_of_records {
+            let unpadded_size = parse_multibyte_integer_from_reader(reader)?;
+            let uncompressed_size = parse_multibyte_integer_from_reader(reader)?;
+
+            if unpadded_size == 0 {
+                return Err(error_invalid_data("invalid index record unpadded size"));
+            }
+
+            records.push(IndexRecord {
+                unpadded_size,
+                uncompressed_size,
+            });
+        }
+
+        // Skip index padding (0-3 null bytes to make multiple of 4).
+        let mut bytes_read = 1;
+        bytes_read += count_multibyte_integer_size_for_value(number_of_records);
+        for record in &records {
+            bytes_read += count_multibyte_integer_size_for_value(record.unpadded_size);
+            bytes_read += count_multibyte_integer_size_for_value(record.uncompressed_size);
+        }
+
+        let padding_needed = (4 - (bytes_read % 4)) % 4;
+
+        if padding_needed > 0 {
+            let mut padding_buf = [0u8; 3];
+            reader.read_exact(&mut padding_buf[..padding_needed])?;
+
+            if !padding_buf[..padding_needed].iter().all(|&b| b == 0) {
+                return Err(error_invalid_data("invalid index padding"));
+            }
+        }
+
+        let expected_crc = reader.read_u32()?;
+
+        // Calculate CRC32 over index data (excluding CRC32 itself).
+        let mut crc = CRC32.digest();
+        crc.update(&[0]);
+
+        // Add number of records.
+        let mut temp_buf = [0u8; 10];
+        let size = encode_multibyte_integer(number_of_records, &mut temp_buf)?;
+        crc.update(&temp_buf[..size]);
+
+        // Add all records.
+        for record in &records {
+            let size = encode_multibyte_integer(record.unpadded_size, &mut temp_buf)?;
+            crc.update(&temp_buf[..size]);
+            let size = encode_multibyte_integer(record.uncompressed_size, &mut temp_buf)?;
+            crc.update(&temp_buf[..size]);
+        }
+
+        update_crc_with_padding(&mut crc, padding_needed);
+
+        if expected_crc != crc.finalize() {
+            return Err(error_invalid_data("index CRC32 mismatch"));
+        }
+
+        Ok(Index {
+            number_of_records,
+            records,
+        })
     }
 }
 

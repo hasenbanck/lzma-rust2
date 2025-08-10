@@ -9,7 +9,7 @@ pub fn get_memory_usage_by_props(dict_size: u32, props_byte: u8) -> crate::Resul
         return Err(error_invalid_input("dict size too large"));
     }
     if props_byte > (4 * 5 + 4) * 9 + 8 {
-        return Err(error_invalid_input("Invalid props byte"));
+        return Err(error_invalid_input("invalid props byte"));
     }
     let props = props_byte % (9 * 5);
     let lp = props / 9;
@@ -20,7 +20,7 @@ pub fn get_memory_usage_by_props(dict_size: u32, props_byte: u8) -> crate::Resul
 /// Calculates the memory usage in KiB required for LZMA decompression.
 pub fn get_memory_usage(dict_size: u32, lc: u32, lp: u32) -> crate::Result<u32> {
     if lc > 8 || lp > 4 {
-        return Err(error_invalid_input("Invalid lc or lp"));
+        return Err(error_invalid_input("invalid lc or lp"));
     }
     Ok(10 + get_dict_size(dict_size)? / 1024 + ((2 * 0x300) << (lc + lp)) / 1024)
 }
@@ -82,7 +82,7 @@ impl<R: Read> LZMAReader<R> {
         preset_dict: Option<&[u8]>,
     ) -> crate::Result<Self> {
         if props > (4 * 5 + 4) * 9 + 8 {
-            return Err(error_invalid_input("Invalid props byte"));
+            return Err(error_invalid_input("invalid props byte"));
         }
         let pb = props / (9 * 5);
         props -= pb * 9 * 5;
@@ -112,7 +112,7 @@ impl<R: Read> LZMAReader<R> {
         preset_dict: Option<&[u8]>,
     ) -> crate::Result<Self> {
         if lc > 8 || lp > 4 || pb > 4 {
-            return Err(error_invalid_input("Invalid lc or lp or pb"));
+            return Err(error_invalid_input("invalid lc or lp or pb"));
         }
         let mut dict_size = get_dict_size(dict_size)?;
         if uncomp_size <= u64::MAX / 2 && dict_size as u64 > uncomp_size {

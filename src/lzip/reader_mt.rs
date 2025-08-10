@@ -108,9 +108,8 @@ impl<R: Read + Seek> LZIPReaderMT<R> {
 
         if file_size < (HEADER_SIZE + TRAILER_SIZE) as u64 {
             self.inner = Some(reader);
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "File too small to contain a valid LZIP member",
+            return Err(error_invalid_data(
+                "file too small to contain a valid LZIP member",
             ));
         }
 
@@ -139,10 +138,7 @@ impl<R: Read + Seek> LZIPReaderMT<R> {
             ]);
 
             if member_size == 0 || member_size > current_pos {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Invalid LZIP member size in trailer",
-                ));
+                return Err(error_invalid_data("invalid LZIP member size in trailer"));
             }
 
             let member_start = current_pos - member_size;
@@ -153,10 +149,7 @@ impl<R: Read + Seek> LZIPReaderMT<R> {
             reader.read_exact(&mut header_buf)?;
 
             if header_buf != [b'L', b'Z', b'I', b'P'] {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Invalid LZIP magic bytes",
-                ));
+                return Err(error_invalid_data("invalid LZIP magic bytes"));
             }
 
             self.members.push(LZIPMember {
@@ -169,7 +162,7 @@ impl<R: Read + Seek> LZIPReaderMT<R> {
 
         if self.members.is_empty() {
             self.inner = Some(reader);
-            return Err(error_invalid_data("No valid LZIP members found"));
+            return Err(error_invalid_data("no valid LZIP members found"));
         }
 
         // Reverse to get members in forward order.
@@ -228,13 +221,13 @@ impl<R: Read + Seek> LZIPReaderMT<R> {
             // Queue is closed, this indicates shutdown.
             self.state = State::Error;
             set_error(
-                io::Error::new(io::ErrorKind::BrokenPipe, "Worker threads have shut down"),
+                io::Error::new(io::ErrorKind::BrokenPipe, "worker threads have shut down"),
                 &self.error_store,
                 &self.shutdown_flag,
             );
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
-                "Worker threads have shut down",
+                "worker threads have shut down",
             ));
         }
 
@@ -281,7 +274,7 @@ impl<R: Read + Seek> LZIPReaderMT<R> {
                                 return Ok(Some(result));
                             } else {
                                 self.out_of_order_chunks.insert(seq, result);
-                                continue; // Loop again to check the out_of_order_chunks
+                                continue; // Loop again to check the out_of_order_chunks.
                             }
                         }
                         Err(mpsc::TryRecvError::Disconnected) => {
@@ -325,7 +318,7 @@ impl<R: Read + Seek> LZIPReaderMT<R> {
                                 return Ok(Some(result));
                             } else {
                                 self.out_of_order_chunks.insert(seq, result);
-                                // We've made progress, loop to check the out_of_order_chunks
+                                // We've made progress, loop to check the out_of_order_chunks.
                                 continue;
                             }
                         }
@@ -388,7 +381,7 @@ fn worker_thread_logic(
                 work
             }
             None => {
-                // No more work available and queue is closed
+                // No more work available and queue is closed.
                 break;
             }
         };

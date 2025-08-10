@@ -10,12 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Added single threaded and multithreaded encoder and decoder for the LZIP file format.
+- Added multithreaded encoder and decoder for the XZ file format.
 
 ### Changed
 
 - Renamed LZMA2's "independent work unit" naming from "stream" to "chunk" to not confuse it with XZ streams.
 - LZMA2Writer now take a LZMA2Option struct. This enables both the LZMA2Writer and LZMA2WriterMT to encode multiple
-  chunks for multi-threaded decoding.
+  chunks for multithreaded decoding.
 - Changed block size of XZOptions to NonZero type.
 - Unified the API of the writers as far as possible.
 

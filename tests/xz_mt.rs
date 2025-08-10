@@ -1,9 +1,9 @@
 use std::{
-    io::{Read, Write},
+    io::{Cursor, Read, Write},
     num::NonZeroU64,
 };
 
-use lzma_rust2::{XZOptions, XZReader, XZWriterMT};
+use lzma_rust2::{XZOptions, XZReaderMT, XZWriterMT};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
@@ -13,7 +13,8 @@ fn test_round_trip(path: &str, level: u32) {
     let data = std::fs::read(path).unwrap();
 
     let mut options = XZOptions::with_preset(level);
-    options.set_block_size(NonZeroU64::new(options.lzma_options.dict_size as u64));
+    let dict_size = options.lzma_options.dict_size as u64;
+    options.set_block_size(NonZeroU64::new(dict_size));
 
     let mut compressed = Vec::new();
 
@@ -25,10 +26,12 @@ fn test_round_trip(path: &str, level: u32) {
 
     let mut uncompressed = Vec::new();
     {
-        let mut reader = XZReader::new(compressed.as_slice(), false);
-        reader.read_to_end(&mut uncompressed).unwrap();
+        let mut reader = XZReaderMT::new(Cursor::new(compressed.as_slice()), false, 2).unwrap();
+        let data_len = reader.read_to_end(&mut uncompressed).unwrap();
 
-        // TODO test block count
+        if dict_size < data_len as u64 {
+            assert!(reader.block_count() > 1);
+        }
     }
 
     // We don't use assert_eq since the debug output would be too big.

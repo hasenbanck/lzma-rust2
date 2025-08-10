@@ -38,7 +38,7 @@ impl<W: Write> LZMAWriter<W> {
         if let Some(preset_dict) = &options.preset_dict {
             if use_header {
                 return Err(error_unsupported(
-                    "Header is not supported with preset dict",
+                    "header is not supported with preset dict",
                 ));
             }
             lzma.lz.set_preset_dict(options.dict_size, preset_dict);

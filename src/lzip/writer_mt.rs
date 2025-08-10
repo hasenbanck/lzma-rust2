@@ -145,7 +145,7 @@ impl<W: Write> LZIPWriterMT<W> {
                 if !matches!(self.state, State::Writing) {
                     return Err(io::Error::new(
                         io::ErrorKind::BrokenPipe,
-                        "Stream has been closed or is in an error state.",
+                        "stream has been closed or is in an error state.",
                     ));
                 }
             }
@@ -159,7 +159,7 @@ impl<W: Write> LZIPWriterMT<W> {
         {
             // Queue is closed, this indicates shutdown.
             self.state = State::Error;
-            let err = io::Error::new(io::ErrorKind::BrokenPipe, "Worker threads have shut down");
+            let err = io::Error::new(io::ErrorKind::BrokenPipe, "worker threads have shut down");
             set_error(err, &self.error_store, &self.shutdown_flag);
 
             return Err(self
@@ -167,7 +167,7 @@ impl<W: Write> LZIPWriterMT<W> {
                 .lock()
                 .unwrap()
                 .take()
-                .unwrap_or_else(|| io::Error::other("Failed to push to work queue")));
+                .unwrap_or_else(|| io::Error::other("failed to push to work queue")));
         }
 
         // We spawn a new thread if we have work queued, no available workers, and haven't reached
@@ -278,7 +278,7 @@ impl<W: Write> LZIPWriterMT<W> {
                 }
                 State::Error => {
                     return Err(self.error_store.lock().unwrap().take().unwrap_or_else(|| {
-                        io::Error::other("Compression failed with an unknown error")
+                        io::Error::other("compression failed with an unknown error")
                     }));
                 }
             }
@@ -391,10 +391,7 @@ impl<W: Write> Write for LZIPWriterMT<W> {
         }
 
         if !matches!(self.state, State::Writing) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Cannot write after finishing",
-            ));
+            return Err(error_invalid_input("cannot write after finishing"));
         }
 
         let mut total_written = 0;
@@ -446,7 +443,7 @@ impl<W: Write> Write for LZIPWriterMT<W> {
                 None => {
                     return Err(io::Error::new(
                         io::ErrorKind::BrokenPipe,
-                        "Compression stream ended unexpectedly during flush",
+                        "compression stream ended unexpectedly during flush",
                     ));
                 }
             }

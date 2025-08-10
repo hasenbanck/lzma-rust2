@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
-    io,
-    io::{Cursor, Read},
+    io::{self, Cursor, Seek, SeekFrom},
     sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::{self, Receiver, Sender},
@@ -10,14 +9,22 @@ use std::{
     thread,
 };
 
+use super::{create_filter_chain, BlockHeader, CheckType, Index, StreamFooter, StreamHeader};
 use crate::{
-    set_error,
+    error_invalid_data, set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
-    LZMA2Reader,
+    ByteReader, Read,
 };
 
+#[derive(Debug, Clone)]
+struct XZBlock {
+    start_pos: u64,
+    unpadded_size: u64,
+    uncompressed_size: u64,
+}
+
 /// A work unit for a worker thread.
-/// Contains the sequence number and the raw compressed bytes for a series of chunks.
+/// Contains the sequence number and block data.
 type WorkUnit = (u64, Vec<u8>);
 
 /// A result unit from a worker thread.
@@ -25,10 +32,9 @@ type WorkUnit = (u64, Vec<u8>);
 type ResultUnit = (u64, Vec<u8>);
 
 enum State {
-    /// Actively reading from the inner reader and sending work to threads.
-    Reading,
-    /// The inner reader has reached EOF. We are now waiting for the remaining
-    /// work to be completed by the worker threads.
+    /// Dispatching blocks to worker threads.
+    Dispatching,
+    /// All blocks dispatched, waiting for workers to complete.
     Draining,
     /// All data has been decompressed and returned. The stream is exhausted.
     Finished,
@@ -36,12 +42,13 @@ enum State {
     Error,
 }
 
-/// A multi-threaded LZMA2 decompressor.
-pub struct LZMA2ReaderMT<R: Read> {
-    inner: R,
+/// A multi-threaded XZ decompressor.
+pub struct XZReaderMT<R: Read + Seek> {
+    inner: Option<R>,
+    blocks: Vec<XZBlock>,
+    check_type: CheckType,
     result_rx: Receiver<ResultUnit>,
     result_tx: Sender<ResultUnit>,
-    current_work_unit: Vec<u8>,
     next_sequence_to_dispatch: u64,
     next_sequence_to_return: u64,
     last_sequence_id: Option<u64>,
@@ -53,19 +60,17 @@ pub struct LZMA2ReaderMT<R: Read> {
     work_queue: WorkStealingQueue<WorkUnit>,
     active_workers: Arc<AtomicU32>,
     max_workers: u32,
-    dict_size: u32,
-    preset_dict: Option<Arc<Vec<u8>>>,
     worker_handles: Vec<thread::JoinHandle<()>>,
+    allow_multiple_streams: bool,
 }
 
-impl<R: Read> LZMA2ReaderMT<R> {
-    /// Creates a new multi-threaded LZMA2 reader.
+impl<R: Read + Seek> XZReaderMT<R> {
+    /// Creates a new multi-threaded XZ reader.
     ///
-    /// - `inner`: The reader to read compressed data from.
-    /// - `dict_size`: The dictionary size in bytes, as specified in the stream properties.
-    /// - `preset_dict`: An optional preset dictionary.
+    /// - `inner`: The reader to read compressed data from. Must implement Seek.
+    /// - `allow_multiple_streams`: Whether to allow reading multiple XZ streams concatenated together.
     /// - `num_workers`: The maximum number of worker threads for decompression. Currently capped at 256 Threads.
-    pub fn new(inner: R, dict_size: u32, preset_dict: Option<&[u8]>, num_workers: u32) -> Self {
+    pub fn new(inner: R, allow_multiple_streams: bool, num_workers: u32) -> io::Result<Self> {
         let max_workers = num_workers.clamp(1, 256);
 
         let work_queue = WorkStealingQueue::new();
@@ -73,13 +78,13 @@ impl<R: Read> LZMA2ReaderMT<R> {
         let shutdown_flag = Arc::new(AtomicBool::new(false));
         let error_store = Arc::new(Mutex::new(None));
         let active_workers = Arc::new(AtomicU32::new(0));
-        let preset_dict = preset_dict.map(|s| s.to_vec()).map(Arc::new);
 
         let mut reader = Self {
-            inner,
+            inner: Some(inner),
+            blocks: Vec::new(),
+            check_type: CheckType::None,
             result_rx,
             result_tx,
-            current_work_unit: Vec::with_capacity(1024 * 1024),
             next_sequence_to_dispatch: 0,
             next_sequence_to_return: 0,
             last_sequence_id: None,
@@ -87,18 +92,89 @@ impl<R: Read> LZMA2ReaderMT<R> {
             current_chunk: Cursor::new(Vec::new()),
             shutdown_flag,
             error_store,
-            state: State::Reading,
+            state: State::Dispatching,
             work_queue,
             active_workers,
             max_workers,
-            dict_size,
-            preset_dict,
             worker_handles: Vec::new(),
+            allow_multiple_streams,
         };
 
-        reader.spawn_worker_thread();
+        reader.scan_blocks()?;
 
-        reader
+        Ok(reader)
+    }
+
+    /// Scan the XZ file to collect information about all blocks.
+    /// This reads the index at the end of the file to efficiently locate block boundaries.
+    fn scan_blocks(&mut self) -> io::Result<()> {
+        let mut reader = self.inner.take().expect("inner reader not set");
+
+        let stream_header = StreamHeader::parse(&mut reader)?;
+        self.check_type = stream_header.check_type;
+
+        let header_end_pos = reader.stream_position()?;
+
+        let file_size = reader.seek(SeekFrom::End(0))?;
+
+        // Minimum XZ file: 12 byte header + 12 byte footer + 8 byte minimum index.
+        if file_size < 32 {
+            return Err(error_invalid_data(
+                "File too small to contain a valid XZ stream",
+            ));
+        }
+
+        reader.seek(SeekFrom::End(-12))?;
+
+        let stream_footer = StreamFooter::parse(&mut reader)?;
+
+        let header_flags = [0, self.check_type as u8];
+
+        if stream_footer.stream_flags != header_flags {
+            return Err(error_invalid_data(
+                "stream header and footer flags mismatch",
+            ));
+        }
+
+        // Now read the index using backward size.
+        let index_size = (stream_footer.backward_size + 1) * 4;
+        let index_start_pos = file_size - 12 - index_size as u64;
+
+        reader.seek(SeekFrom::Start(index_start_pos))?;
+
+        // Parse the index.
+        let index_indicator = reader.read_u8()?;
+
+        if index_indicator != 0 {
+            return Err(error_invalid_data("invalid XZ index indicator"));
+        }
+
+        let index = Index::parse(&mut reader)?;
+
+        let mut block_start_pos = header_end_pos;
+
+        for record in &index.records {
+            self.blocks.push(XZBlock {
+                start_pos: block_start_pos,
+                unpadded_size: record.unpadded_size,
+                uncompressed_size: record.uncompressed_size,
+            });
+
+            let padding_needed = (4 - (record.unpadded_size % 4)) % 4;
+            let actual_block_size = record.unpadded_size + padding_needed;
+
+            block_start_pos += actual_block_size;
+        }
+
+        if self.blocks.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "No valid XZ blocks found",
+            ));
+        }
+
+        self.inner = Some(reader);
+        Ok(())
     }
 
     fn spawn_worker_thread(&mut self) {
@@ -107,15 +183,13 @@ impl<R: Read> LZMA2ReaderMT<R> {
         let shutdown_flag = Arc::clone(&self.shutdown_flag);
         let error_store = Arc::clone(&self.error_store);
         let active_workers = Arc::clone(&self.active_workers);
-        let preset_dict = self.preset_dict.clone();
-        let dict_size = self.dict_size;
+        let check_type = self.check_type;
 
         let handle = thread::spawn(move || {
             worker_thread_logic(
                 worker_handle,
                 result_tx,
-                dict_size,
-                preset_dict,
+                check_type,
                 shutdown_flag,
                 error_store,
                 active_workers,
@@ -125,99 +199,47 @@ impl<R: Read> LZMA2ReaderMT<R> {
         self.worker_handles.push(handle);
     }
 
-    /// The count of independent chunks found inside the compressed file.
-    /// This is effectively tha maximum parallelization possible.
-    pub fn chunk_count(&self) -> u64 {
-        self.next_sequence_to_return
+    /// Get the count of XZ blocks found in the file.
+    pub fn block_count(&self) -> usize {
+        self.blocks.len()
     }
 
-    /// Reads one LZMA2 chunk from the inner reader and appends it to the current work unit.
-    /// If the chunk is an independent block, it dispatches the current work unit.
-    ///
-    /// Returns `Ok(false)` on clean EOF, `Ok(true)` on success, and `Err` on I/O error.
-    fn read_and_dispatch_chunk(&mut self) -> io::Result<bool> {
-        let mut control_buf = [0u8; 1];
-        match self.inner.read_exact(&mut control_buf) {
-            Ok(_) => (),
-            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
-                // Clean end of stream.
-                return Ok(false);
-            }
-            Err(error) => return Err(error),
-        }
+    fn dispatch_next_block(&mut self) -> io::Result<bool> {
+        let block_index = self.next_sequence_to_dispatch as usize;
 
-        let control = control_buf[0];
-
-        if control == 0x00 {
-            // End of stream marker.
-            self.current_work_unit.push(0x00);
-            self.send_work_unit();
+        if block_index >= self.blocks.len() {
+            // No more blocks to dispatch.
             return Ok(false);
         }
 
-        let is_independent_chunk = control >= 0xE0 || control == 0x01;
+        let block = &self.blocks[block_index];
+        let mut reader = self.inner.take().expect("inner reader not set");
 
-        // Split work units before independent chunks (but not for the very first chunk).
-        if is_independent_chunk && !self.current_work_unit.is_empty() {
-            self.current_work_unit.push(0x00);
-            self.send_work_unit();
-        }
+        reader.seek(SeekFrom::Start(block.start_pos))?;
 
-        self.current_work_unit.push(control);
+        let padding_needed = (4 - (block.unpadded_size % 4)) % 4;
+        let total_block_size = block.unpadded_size + padding_needed;
 
-        let chunk_data_size = if control >= 0x80 {
-            // Compressed chunk. Read header to find size.
-            let header_len = if control >= 0xC0 { 5 } else { 4 };
-            let mut header_buf = [0; 5];
-            self.inner.read_exact(&mut header_buf[..header_len])?;
-            self.current_work_unit
-                .extend_from_slice(&header_buf[..header_len]);
-            u16::from_be_bytes([header_buf[2], header_buf[3]]) as usize + 1
-        } else if control == 0x01 || control == 0x02 {
-            // Uncompressed chunk.
-            let mut size_buf = [0u8; 2];
-            self.inner.read_exact(&mut size_buf)?;
-            self.current_work_unit.extend_from_slice(&size_buf);
-            u16::from_be_bytes(size_buf) as usize + 1
-        } else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid LZMA2 control byte: {control:X}"),
-            ));
-        };
+        let mut block_data = vec![0u8; total_block_size as usize];
+        reader.read_exact(&mut block_data)?;
 
-        // Read the chunk data itself.
-        if chunk_data_size > 0 {
-            let start_len = self.current_work_unit.len();
-            self.current_work_unit
-                .resize(start_len + chunk_data_size, 0);
-            self.inner
-                .read_exact(&mut self.current_work_unit[start_len..])?;
-        }
-
-        Ok(true)
-    }
-
-    /// Sends the current work unit to the workers.
-    fn send_work_unit(&mut self) {
-        if self.current_work_unit.is_empty() {
-            return;
-        }
-
-        let work_unit =
-            core::mem::replace(&mut self.current_work_unit, Vec::with_capacity(1024 * 1024));
+        self.inner = Some(reader);
 
         if !self
             .work_queue
-            .push((self.next_sequence_to_dispatch, work_unit))
+            .push((self.next_sequence_to_dispatch, block_data))
         {
             // Queue is closed, this indicates shutdown.
             self.state = State::Error;
             set_error(
-                io::Error::new(io::ErrorKind::BrokenPipe, "worker threads have shut down"),
+                io::Error::new(io::ErrorKind::BrokenPipe, "Worker threads have shut down"),
                 &self.error_store,
                 &self.shutdown_flag,
             );
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Worker threads have shut down",
+            ));
         }
 
         // We spawn a new thread if we have work queued, no available workers, and haven't reached
@@ -232,6 +254,7 @@ impl<R: Read> LZMA2ReaderMT<R> {
         }
 
         self.next_sequence_to_dispatch += 1;
+        Ok(true)
     }
 
     fn get_next_uncompressed_chunk(&mut self) -> io::Result<Option<Vec<u8>>> {
@@ -252,9 +275,9 @@ impl<R: Read> LZMA2ReaderMT<R> {
             }
 
             match self.state {
-                State::Reading => {
+                State::Dispatching => {
                     // First, always try to receive a result without blocking.
-                    // This keeps the pipeline moving and avoids unnecessary blocking on I/O.
+                    // This keeps the pipeline moving and avoids unnecessary blocking.
                     match self.result_rx.try_recv() {
                         Ok((seq, result)) => {
                             if seq == self.next_sequence_to_return {
@@ -262,7 +285,7 @@ impl<R: Read> LZMA2ReaderMT<R> {
                                 return Ok(Some(result));
                             } else {
                                 self.out_of_order_chunks.insert(seq, result);
-                                continue; // Loop again to check the out_of_order_chunks
+                                continue; // Loop again to check the out_of_order_chunks.
                             }
                         }
                         Err(mpsc::TryRecvError::Disconnected) => {
@@ -271,21 +294,20 @@ impl<R: Read> LZMA2ReaderMT<R> {
                             continue;
                         }
                         Err(mpsc::TryRecvError::Empty) => {
-                            // No results are ready. Now, we can consider reading more input.
+                            // No results are ready. Now, we can consider dispatching more work.
                         }
                     }
 
                     // If the work queue has capacity, try to read more from the source.
                     if self.work_queue.len() < 4 {
-                        match self.read_and_dispatch_chunk() {
+                        match self.dispatch_next_block() {
                             Ok(true) => {
-                                // Successfully read and dispatched a chunk, loop to continue.
+                                // Successfully read and dispatched a block, loop to continue.
                                 continue;
                             }
                             Ok(false) => {
-                                // Clean EOF from inner reader.
-                                // Send any remaining data as the final work unit.
-                                self.send_work_unit();
+                                // No more blocks to dispatch.
+                                // Set the last sequence ID and transition to draining.
                                 self.last_sequence_id =
                                     Some(self.next_sequence_to_dispatch.saturating_sub(1));
                                 self.state = State::Draining;
@@ -307,7 +329,7 @@ impl<R: Read> LZMA2ReaderMT<R> {
                                 return Ok(Some(result));
                             } else {
                                 self.out_of_order_chunks.insert(seq, result);
-                                // We've made progress, loop to check the out_of_order_chunks
+                                // We've made progress, loop to check the out_of_order_chunks.
                                 continue;
                             }
                         }
@@ -359,8 +381,7 @@ impl<R: Read> LZMA2ReaderMT<R> {
 fn worker_thread_logic(
     worker_handle: WorkerHandle<WorkUnit>,
     result_tx: Sender<ResultUnit>,
-    dict_size: u32,
-    preset_dict: Option<Arc<Vec<u8>>>,
+    check_type: CheckType,
     shutdown_flag: Arc<AtomicBool>,
     error_store: Arc<Mutex<Option<io::Error>>>,
     active_workers: Arc<AtomicU32>,
@@ -377,32 +398,54 @@ fn worker_thread_logic(
             }
         };
 
-        let mut reader = LZMA2Reader::new(
-            work_unit_data.as_slice(),
-            dict_size,
-            preset_dict.as_deref().map(|v| v.as_slice()),
-        );
+        let result = decompress_xz_block(work_unit_data, check_type);
 
-        let mut decompressed_data = Vec::with_capacity(work_unit_data.len());
-        let result = match reader.read_to_end(&mut decompressed_data) {
-            Ok(_) => decompressed_data,
+        match result {
+            Ok(decompressed_data) => {
+                if result_tx.send((seq, decompressed_data)).is_err() {
+                    active_workers.fetch_sub(1, Ordering::Release);
+                    return;
+                }
+            }
             Err(error) => {
                 active_workers.fetch_sub(1, Ordering::Release);
                 set_error(error, &error_store, &shutdown_flag);
                 return;
             }
-        };
-
-        if result_tx.send((seq, result)).is_err() {
-            active_workers.fetch_sub(1, Ordering::Release);
-            return;
         }
 
         active_workers.fetch_sub(1, Ordering::Release);
     }
 }
 
-impl<R: Read> Read for LZMA2ReaderMT<R> {
+/// Decompresses a single XZ block by parsing the header and applying filters directly.
+fn decompress_xz_block(block_data: Vec<u8>, check_type: CheckType) -> io::Result<Vec<u8>> {
+    let (filters, properties, header_size) = BlockHeader::parse_from_slice(&block_data)?;
+
+    let checksum_size = check_type.checksum_size() as usize;
+    let padding_in_block_data = (4 - (block_data.len() % 4)) % 4;
+    let unpadded_size_in_data = block_data.len() - padding_in_block_data;
+    let compressed_data_end = unpadded_size_in_data - checksum_size;
+
+    if compressed_data_end <= header_size {
+        return Err(error_invalid_data(
+            "Block data too short for compressed content",
+        ));
+    }
+
+    let compressed_data = block_data[header_size..compressed_data_end].to_vec();
+    let mut compressed_data = compressed_data.as_slice();
+
+    let base_reader: Box<dyn Read> = Box::new(&mut compressed_data);
+    let mut chain_reader = create_filter_chain(base_reader, &filters, &properties);
+
+    let mut decompressed_data = Vec::new();
+    chain_reader.read_to_end(&mut decompressed_data)?;
+
+    Ok(decompressed_data)
+}
+
+impl<R: Read + Seek> Read for XZReaderMT<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -428,7 +471,7 @@ impl<R: Read> Read for LZMA2ReaderMT<R> {
     }
 }
 
-impl<R: Read> Drop for LZMA2ReaderMT<R> {
+impl<R: Read + Seek> Drop for XZReaderMT<R> {
     fn drop(&mut self) {
         self.shutdown_flag.store(true, Ordering::Release);
         self.work_queue.close();

@@ -1,4 +1,5 @@
 use super::{
+    copy_error,
     decoder::LZMADecoder,
     error_invalid_input,
     lz::LZDecoder,
@@ -110,7 +111,7 @@ impl<R: Read> LZMA2Reader<R> {
             // Reset dictionary
             self.lz.reset();
         } else if self.need_dict_reset {
-            return Err(error_invalid_input("Corrupted input data (LZMA2:0)"));
+            return Err(error_invalid_input("corrupted input data (LZMA2:0)"));
         }
         if control >= 0x80 {
             self.is_lzma_chunk = true;
@@ -123,7 +124,7 @@ impl<R: Read> LZMA2Reader<R> {
                 self.need_props = false;
                 self.decode_props()?;
             } else if self.need_props {
-                return Err(error_invalid_input("Corrupted input data (LZMA2:1)"));
+                return Err(error_invalid_input("corrupted input data (LZMA2:1)"));
             } else if control >= 0xA0 {
                 // Reset state
                 if let Some(l) = self.lzma.as_mut() {
@@ -133,7 +134,7 @@ impl<R: Read> LZMA2Reader<R> {
 
             self.rc.prepare(&mut self.inner, compressed_size)?;
         } else if control > 0x02 {
-            return Err(error_invalid_input("Corrupted input data (LZMA2:2)"));
+            return Err(error_invalid_input("corrupted input data (LZMA2:2)"));
         } else {
             self.is_lzma_chunk = false;
             self.uncompressed_size = (self.inner.read_u16_be()? + 1) as _;
@@ -145,14 +146,14 @@ impl<R: Read> LZMA2Reader<R> {
     fn decode_props(&mut self) -> crate::Result<()> {
         let props = self.inner.read_u8()?;
         if props > (4 * 5 + 4) * 9 + 8 {
-            return Err(error_invalid_input("Corrupted input data (LZMA2:3)"));
+            return Err(error_invalid_input("corrupted input data (LZMA2:3)"));
         }
         let pb = props / (9 * 5);
         let props = props - pb * 9 * 5;
         let lp = props / 9;
         let lc = props - lp * 9;
         if lc + lp > 4 {
-            return Err(error_invalid_input("Corrupted input data (LZMA2:4)"));
+            return Err(error_invalid_input("corrupted input data (LZMA2:4)"));
         }
         self.lzma = Some(LZMADecoder::new(lc as _, lp as _, pb as _));
 
@@ -164,10 +165,7 @@ impl<R: Read> LZMA2Reader<R> {
             return Ok(0);
         }
         if let Some(error) = &self.error {
-            #[cfg(not(feature = "std"))]
-            return Err(*error);
-            #[cfg(feature = "std")]
-            return Err(Error::new(error.kind(), error.to_string()));
+            return Err(copy_error(error));
         }
 
         if self.end_reached {
