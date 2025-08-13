@@ -407,10 +407,15 @@ pub(crate) trait RangeReader {
 impl<T: Read> RangeReader for T {
     #[inline(always)]
     fn read_u8(&mut self) -> u8 {
+        // Out of bound reads return an 1, which is fine, since the
+        // LZMA reader will then throw a "dist overflow" error.
+        // Not returning an error results in code that can be better
+        // optimized in the hot path and overall 10% better decoding
+        // performance.
         let mut buf = [0; 1];
         match self.read_exact(&mut buf) {
             Ok(_) => buf[0],
-            Err(_) => 0,
+            Err(_) => 1,
         }
     }
 
@@ -431,12 +436,12 @@ impl<T: Read> RangeReader for T {
 impl RangeReader for RangeDecoderBuffer {
     #[inline(always)]
     fn read_u8(&mut self) -> u8 {
-        // Out of bound reads return an 0, which is fine, since a
-        // well-implemented decoder will not go out of bound.
+        // Out of bound reads return an 1, which is fine, since the
+        // LZMA reader will then throw a "dist overflow" error.
         // Not returning an error results in code that can be better
         // optimized in the hot path and overall 10% better decoding
         // performance.
-        let byte = *self.buf.get(self.pos).unwrap_or(&0);
+        let byte = *self.buf.get(self.pos).unwrap_or(&1);
         self.pos += 1;
         byte
     }

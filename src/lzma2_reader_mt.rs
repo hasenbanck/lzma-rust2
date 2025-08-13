@@ -4,7 +4,7 @@ use std::{
     io::{Cursor, Read},
     sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, Receiver, SyncSender},
         Arc, Mutex,
     },
     thread,
@@ -40,7 +40,7 @@ enum State {
 pub struct LZMA2ReaderMT<R: Read> {
     inner: R,
     result_rx: Receiver<ResultUnit>,
-    result_tx: Sender<ResultUnit>,
+    result_tx: SyncSender<ResultUnit>,
     current_work_unit: Vec<u8>,
     next_sequence_to_dispatch: u64,
     next_sequence_to_return: u64,
@@ -69,7 +69,7 @@ impl<R: Read> LZMA2ReaderMT<R> {
         let max_workers = num_workers.clamp(1, 256);
 
         let work_queue = WorkStealingQueue::new();
-        let (result_tx, result_rx) = mpsc::channel::<ResultUnit>();
+        let (result_tx, result_rx) = mpsc::sync_channel::<ResultUnit>(1);
         let shutdown_flag = Arc::new(AtomicBool::new(false));
         let error_store = Arc::new(Mutex::new(None));
         let active_workers = Arc::new(AtomicU32::new(0));
@@ -276,7 +276,7 @@ impl<R: Read> LZMA2ReaderMT<R> {
                     }
 
                     // If the work queue has capacity, try to read more from the source.
-                    if self.work_queue.len() < 4 {
+                    if self.work_queue.is_empty() {
                         match self.read_and_dispatch_chunk() {
                             Ok(true) => {
                                 // Successfully read and dispatched a chunk, loop to continue.
@@ -358,7 +358,7 @@ impl<R: Read> LZMA2ReaderMT<R> {
 /// The logic for a single worker thread.
 fn worker_thread_logic(
     worker_handle: WorkerHandle<WorkUnit>,
-    result_tx: Sender<ResultUnit>,
+    result_tx: SyncSender<ResultUnit>,
     dict_size: u32,
     preset_dict: Option<Arc<Vec<u8>>>,
     shutdown_flag: Arc<AtomicBool>,
