@@ -375,6 +375,16 @@ impl<W: Write> LZMA2Writer<W> {
         self.inner
     }
 
+    /// Returns a reference to the inner writer.
+    pub fn inner(&self) -> &W {
+        &self.inner
+    }
+
+    /// Returns a mutable reference to the inner writer.
+    pub fn inner_mut(&mut self) -> &mut W {
+        &mut self.inner
+    }
+
     /// Finishes the compression and returns the underlying writer.
     pub fn finish(mut self) -> crate::Result<W> {
         self.lzma.lz.set_finishing();

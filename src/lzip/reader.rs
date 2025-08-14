@@ -1,39 +1,7 @@
 use alloc::vec::Vec;
 
 use super::{LZIPHeader, LZIPTrailer, CRC32, HEADER_SIZE, TRAILER_SIZE};
-use crate::{error_invalid_data, error_invalid_input, LZMAReader, Read, Result};
-
-struct CountingReader<R> {
-    inner: R,
-    bytes_read: u64,
-}
-
-impl<R> CountingReader<R> {
-    fn new(inner: R) -> Self {
-        Self {
-            inner,
-            bytes_read: 0,
-        }
-    }
-
-    fn bytes_read(&self) -> u64 {
-        self.bytes_read
-    }
-}
-
-impl<R: Read> Read for CountingReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let bytes_read = self.inner.read(buf)?;
-        self.bytes_read += bytes_read as u64;
-        Ok(bytes_read)
-    }
-
-    fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {
-        self.inner.read_exact(buf)?;
-        self.bytes_read += buf.len() as u64;
-        Ok(())
-    }
-}
+use crate::{error_invalid_data, error_invalid_input, CountingReader, LZMAReader, Read, Result};
 
 /// A single-threaded LZIP decompressor.
 pub struct LZIPReader<R> {

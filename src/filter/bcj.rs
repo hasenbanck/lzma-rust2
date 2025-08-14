@@ -67,6 +67,16 @@ impl<R> BCJReader<R> {
         self.inner
     }
 
+    /// Returns a reference to the inner reader.
+    pub fn inner(&self) -> &R {
+        &self.inner
+    }
+
+    /// Returns a mutable reference to the inner reader.
+    pub fn inner_mut(&mut self) -> &mut R {
+        &mut self.inner
+    }
+
     /// Creates a new BCJ reader for x86 instruction filtering.
     #[inline]
     pub fn new_x86(inner: R, start_pos: usize) -> Self {
@@ -212,6 +222,16 @@ impl<W> BCJWriter<W> {
     /// Unwraps the writer, returning the underlying writer.
     pub fn into_inner(self) -> W {
         self.inner
+    }
+
+    /// Returns a reference to the inner writer.
+    pub fn inner(&self) -> &W {
+        &self.inner
+    }
+
+    /// Returns a mutable reference to the inner writer.
+    pub fn inner_mut(&mut self) -> &mut W {
+        &mut self.inner
     }
 
     /// Creates a new BCJ writer for x86 instruction filtering.

@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     enc::{LZMAOptions, LZMAWriter},
-    error_invalid_data, ByteWriter, Result, Write,
+    error_invalid_data, ByteWriter, CountingWriter, Result, Write,
 };
 
 /// Options for LZIP compression.
@@ -31,40 +31,6 @@ impl LZIPOptions {
     /// Set the maximum member size (None means a single member, which is the default).
     pub fn set_member_size(&mut self, member_size: Option<NonZeroU64>) {
         self.member_size = member_size;
-    }
-}
-
-struct CountingWriter<W> {
-    inner: W,
-    bytes_written: u64,
-}
-
-impl<W> CountingWriter<W> {
-    fn new(inner: W) -> Self {
-        Self {
-            inner,
-            bytes_written: 0,
-        }
-    }
-
-    fn bytes_written(&self) -> u64 {
-        self.bytes_written
-    }
-
-    fn into_inner(self) -> W {
-        self.inner
-    }
-}
-
-impl<W: Write> Write for CountingWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        let bytes_written = self.inner.write(buf)?;
-        self.bytes_written += bytes_written as u64;
-        Ok(bytes_written)
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        self.inner.flush()
     }
 }
 

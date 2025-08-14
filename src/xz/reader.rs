@@ -1,90 +1,137 @@
-use alloc::{boxed::Box, rc::Rc};
-use core::cell::{Cell, RefCell};
+use alloc::boxed::Box;
 
 use super::{
-    create_filter_chain, BlockHeader, ChecksumCalculator, Index, StreamFooter, StreamHeader,
-    XZ_MAGIC,
+    BlockHeader, ChecksumCalculator, FilterType, Index, StreamFooter, StreamHeader, XZ_MAGIC,
 };
-use crate::{error_invalid_data, Read, Result};
+use crate::filter::bcj::BCJReader;
+use crate::filter::delta::DeltaReader;
+use crate::{error_invalid_data, CountingReader, LZMA2Reader, Read, Result};
 
-struct BoundedReader<R> {
-    inner: R,
-    position: u64,
-    limit: u64,
+enum FilterReader<R: Read> {
+    Counting(CountingReader<R>),
+    LZMA2(LZMA2Reader<Box<FilterReader<R>>>),
+    Delta(DeltaReader<Box<FilterReader<R>>>),
+    BCJ(BCJReader<Box<FilterReader<R>>>),
+    Dummy,
 }
 
-impl<R> BoundedReader<R> {
-    fn new(inner: R, limit: u64) -> Self {
-        Self {
-            inner,
-            position: 0,
-            limit,
+impl<R: Read> Read for FilterReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        match self {
+            FilterReader::Counting(reader) => reader.read(buf),
+            FilterReader::LZMA2(reader) => reader.read(buf),
+            FilterReader::Delta(reader) => reader.read(buf),
+            FilterReader::BCJ(reader) => reader.read(buf),
+            FilterReader::Dummy => unimplemented!(),
+        }
+    }
+}
+
+impl<R: Read> FilterReader<R> {
+    fn create_filter_chain(inner: R, filters: &[Option<FilterType>], properties: &[u32]) -> Self {
+        let mut chain_reader = FilterReader::Counting(CountingReader::new(inner));
+
+        for (filter, property) in filters
+            .iter()
+            .copied()
+            .zip(properties)
+            .filter_map(|(filter, property)| filter.map(|filter| (filter, *property)))
+            .rev()
+        {
+            chain_reader = match filter {
+                FilterType::Delta => {
+                    let distance = property as usize;
+                    FilterReader::Delta(DeltaReader::new(Box::new(chain_reader), distance))
+                }
+                FilterType::BcjX86 => {
+                    let start_offset = property as usize;
+                    FilterReader::BCJ(BCJReader::new_x86(Box::new(chain_reader), start_offset))
+                }
+                FilterType::BcjPPC => {
+                    let start_offset = property as usize;
+                    FilterReader::BCJ(BCJReader::new_ppc(Box::new(chain_reader), start_offset))
+                }
+                FilterType::BcjIA64 => {
+                    let start_offset = property as usize;
+                    FilterReader::BCJ(BCJReader::new_ia64(Box::new(chain_reader), start_offset))
+                }
+                FilterType::BcjARM => {
+                    let start_offset = property as usize;
+                    FilterReader::BCJ(BCJReader::new_arm(Box::new(chain_reader), start_offset))
+                }
+                FilterType::BcjARMThumb => {
+                    let start_offset = property as usize;
+                    FilterReader::BCJ(BCJReader::new_arm_thumb(
+                        Box::new(chain_reader),
+                        start_offset,
+                    ))
+                }
+                FilterType::BcjSPARC => {
+                    let start_offset = property as usize;
+                    FilterReader::BCJ(BCJReader::new_sparc(Box::new(chain_reader), start_offset))
+                }
+                FilterType::BcjARM64 => {
+                    let start_offset = property as usize;
+                    FilterReader::BCJ(BCJReader::new_arm64(Box::new(chain_reader), start_offset))
+                }
+                FilterType::BcjRISCV => {
+                    let start_offset = property as usize;
+                    FilterReader::BCJ(BCJReader::new_riscv(Box::new(chain_reader), start_offset))
+                }
+                FilterType::LZMA2 => {
+                    let dict_size = property;
+                    FilterReader::LZMA2(LZMA2Reader::new(Box::new(chain_reader), dict_size, None))
+                }
+            };
+        }
+
+        chain_reader
+    }
+
+    fn bytes_read(&self) -> u64 {
+        match self {
+            FilterReader::Counting(reader) => reader.bytes_read(),
+            FilterReader::LZMA2(reader) => reader.inner().bytes_read(),
+            FilterReader::Delta(reader) => reader.inner().bytes_read(),
+            FilterReader::BCJ(reader) => reader.inner().bytes_read(),
+            FilterReader::Dummy => unimplemented!(),
         }
     }
 
     fn into_inner(self) -> R {
-        self.inner
-    }
-}
-
-impl<R: Read> Read for BoundedReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        if self.position >= self.limit {
-            return Ok(0);
+        match self {
+            FilterReader::Counting(reader) => reader.inner,
+            FilterReader::LZMA2(reader) => {
+                let filter_reader = reader.into_inner();
+                filter_reader.into_inner()
+            }
+            FilterReader::Delta(reader) => {
+                let filter_reader = reader.into_inner();
+                filter_reader.into_inner()
+            }
+            FilterReader::BCJ(reader) => {
+                let filter_reader = reader.into_inner();
+                filter_reader.into_inner()
+            }
+            FilterReader::Dummy => unimplemented!(),
         }
-
-        let left = (self.limit - self.position).min(buf.len() as u64) as usize;
-        let read_size = self.inner.read(&mut buf[..left])?;
-        self.position += read_size as u64;
-        Ok(read_size)
     }
-}
-
-struct SharedReader<R> {
-    inner: Rc<RefCell<R>>,
-    compressed_bytes_read: Rc<Cell<u64>>,
 }
 
 /// A single-threaded XZ decompressor.
-pub struct XZReader<'reader, R> {
-    reader: Box<dyn Read + 'reader>,
+pub struct XZReader<R: Read> {
+    reader: FilterReader<R>,
     stream_header: Option<StreamHeader>,
     checksum_calculator: Option<ChecksumCalculator>,
     finished: bool,
     allow_multiple_streams: bool,
     blocks_processed: u64,
-    compressed_bytes_read: Rc<Cell<u64>>,
-    original_reader: Rc<RefCell<R>>,
 }
 
-impl<R> SharedReader<R> {
-    fn new(inner: R, compressed_bytes_read: Rc<Cell<u64>>) -> Self {
-        Self {
-            inner: Rc::new(RefCell::new(inner)),
-            compressed_bytes_read,
-        }
-    }
-}
-
-impl<R: Read> Read for SharedReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let mut reader = self.inner.borrow_mut();
-        let bytes_read = reader.read(buf)?;
-        self.compressed_bytes_read
-            .set(self.compressed_bytes_read.get() + bytes_read as u64);
-        Ok(bytes_read)
-    }
-}
-
-impl<'reader, R: Read + 'reader> XZReader<'reader, R> {
+impl<R: Read> XZReader<R> {
     /// Create a new [`XZReader`].
     pub fn new(inner: R, allow_multiple_streams: bool) -> Self {
-        let compressed_bytes_read = Rc::new(Cell::new(0));
-        let original_reader = Rc::new(RefCell::new(inner));
-        let reader = Box::new(SharedReader {
-            inner: Rc::clone(&original_reader),
-            compressed_bytes_read: Rc::clone(&compressed_bytes_read),
-        });
+        let reader = FilterReader::Counting(CountingReader::new(inner));
 
         Self {
             reader,
@@ -93,31 +140,16 @@ impl<'reader, R: Read + 'reader> XZReader<'reader, R> {
             finished: false,
             allow_multiple_streams,
             blocks_processed: 0,
-            compressed_bytes_read,
-            original_reader,
         }
     }
 
     /// Consume the XZReader and return the inner reader.
     pub fn into_inner(self) -> R {
-        let Self {
-            reader,
-            original_reader,
-            ..
-        } = self;
-
-        drop(reader);
-
-        match Rc::try_unwrap(original_reader) {
-            Ok(refcell) => refcell.into_inner(),
-            Err(_) => {
-                panic!("failed to unwrap original reader - other references exists");
-            }
-        }
+        self.reader.into_inner()
     }
 }
 
-impl<'reader, R: Read + 'reader> XZReader<'reader, R> {
+impl<R: Read> XZReader<R> {
     fn ensure_stream_header(&mut self) -> Result<()> {
         if self.stream_header.is_none() {
             let header = StreamHeader::parse(&mut self.reader)?;
@@ -129,12 +161,11 @@ impl<'reader, R: Read + 'reader> XZReader<'reader, R> {
     fn prepare_next_block(&mut self) -> Result<bool> {
         match BlockHeader::parse(&mut self.reader)? {
             Some(block_header) => {
-                static DUMMY: &[u8] = &[];
-                let base_reader: Box<dyn Read + 'reader> =
-                    core::mem::replace(&mut self.reader, Box::new(DUMMY));
+                let base_reader: FilterReader<R> =
+                    core::mem::replace(&mut self.reader, FilterReader::Dummy);
 
-                self.reader = create_filter_chain(
-                    base_reader,
+                self.reader = FilterReader::create_filter_chain(
+                    base_reader.into_inner(),
                     &block_header.filters,
                     &block_header.properties,
                 );
@@ -166,8 +197,8 @@ impl<'reader, R: Read + 'reader> XZReader<'reader, R> {
         }
     }
 
-    fn consume_padding(&mut self) -> Result<()> {
-        let padding_needed = match (4 - (self.compressed_bytes_read.get() % 4)) % 4 {
+    fn consume_padding(&mut self, compressed_bytes: u64) -> Result<()> {
+        let padding_needed = match (4 - (compressed_bytes % 4)) % 4 {
             0 => return Ok(()),
             n => n as usize,
         };
@@ -310,7 +341,7 @@ impl<'reader, R: Read + 'reader> XZReader<'reader, R> {
     }
 }
 
-impl<'reader, R: Read + 'reader> Read for XZReader<'reader, R> {
+impl<R: Read> Read for XZReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         if self.finished {
             return Ok(0);
@@ -329,15 +360,14 @@ impl<'reader, R: Read + 'reader> Read for XZReader<'reader, R> {
 
                     return Ok(bytes_read);
                 } else {
-                    // Current block is finished.
-                    let shared_reader = Box::new(SharedReader {
-                        inner: Rc::clone(&self.original_reader),
-                        compressed_bytes_read: Rc::clone(&self.compressed_bytes_read),
-                    });
+                    let reader = core::mem::replace(&mut self.reader, FilterReader::Dummy);
+                    let compressed_bytes = reader.bytes_read();
+                    self.reader = FilterReader::Counting(CountingReader::with_count(
+                        reader.into_inner(),
+                        compressed_bytes,
+                    ));
 
-                    self.reader = shared_reader;
-
-                    self.consume_padding()?;
+                    self.consume_padding(compressed_bytes)?;
                     self.verify_block_checksum()?;
                 }
             } else {

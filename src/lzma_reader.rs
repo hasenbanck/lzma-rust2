@@ -71,6 +71,16 @@ impl<R> LZMAReader<R> {
     pub fn into_inner(self) -> R {
         self.rc.into_inner()
     }
+
+    /// Returns a reference to the inner reader.
+    pub fn inner(&self) -> &R {
+        &self.rc.inner()
+    }
+
+    /// Returns a mutable reference to the inner reader.
+    pub fn inner_mut(&mut self) -> &mut R {
+        self.rc.inner_mut()
+    }
 }
 
 impl<R: Read> LZMAReader<R> {

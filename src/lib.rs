@@ -500,3 +500,74 @@ fn error_unsupported(msg: &'static str) -> Error {
 fn copy_error(error: &Error) -> Error {
     *error
 }
+
+struct CountingReader<R> {
+    inner: R,
+    bytes_read: u64,
+}
+
+impl<R> CountingReader<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            bytes_read: 0,
+        }
+    }
+
+    fn with_count(inner: R, bytes_read: u64) -> Self {
+        Self { inner, bytes_read }
+    }
+
+    fn bytes_read(&self) -> u64 {
+        self.bytes_read
+    }
+
+    fn into_inner(self) -> R {
+        self.inner
+    }
+}
+
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        let read_size = self.inner.read(buf)?;
+        self.bytes_read += read_size as u64;
+        Ok(read_size)
+    }
+}
+
+#[cfg(feature = "encoder")]
+struct CountingWriter<W> {
+    inner: W,
+    bytes_written: u64,
+}
+
+#[cfg(feature = "encoder")]
+impl<W> CountingWriter<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            bytes_written: 0,
+        }
+    }
+
+    fn bytes_written(&self) -> u64 {
+        self.bytes_written
+    }
+
+    fn into_inner(self) -> W {
+        self.inner
+    }
+}
+
+#[cfg(feature = "encoder")]
+impl<W: Write> Write for CountingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        let bytes_written = self.inner.write(buf)?;
+        self.bytes_written += bytes_written as u64;
+        Ok(bytes_written)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.inner.flush()
+    }
+}

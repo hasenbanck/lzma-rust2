@@ -9,11 +9,13 @@ use std::{
     thread,
 };
 
-use super::{create_filter_chain, BlockHeader, CheckType, Index, StreamFooter, StreamHeader};
+use super::{BlockHeader, CheckType, FilterType, Index, StreamFooter, StreamHeader};
+use crate::filter::bcj::BCJReader;
+use crate::filter::delta::DeltaReader;
 use crate::{
     error_invalid_data, set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
-    ByteReader, Read,
+    ByteReader, LZMA2Reader, Read,
 };
 
 #[derive(Debug, Clone)]
@@ -443,6 +445,65 @@ fn decompress_xz_block(block_data: Vec<u8>, check_type: CheckType) -> io::Result
     chain_reader.read_to_end(&mut decompressed_data)?;
 
     Ok(decompressed_data)
+}
+
+fn create_filter_chain<'reader>(
+    mut chain_reader: Box<dyn Read + 'reader>,
+    filters: &[Option<FilterType>],
+    properties: &[u32],
+) -> Box<dyn Read + 'reader> {
+    for (filter, property) in filters
+        .iter()
+        .copied()
+        .zip(properties)
+        .filter_map(|(filter, property)| filter.map(|filter| (filter, *property)))
+        .rev()
+    {
+        chain_reader = match filter {
+            FilterType::Delta => {
+                let distance = property as usize;
+                Box::new(DeltaReader::new(chain_reader, distance))
+            }
+            FilterType::BcjX86 => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_x86(chain_reader, start_offset))
+            }
+            FilterType::BcjPPC => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_ppc(chain_reader, start_offset))
+            }
+            FilterType::BcjIA64 => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_ia64(chain_reader, start_offset))
+            }
+            FilterType::BcjARM => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_arm(chain_reader, start_offset))
+            }
+            FilterType::BcjARMThumb => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_arm_thumb(chain_reader, start_offset))
+            }
+            FilterType::BcjSPARC => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_sparc(chain_reader, start_offset))
+            }
+            FilterType::BcjARM64 => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_arm64(chain_reader, start_offset))
+            }
+            FilterType::BcjRISCV => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_riscv(chain_reader, start_offset))
+            }
+            FilterType::LZMA2 => {
+                let dict_size = property;
+                Box::new(LZMA2Reader::new(chain_reader, dict_size, None))
+            }
+        };
+    }
+
+    chain_reader
 }
 
 impl<R: Read + Seek> Read for XZReaderMT<R> {

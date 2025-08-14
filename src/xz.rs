@@ -17,11 +17,7 @@ pub use writer::{XZOptions, XZWriter};
 #[cfg(all(feature = "encoder", feature = "std"))]
 pub use writer_mt::XZWriterMT;
 
-use crate::{
-    error_invalid_data, error_invalid_input,
-    filter::{bcj::BCJReader, delta::DeltaReader},
-    ByteReader, ByteWriter, LZMA2Reader, Read, Write,
-};
+use crate::{error_invalid_data, error_invalid_input, ByteReader, ByteWriter, Read, Write};
 
 const CRC32: crc::Crc<u32, crc::Table<16>> =
     crc::Crc::<u32, crc::Table<16>>::new(&crc::CRC_32_ISO_HDLC);
@@ -141,66 +137,6 @@ impl FilterConfig {
             property: start_pos,
         }
     }
-}
-
-fn create_filter_chain<'reader>(
-    mut chain_reader: Box<dyn Read + 'reader>,
-    filters: &[Option<FilterType>],
-    properties: &[u32],
-) -> Box<dyn Read + 'reader> {
-    for (filter, property) in filters
-        .iter()
-        .copied()
-        .zip(properties)
-        .filter_map(|(filter, property)| filter.map(|filter| (filter, *property)))
-        .rev()
-    {
-        let new_reader: Box<dyn Read> = match filter {
-            FilterType::Delta => {
-                let distance = property as usize;
-                Box::new(DeltaReader::new(chain_reader, distance))
-            }
-            FilterType::BcjX86 => {
-                let start_offset = property as usize;
-                Box::new(BCJReader::new_x86(chain_reader, start_offset))
-            }
-            FilterType::BcjPPC => {
-                let start_offset = property as usize;
-                Box::new(BCJReader::new_ppc(chain_reader, start_offset))
-            }
-            FilterType::BcjIA64 => {
-                let start_offset = property as usize;
-                Box::new(BCJReader::new_ia64(chain_reader, start_offset))
-            }
-            FilterType::BcjARM => {
-                let start_offset = property as usize;
-                Box::new(BCJReader::new_arm(chain_reader, start_offset))
-            }
-            FilterType::BcjARMThumb => {
-                let start_offset = property as usize;
-                Box::new(BCJReader::new_arm_thumb(chain_reader, start_offset))
-            }
-            FilterType::BcjSPARC => {
-                let start_offset = property as usize;
-                Box::new(BCJReader::new_sparc(chain_reader, start_offset))
-            }
-            FilterType::BcjARM64 => {
-                let start_offset = property as usize;
-                Box::new(BCJReader::new_arm64(chain_reader, start_offset))
-            }
-            FilterType::BcjRISCV => {
-                let start_offset = property as usize;
-                Box::new(BCJReader::new_riscv(chain_reader, start_offset))
-            }
-            FilterType::LZMA2 => {
-                let dict_size = property;
-                Box::new(LZMA2Reader::new(chain_reader, dict_size, None))
-            }
-        };
-        chain_reader = new_reader;
-    }
-
-    chain_reader
 }
 
 /// Supported checksum types in XZ format.
