@@ -74,7 +74,7 @@ impl<R> LZMAReader<R> {
 
     /// Returns a reference to the inner reader.
     pub fn inner(&self) -> &R {
-        &self.rc.inner()
+        self.rc.inner()
     }
 
     /// Returns a mutable reference to the inner reader.

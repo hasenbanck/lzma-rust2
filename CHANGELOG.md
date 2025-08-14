@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.9.0 - 2025-08-14
+
+### Changed
+
+- `XZReader` and `XZWriter` are now Send.
+- Most reader and writer now have "inner()" and "inner_mut()" functions.
+
+### Updated
+
+- Internally refactoring to reduce code duplication for multi-threading code.
+
 ## 0.8.2 - 2025-08-13
 
 ### Fixed

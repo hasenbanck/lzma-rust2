@@ -12,11 +12,12 @@ use crate::{
     CountingWriter, LZMA2Options, Result, Write,
 };
 
+#[allow(clippy::large_enum_variant)]
 enum FilterWriter<W: Write> {
     Counting(CountingWriter<W>),
     LZMA2(LZMA2Writer<Box<FilterWriter<W>>>),
     Delta(DeltaWriter<Box<FilterWriter<W>>>),
-    BCJ(BCJWriter<Box<FilterWriter<W>>>),
+    Bcj(BCJWriter<Box<FilterWriter<W>>>),
     Dummy,
 }
 
@@ -26,7 +27,7 @@ impl<W: Write> Write for FilterWriter<W> {
             FilterWriter::Counting(writer) => writer.write(buf),
             FilterWriter::LZMA2(writer) => writer.write(buf),
             FilterWriter::Delta(writer) => writer.write(buf),
-            FilterWriter::BCJ(writer) => writer.write(buf),
+            FilterWriter::Bcj(writer) => writer.write(buf),
             FilterWriter::Dummy => unimplemented!(),
         }
     }
@@ -36,7 +37,7 @@ impl<W: Write> Write for FilterWriter<W> {
             FilterWriter::Counting(writer) => writer.flush(),
             FilterWriter::LZMA2(writer) => writer.flush(),
             FilterWriter::Delta(writer) => writer.flush(),
-            FilterWriter::BCJ(writer) => writer.flush(),
+            FilterWriter::Bcj(writer) => writer.flush(),
             FilterWriter::Dummy => unimplemented!(),
         }
     }
@@ -58,38 +59,38 @@ impl<W: Write> FilterWriter<W> {
                 }
                 FilterType::BcjX86 => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::BCJ(BCJWriter::new_x86(Box::new(chain_writer), start_offset))
+                    FilterWriter::Bcj(BCJWriter::new_x86(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjPPC => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::BCJ(BCJWriter::new_ppc(Box::new(chain_writer), start_offset))
+                    FilterWriter::Bcj(BCJWriter::new_ppc(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjIA64 => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::BCJ(BCJWriter::new_ia64(Box::new(chain_writer), start_offset))
+                    FilterWriter::Bcj(BCJWriter::new_ia64(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjARM => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::BCJ(BCJWriter::new_arm(Box::new(chain_writer), start_offset))
+                    FilterWriter::Bcj(BCJWriter::new_arm(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjARMThumb => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::BCJ(BCJWriter::new_arm_thumb(
+                    FilterWriter::Bcj(BCJWriter::new_arm_thumb(
                         Box::new(chain_writer),
                         start_offset,
                     ))
                 }
                 FilterType::BcjSPARC => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::BCJ(BCJWriter::new_sparc(Box::new(chain_writer), start_offset))
+                    FilterWriter::Bcj(BCJWriter::new_sparc(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjARM64 => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::BCJ(BCJWriter::new_arm64(Box::new(chain_writer), start_offset))
+                    FilterWriter::Bcj(BCJWriter::new_arm64(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjRISCV => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::BCJ(BCJWriter::new_riscv(Box::new(chain_writer), start_offset))
+                    FilterWriter::Bcj(BCJWriter::new_riscv(Box::new(chain_writer), start_offset))
                 }
                 FilterType::LZMA2 => {
                     let options = LZMA2Options {
@@ -115,7 +116,7 @@ impl<W: Write> FilterWriter<W> {
                 let filter_writer = writer.into_inner();
                 filter_writer.into_inner()
             }
-            FilterWriter::BCJ(writer) => {
+            FilterWriter::Bcj(writer) => {
                 let filter_writer = writer.into_inner();
                 filter_writer.into_inner()
             }
@@ -134,7 +135,7 @@ impl<W: Write> FilterWriter<W> {
                 let inner_writer = writer.into_inner();
                 inner_writer.finish()
             }
-            FilterWriter::BCJ(writer) => {
+            FilterWriter::Bcj(writer) => {
                 let inner_writer = writer.into_inner();
                 inner_writer.finish()
             }

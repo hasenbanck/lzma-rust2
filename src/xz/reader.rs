@@ -3,15 +3,18 @@ use alloc::boxed::Box;
 use super::{
     BlockHeader, ChecksumCalculator, FilterType, Index, StreamFooter, StreamHeader, XZ_MAGIC,
 };
-use crate::filter::bcj::BCJReader;
-use crate::filter::delta::DeltaReader;
-use crate::{error_invalid_data, CountingReader, LZMA2Reader, Read, Result};
+use crate::{
+    error_invalid_data,
+    filter::{bcj::BCJReader, delta::DeltaReader},
+    CountingReader, LZMA2Reader, Read, Result,
+};
 
+#[allow(clippy::large_enum_variant)]
 enum FilterReader<R: Read> {
     Counting(CountingReader<R>),
     LZMA2(LZMA2Reader<Box<FilterReader<R>>>),
     Delta(DeltaReader<Box<FilterReader<R>>>),
-    BCJ(BCJReader<Box<FilterReader<R>>>),
+    Bcj(BCJReader<Box<FilterReader<R>>>),
     Dummy,
 }
 
@@ -21,7 +24,7 @@ impl<R: Read> Read for FilterReader<R> {
             FilterReader::Counting(reader) => reader.read(buf),
             FilterReader::LZMA2(reader) => reader.read(buf),
             FilterReader::Delta(reader) => reader.read(buf),
-            FilterReader::BCJ(reader) => reader.read(buf),
+            FilterReader::Bcj(reader) => reader.read(buf),
             FilterReader::Dummy => unimplemented!(),
         }
     }
@@ -45,38 +48,38 @@ impl<R: Read> FilterReader<R> {
                 }
                 FilterType::BcjX86 => {
                     let start_offset = property as usize;
-                    FilterReader::BCJ(BCJReader::new_x86(Box::new(chain_reader), start_offset))
+                    FilterReader::Bcj(BCJReader::new_x86(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjPPC => {
                     let start_offset = property as usize;
-                    FilterReader::BCJ(BCJReader::new_ppc(Box::new(chain_reader), start_offset))
+                    FilterReader::Bcj(BCJReader::new_ppc(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjIA64 => {
                     let start_offset = property as usize;
-                    FilterReader::BCJ(BCJReader::new_ia64(Box::new(chain_reader), start_offset))
+                    FilterReader::Bcj(BCJReader::new_ia64(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjARM => {
                     let start_offset = property as usize;
-                    FilterReader::BCJ(BCJReader::new_arm(Box::new(chain_reader), start_offset))
+                    FilterReader::Bcj(BCJReader::new_arm(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjARMThumb => {
                     let start_offset = property as usize;
-                    FilterReader::BCJ(BCJReader::new_arm_thumb(
+                    FilterReader::Bcj(BCJReader::new_arm_thumb(
                         Box::new(chain_reader),
                         start_offset,
                     ))
                 }
                 FilterType::BcjSPARC => {
                     let start_offset = property as usize;
-                    FilterReader::BCJ(BCJReader::new_sparc(Box::new(chain_reader), start_offset))
+                    FilterReader::Bcj(BCJReader::new_sparc(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjARM64 => {
                     let start_offset = property as usize;
-                    FilterReader::BCJ(BCJReader::new_arm64(Box::new(chain_reader), start_offset))
+                    FilterReader::Bcj(BCJReader::new_arm64(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjRISCV => {
                     let start_offset = property as usize;
-                    FilterReader::BCJ(BCJReader::new_riscv(Box::new(chain_reader), start_offset))
+                    FilterReader::Bcj(BCJReader::new_riscv(Box::new(chain_reader), start_offset))
                 }
                 FilterType::LZMA2 => {
                     let dict_size = property;
@@ -93,7 +96,7 @@ impl<R: Read> FilterReader<R> {
             FilterReader::Counting(reader) => reader.bytes_read(),
             FilterReader::LZMA2(reader) => reader.inner().bytes_read(),
             FilterReader::Delta(reader) => reader.inner().bytes_read(),
-            FilterReader::BCJ(reader) => reader.inner().bytes_read(),
+            FilterReader::Bcj(reader) => reader.inner().bytes_read(),
             FilterReader::Dummy => unimplemented!(),
         }
     }
@@ -109,7 +112,7 @@ impl<R: Read> FilterReader<R> {
                 let filter_reader = reader.into_inner();
                 filter_reader.into_inner()
             }
-            FilterReader::BCJ(reader) => {
+            FilterReader::Bcj(reader) => {
                 let filter_reader = reader.into_inner();
                 filter_reader.into_inner()
             }

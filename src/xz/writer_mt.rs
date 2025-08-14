@@ -189,7 +189,7 @@ impl<W: Write> XZWriterMT<W> {
     }
 
     /// Consume the XZWriterMT and return the inner writer.
-    pub fn into_inner(mut self) -> W {
+    pub fn into_inner(self) -> W {
         self.inner
     }
 

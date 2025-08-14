@@ -8,8 +8,8 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 use liblzma::{bufread::*, stream::*};
 use lzma_rust2::{
     LZIPOptions, LZIPReaderMT, LZIPWriter, LZIPWriterMT, LZMA2Options, LZMA2Reader, LZMA2ReaderMT,
-    LZMA2Writer, LZMA2WriterMT, LZMAOptions, LZMAReader, LZMAWriter, XZOptions, XZReader,
-    XZReaderMT, XZWriter, XZWriterMT,
+    LZMA2Writer, LZMA2WriterMT, LZMAOptions, LZMAReader, LZMAWriter, XZOptions, XZReaderMT,
+    XZWriter, XZWriterMT,
 };
 
 static TEST_DATA: &[u8] = include_bytes!("../tests/data/executable.exe");

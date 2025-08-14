@@ -8,6 +8,7 @@ mod writer;
 #[cfg(all(feature = "encoder", feature = "std"))]
 mod writer_mt;
 
+use alloc::{boxed::Box, vec, vec::Vec};
 #[cfg(feature = "std")]
 use std::io::{self, Seek, SeekFrom};
 
@@ -20,10 +21,11 @@ pub use writer::{XZOptions, XZWriter};
 #[cfg(all(feature = "encoder", feature = "std"))]
 pub use writer_mt::XZWriterMT;
 
+use crate::{error_invalid_data, error_invalid_input, ByteReader, ByteWriter, Read, Write};
+#[cfg(feature = "std")]
 use crate::{
-    error_invalid_data, error_invalid_input,
     filter::{bcj::BCJReader, delta::DeltaReader},
-    ByteReader, ByteWriter, LZMA2Reader, Read, Write,
+    LZMA2Reader,
 };
 
 const CRC32: crc::Crc<u32, crc::Table<16>> =
@@ -953,10 +955,7 @@ impl Index {
 }
 
 #[cfg(feature = "encoder")]
-fn write_xz_stream_header<W: Write + ?Sized>(
-    mut writer: &mut W,
-    check_type: CheckType,
-) -> crate::Result<()> {
+fn write_xz_stream_header<W: Write>(writer: &mut W, check_type: CheckType) -> crate::Result<()> {
     writer.write_all(&XZ_MAGIC)?;
 
     let stream_flags = [0u8, check_type as u8];
@@ -1073,6 +1072,7 @@ fn scan_blocks<R: Read + Seek>(mut reader: R) -> io::Result<(R, Vec<Block>, Chec
     Ok((reader, blocks, check_type))
 }
 
+#[cfg(feature = "std")]
 fn create_filter_chain<'reader>(
     mut chain_reader: Box<dyn Read + 'reader>,
     filters: &[Option<FilterType>],
@@ -1220,8 +1220,8 @@ fn generate_block_header_data(
 }
 
 #[cfg(feature = "encoder")]
-fn write_xz_block_header<W: Write + ?Sized>(
-    mut writer: &mut W,
+fn write_xz_block_header<W: Write>(
+    writer: &mut W,
     filters: &[FilterConfig],
     lzma_dict_size: u32,
 ) -> crate::Result<u64> {
@@ -1252,10 +1252,7 @@ fn write_xz_block_header<W: Write + ?Sized>(
 }
 
 #[cfg(feature = "encoder")]
-fn write_xz_index<W: Write + ?Sized>(
-    mut writer: &mut W,
-    index_records: &[IndexRecord],
-) -> crate::Result<()> {
+fn write_xz_index<W: Write>(writer: &mut W, index_records: &[IndexRecord]) -> crate::Result<()> {
     let mut index_data = Vec::new();
 
     let mut temp_buf = [0u8; 10];
@@ -1290,8 +1287,8 @@ fn write_xz_index<W: Write + ?Sized>(
 }
 
 #[cfg(feature = "encoder")]
-fn write_xz_stream_footer<W: Write + ?Sized>(
-    mut writer: &mut W,
+fn write_xz_stream_footer<W: Write>(
+    writer: &mut W,
     index_records: &[IndexRecord],
     check_type: CheckType,
 ) -> crate::Result<()> {

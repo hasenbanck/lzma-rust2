@@ -23,7 +23,7 @@ struct WorkUnit {
 
 /// A multi-threaded LZIP compressor.
 pub struct LZIPWriterMT<W: Write> {
-    inner: Option<W>,
+    inner: W,
     options: LZIPOptions,
     current_work_unit: Vec<u8>,
     member_size: usize,
@@ -53,7 +53,7 @@ impl<W: Write> LZIPWriterMT<W> {
         let num_work = u64::MAX;
 
         Ok(Self {
-            inner: Some(inner),
+            inner,
             options,
             current_work_unit: Vec::with_capacity(member_size.min(1024 * 1024)),
             member_size,
@@ -98,17 +98,14 @@ impl<W: Write> LZIPWriterMT<W> {
     /// Drains all currently available results from the work pool and writes them.
     fn drain_available_results(&mut self) -> io::Result<()> {
         while let Some(compressed_data) = self.work_pool.try_get_result()? {
-            self.inner
-                .as_mut()
-                .expect("inner is empty")
-                .write_all(&compressed_data)?;
+            self.inner.write_all(&compressed_data)?;
         }
         Ok(())
     }
 
     /// Consume the LZIPWriterMT and return the inner writer.
-    pub fn into_inner(mut self) -> W {
-        self.inner.take().expect("inner is empty")
+    pub fn into_inner(self) -> W {
+        self.inner
     }
 
     /// Finishes the compression and returns the underlying writer.
@@ -119,17 +116,15 @@ impl<W: Write> LZIPWriterMT<W> {
 
         // If no data was provided to compress, write an empty LZIP file (single empty member).
         if self.work_pool.next_index_to_dispatch() == 0 {
-            let mut inner = self.inner.take().expect("inner is empty");
-
             let mut options = self.options.clone();
             options.member_size = None;
             let lzip_writer = LZIPWriter::new(Vec::new(), options);
             let empty_member = lzip_writer.finish()?;
 
-            inner.write_all(&empty_member)?;
-            inner.flush()?;
+            self.inner.write_all(&empty_member)?;
+            self.inner.flush()?;
 
-            return Ok(inner);
+            return Ok(self.inner);
         }
 
         // Mark the WorkPool as finished so it knows no more work is coming.
@@ -142,16 +137,12 @@ impl<W: Write> LZIPWriterMT<W> {
                 "no more work to dispatch",
             ))
         })? {
-            self.inner
-                .as_mut()
-                .expect("inner is empty")
-                .write_all(&compressed_data)?;
+            self.inner.write_all(&compressed_data)?;
         }
 
-        let mut inner = self.inner.take().expect("inner is empty");
-        inner.flush()?;
+        self.inner.flush()?;
 
-        Ok(inner)
+        Ok(self.inner)
     }
 }
 
@@ -242,12 +233,9 @@ impl<W: Write> Write for LZIPWriterMT<W> {
 
         // Wait for all pending work to complete and write the results.
         while let Some(compressed_data) = self.work_pool.try_get_result()? {
-            self.inner
-                .as_mut()
-                .expect("inner is empty")
-                .write_all(&compressed_data)?;
+            self.inner.write_all(&compressed_data)?;
         }
 
-        self.inner.as_mut().expect("inner is empty").flush()
+        self.inner.flush()
     }
 }
