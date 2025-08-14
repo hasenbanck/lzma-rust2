@@ -11,6 +11,9 @@ mod writer;
 #[cfg(all(feature = "encoder", feature = "std"))]
 mod writer_mt;
 
+#[cfg(feature = "std")]
+use std::io::{Seek, SeekFrom};
+
 pub use reader::LZIPReader;
 #[cfg(feature = "std")]
 pub use reader_mt::LZIPReaderMT;
@@ -170,6 +173,85 @@ fn encode_dict_size(dict_size: u32) -> Result<u8> {
     }
 
     Ok(((fraction_num << 5) | (base_log2 & 0x1F)) as u8)
+}
+
+#[cfg(feature = "std")]
+#[derive(Debug, Clone)]
+struct LZIPMember {
+    start_pos: u64,
+    compressed_size: u64,
+}
+
+/// Scan the LZIP file to collect information about all members.
+/// This reads from the back of the file to efficiently locate member boundaries.
+#[cfg(feature = "std")]
+fn scan_members<R: Read + Seek>(mut reader: R) -> Result<(R, Vec<LZIPMember>)> {
+    let file_size = reader.seek(SeekFrom::End(0))?;
+
+    if file_size < (HEADER_SIZE + TRAILER_SIZE) as u64 {
+        return Err(error_invalid_data(
+            "file too small to contain a valid LZIP member",
+        ));
+    }
+
+    let mut members = Vec::new();
+    let mut current_pos = file_size;
+
+    while current_pos > 0 {
+        if current_pos < TRAILER_SIZE as u64 {
+            break;
+        }
+
+        // Seek to read the trailer (last 20 bytes of current member).
+        reader.seek(SeekFrom::Start(current_pos - TRAILER_SIZE as u64))?;
+        let mut trailer_buf = [0u8; TRAILER_SIZE];
+        reader.read_exact(&mut trailer_buf)?;
+
+        // member_size is in bytes 12-19 of the trailer (little endian)
+        let member_size = u64::from_le_bytes([
+            trailer_buf[12],
+            trailer_buf[13],
+            trailer_buf[14],
+            trailer_buf[15],
+            trailer_buf[16],
+            trailer_buf[17],
+            trailer_buf[18],
+            trailer_buf[19],
+        ]);
+
+        if member_size == 0 || member_size > current_pos {
+            return Err(error_invalid_data("invalid LZIP member size in trailer"));
+        }
+
+        let member_start = current_pos - member_size;
+
+        // Verify this looks like a valid LZIP header.
+        reader.seek(SeekFrom::Start(member_start))?;
+        let mut header_buf = [0u8; 4];
+        reader.read_exact(&mut header_buf)?;
+
+        if header_buf != [b'L', b'Z', b'I', b'P'] {
+            return Err(error_invalid_data("invalid LZIP magic bytes"));
+        }
+
+        members.push(LZIPMember {
+            start_pos: member_start,
+            compressed_size: member_size,
+        });
+
+        current_pos = member_start;
+    }
+
+    reader.seek(SeekFrom::Start(0))?;
+
+    if members.is_empty() {
+        return Err(error_invalid_data("no valid LZIP members found"));
+    }
+
+    // Reverse to get members in forward order.
+    members.reverse();
+
+    Ok((reader, members))
 }
 
 #[cfg(test)]

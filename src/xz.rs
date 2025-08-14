@@ -8,6 +8,9 @@ mod writer;
 #[cfg(all(feature = "encoder", feature = "std"))]
 mod writer_mt;
 
+#[cfg(feature = "std")]
+use std::io::{self, Seek, SeekFrom};
+
 pub use reader::XZReader;
 #[cfg(feature = "std")]
 pub use reader_mt::XZReaderMT;
@@ -17,7 +20,11 @@ pub use writer::{XZOptions, XZWriter};
 #[cfg(all(feature = "encoder", feature = "std"))]
 pub use writer_mt::XZWriterMT;
 
-use crate::{error_invalid_data, error_invalid_input, ByteReader, ByteWriter, Read, Write};
+use crate::{
+    error_invalid_data, error_invalid_input,
+    filter::{bcj::BCJReader, delta::DeltaReader},
+    ByteReader, ByteWriter, LZMA2Reader, Read, Write,
+};
 
 const CRC32: crc::Crc<u32, crc::Table<16>> =
     crc::Crc::<u32, crc::Table<16>>::new(&crc::CRC_32_ISO_HDLC);
@@ -52,10 +59,18 @@ struct StreamFooter {
 
 #[derive(Debug)]
 struct BlockHeader {
+    header_size: usize,
     compressed_size: Option<u64>,
     uncompressed_size: Option<u64>,
     filters: [Option<FilterType>; 4],
     properties: [u32; 4],
+}
+
+#[derive(Debug, Clone)]
+struct Block {
+    start_pos: u64,
+    unpadded_size: u64,
+    uncompressed_size: u64,
 }
 
 /// Configuration for a filter in the XZ filter chain.
@@ -536,6 +551,7 @@ impl BlockHeader {
         }
 
         Ok(Some(BlockHeader {
+            header_size,
             compressed_size,
             uncompressed_size,
             filters,
@@ -982,6 +998,138 @@ fn update_crc_with_padding(crc: &mut crc::Digest<'_, u32, crc::Table<16>>, paddi
         3 => crc.update(&[0, 0, 0]),
         _ => {}
     }
+}
+
+/// Scan the XZ file to collect information about all blocks.
+/// This reads the index at the end of the file to efficiently locate block boundaries.
+#[cfg(feature = "std")]
+fn scan_blocks<R: Read + Seek>(mut reader: R) -> io::Result<(R, Vec<Block>, CheckType)> {
+    let stream_header = StreamHeader::parse(&mut reader)?;
+    let check_type = stream_header.check_type;
+
+    let header_end_pos = reader.stream_position()?;
+
+    let file_size = reader.seek(SeekFrom::End(0))?;
+
+    // Minimum XZ file: 12 byte header + 12 byte footer + 8 byte minimum index.
+    if file_size < 32 {
+        return Err(error_invalid_data(
+            "File too small to contain a valid XZ stream",
+        ));
+    }
+
+    reader.seek(SeekFrom::End(-12))?;
+
+    let stream_footer = StreamFooter::parse(&mut reader)?;
+
+    let header_flags = [0, check_type as u8];
+
+    if stream_footer.stream_flags != header_flags {
+        return Err(error_invalid_data(
+            "stream header and footer flags mismatch",
+        ));
+    }
+
+    // Now read the index using backward size.
+    let index_size = (stream_footer.backward_size + 1) * 4;
+    let index_start_pos = file_size - 12 - index_size as u64;
+
+    reader.seek(SeekFrom::Start(index_start_pos))?;
+
+    // Parse the index.
+    let index_indicator = reader.read_u8()?;
+
+    if index_indicator != 0 {
+        return Err(error_invalid_data("invalid XZ index indicator"));
+    }
+
+    let index = Index::parse(&mut reader)?;
+
+    let mut blocks = Vec::new();
+    let mut block_start_pos = header_end_pos;
+
+    for record in &index.records {
+        blocks.push(Block {
+            start_pos: block_start_pos,
+            unpadded_size: record.unpadded_size,
+            uncompressed_size: record.uncompressed_size,
+        });
+
+        let padding_needed = (4 - (record.unpadded_size % 4)) % 4;
+        let actual_block_size = record.unpadded_size + padding_needed;
+
+        block_start_pos += actual_block_size;
+    }
+
+    if blocks.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "No valid XZ blocks found",
+        ));
+    }
+
+    reader.seek(SeekFrom::Start(0))?;
+
+    Ok((reader, blocks, check_type))
+}
+
+fn create_filter_chain<'reader>(
+    mut chain_reader: Box<dyn Read + 'reader>,
+    filters: &[Option<FilterType>],
+    properties: &[u32],
+) -> Box<dyn Read + 'reader> {
+    for (filter, property) in filters
+        .iter()
+        .copied()
+        .zip(properties)
+        .filter_map(|(filter, property)| filter.map(|filter| (filter, *property)))
+        .rev()
+    {
+        chain_reader = match filter {
+            FilterType::Delta => {
+                let distance = property as usize;
+                Box::new(DeltaReader::new(chain_reader, distance))
+            }
+            FilterType::BcjX86 => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_x86(chain_reader, start_offset))
+            }
+            FilterType::BcjPPC => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_ppc(chain_reader, start_offset))
+            }
+            FilterType::BcjIA64 => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_ia64(chain_reader, start_offset))
+            }
+            FilterType::BcjARM => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_arm(chain_reader, start_offset))
+            }
+            FilterType::BcjARMThumb => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_arm_thumb(chain_reader, start_offset))
+            }
+            FilterType::BcjSPARC => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_sparc(chain_reader, start_offset))
+            }
+            FilterType::BcjARM64 => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_arm64(chain_reader, start_offset))
+            }
+            FilterType::BcjRISCV => {
+                let start_offset = property as usize;
+                Box::new(BCJReader::new_riscv(chain_reader, start_offset))
+            }
+            FilterType::LZMA2 => {
+                let dict_size = property;
+                Box::new(LZMA2Reader::new(chain_reader, dict_size, None))
+            }
+        };
+    }
+
+    chain_reader
 }
 
 #[cfg(feature = "encoder")]

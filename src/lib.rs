@@ -76,6 +76,7 @@ pub mod filter;
 mod lzma2_reader_mt;
 #[cfg(not(feature = "std"))]
 mod no_std;
+mod work_pool;
 
 #[cfg(feature = "std")]
 pub(crate) use std::io::Error;
