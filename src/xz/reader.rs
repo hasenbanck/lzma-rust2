@@ -146,6 +146,11 @@ impl<R: Read> XZReader<R> {
         }
     }
 
+    /// Returns a reference to the inner reader.
+    pub fn inner(&self) -> &R {
+        self.reader.inner()
+    }
+
     /// Consume the XZReader and return the inner reader.
     pub fn into_inner(self) -> R {
         self.reader.into_inner()
