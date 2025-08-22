@@ -119,6 +119,25 @@ impl<R: Read> FilterReader<R> {
             FilterReader::Dummy => unimplemented!(),
         }
     }
+
+    fn inner(&self) -> &R {
+        match self {
+            FilterReader::Counting(reader) => &reader.inner,
+            FilterReader::LZMA2(reader) => {
+                let filter_reader = reader.inner();
+                filter_reader.inner()
+            }
+            FilterReader::Delta(reader) => {
+                let filter_reader = reader.inner();
+                filter_reader.inner()
+            }
+            FilterReader::Bcj(reader) => {
+                let filter_reader = reader.inner();
+                filter_reader.inner()
+            }
+            FilterReader::Dummy => unimplemented!(),
+        }
+    }
 }
 
 /// A single-threaded XZ decompressor.
