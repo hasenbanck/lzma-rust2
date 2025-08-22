@@ -89,6 +89,22 @@ impl<W: Write> LZIPWriter<W> {
         self.inner.take().expect("inner writer not set")
     }
 
+    /// Returns a reference to the inner writer.
+    pub fn inner(&self) -> &W {
+        self.lzma_writer
+            .as_ref()
+            .map(|reader| reader.inner().inner())
+            .unwrap_or_else(|| self.inner.as_ref().expect("inner writer not set"))
+    }
+
+    /// Returns a mutable reference to the inner writer.
+    pub fn inner_mut(&mut self) -> &mut W {
+        self.lzma_writer
+            .as_mut()
+            .map(|reader| reader.inner_mut().inner_mut())
+            .unwrap_or_else(|| self.inner.as_mut().expect("inner writer not set"))
+    }
+
     /// Check if we should finish the current member and start a new one.
     fn should_finish_member(&self) -> bool {
         if let Some(member_size) = self.options.member_size {

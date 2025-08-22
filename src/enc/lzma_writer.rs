@@ -107,6 +107,16 @@ impl<W: Write> LZMAWriter<W> {
         self.rc.into_inner()
     }
 
+    /// Returns a reference to the inner writer.
+    pub fn inner(&self) -> &W {
+        self.rc.inner()
+    }
+
+    /// Returns a mutable reference to the inner writer.
+    pub fn inner_mut(&mut self) -> &mut W {
+        self.rc.inner_mut()
+    }
+
     /// Finishes the compression and returns the underlying writer.
     pub fn finish(mut self) -> crate::Result<W> {
         if let Some(exp) = self.expected_uncompressed_size {

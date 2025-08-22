@@ -40,7 +40,12 @@ impl<W: Write> RangeEncoder<W> {
     }
 
     #[inline]
-    pub(crate) fn inner(&mut self) -> &mut W {
+    pub(crate) fn inner(&self) -> &W {
+        &self.inner
+    }
+
+    #[inline]
+    pub(crate) fn inner_mut(&mut self) -> &mut W {
         &mut self.inner
     }
 

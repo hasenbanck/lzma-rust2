@@ -119,6 +119,45 @@ impl<R: Read> FilterReader<R> {
             FilterReader::Dummy => unimplemented!(),
         }
     }
+
+    fn inner(&self) -> &R {
+        match self {
+            FilterReader::Counting(reader) => &reader.inner,
+            FilterReader::LZMA2(reader) => {
+                let filter_reader = reader.inner();
+
+                filter_reader.inner()
+            }
+            FilterReader::Delta(reader) => {
+                let filter_reader = reader.inner();
+                filter_reader.inner()
+            }
+            FilterReader::Bcj(reader) => {
+                let filter_reader = reader.inner();
+                filter_reader.inner()
+            }
+            FilterReader::Dummy => unimplemented!(),
+        }
+    }
+
+    fn inner_mut(&mut self) -> &mut R {
+        match self {
+            FilterReader::Counting(reader) => &mut reader.inner,
+            FilterReader::LZMA2(reader) => {
+                let filter_reader = reader.inner_mut();
+                filter_reader.inner_mut()
+            }
+            FilterReader::Delta(reader) => {
+                let filter_reader = reader.inner_mut();
+                filter_reader.inner_mut()
+            }
+            FilterReader::Bcj(reader) => {
+                let filter_reader = reader.inner_mut();
+                filter_reader.inner_mut()
+            }
+            FilterReader::Dummy => unimplemented!(),
+        }
+    }
 }
 
 /// A single-threaded XZ decompressor.
@@ -149,6 +188,16 @@ impl<R: Read> XZReader<R> {
     /// Consume the XZReader and return the inner reader.
     pub fn into_inner(self) -> R {
         self.reader.into_inner()
+    }
+
+    /// Returns a reference to the inner reader.
+    pub fn inner(&self) -> &R {
+        self.reader.inner()
+    }
+
+    /// Returns a mutable reference to the inner reader.
+    pub fn inner_mut(&mut self) -> &mut R {
+        self.reader.inner_mut()
     }
 }
 

@@ -23,6 +23,22 @@ impl<R> LZIPReader<R> {
 
         self.inner.take().expect("inner reader not set")
     }
+
+    /// Returns a reference to the inner reader.
+    pub fn inner(&self) -> &R {
+        self.lzma_reader
+            .as_ref()
+            .map(|reader| reader.inner().inner())
+            .unwrap_or_else(|| self.inner.as_ref().expect("inner reader not set"))
+    }
+
+    /// Returns a mutable reference to the inner reader.
+    pub fn inner_mut(&mut self) -> &mut R {
+        self.lzma_reader
+            .as_mut()
+            .map(|reader| reader.inner_mut().inner_mut())
+            .unwrap_or_else(|| self.inner.as_mut().expect("inner reader not set"))
+    }
 }
 
 impl<R: Read> LZIPReader<R> {

@@ -124,6 +124,44 @@ impl<W: Write> FilterWriter<W> {
         }
     }
 
+    fn inner(&self) -> &W {
+        match self {
+            FilterWriter::Counting(writer) => &writer.inner,
+            FilterWriter::LZMA2(writer) => {
+                let filter_writer = writer.inner();
+                filter_writer.inner()
+            }
+            FilterWriter::Delta(writer) => {
+                let filter_writer = writer.inner();
+                filter_writer.inner()
+            }
+            FilterWriter::Bcj(writer) => {
+                let filter_writer = writer.inner();
+                filter_writer.inner()
+            }
+            FilterWriter::Dummy => unimplemented!(),
+        }
+    }
+
+    fn inner_mut(&mut self) -> &mut W {
+        match self {
+            FilterWriter::Counting(writer) => &mut writer.inner,
+            FilterWriter::LZMA2(writer) => {
+                let filter_writer = writer.inner_mut();
+                filter_writer.inner_mut()
+            }
+            FilterWriter::Delta(writer) => {
+                let filter_writer = writer.inner_mut();
+                filter_writer.inner_mut()
+            }
+            FilterWriter::Bcj(writer) => {
+                let filter_writer = writer.inner_mut();
+                filter_writer.inner_mut()
+            }
+            FilterWriter::Dummy => unimplemented!(),
+        }
+    }
+
     fn finish(self) -> Result<CountingWriter<W>> {
         match self {
             FilterWriter::Counting(writer) => Ok(writer),
@@ -259,6 +297,16 @@ impl<W: Write> XZWriter<W> {
     /// Consume the XZWriter and return the inner writer.
     pub fn into_inner(self) -> W {
         self.writer.into_inner()
+    }
+
+    /// Returns a reference to the inner writer.
+    pub fn inner(&self) -> &W {
+        self.writer.inner()
+    }
+
+    /// Returns a mutable reference to the inner writer.
+    pub fn inner_mut(&mut self) -> &mut W {
+        self.writer.inner_mut()
     }
 
     fn write_stream_header(&mut self) -> Result<()> {

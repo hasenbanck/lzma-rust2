@@ -527,6 +527,14 @@ impl<R> CountingReader<R> {
     fn into_inner(self) -> R {
         self.inner
     }
+
+    fn inner(&self) -> &R {
+        &self.inner
+    }
+
+    fn inner_mut(&mut self) -> &mut R {
+        &mut self.inner
+    }
 }
 
 impl<R: Read> Read for CountingReader<R> {
@@ -558,6 +566,14 @@ impl<W> CountingWriter<W> {
 
     fn into_inner(self) -> W {
         self.inner
+    }
+
+    fn inner(&self) -> &W {
+        &self.inner
+    }
+
+    fn inner_mut(&mut self) -> &mut W {
+        &mut self.inner
     }
 }
 
