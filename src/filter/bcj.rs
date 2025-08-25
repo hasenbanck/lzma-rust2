@@ -281,31 +281,44 @@ impl<W> BCJWriter<W> {
     pub fn new_riscv(inner: W, start_pos: usize) -> Self {
         Self::new(inner, BCJFilter::new_riscv(start_pos, true))
     }
+
+    /// Finishes writing by flushing any remaining unprocessed data.
+    /// This should be called when no more data will be written.
+    pub fn finish(mut self) -> crate::Result<W>
+    where
+        W: Write,
+    {
+        if !self.buffer.is_empty() {
+            // Write any remaining unprocessed data.
+            self.inner.write_all(&self.buffer)?;
+            self.buffer.clear();
+        }
+        self.inner.flush()?;
+        Ok(self.inner)
+    }
 }
 
 #[cfg(feature = "encoder")]
 impl<W: Write> Write for BCJWriter<W> {
     fn write(&mut self, buf: &[u8]) -> crate::Result<usize> {
-        let data_size = buf.len();
+        let original_len = buf.len();
 
-        if data_size > self.buffer.len() {
-            self.buffer.resize(data_size, 0);
-        }
+        self.buffer.extend_from_slice(buf);
 
-        self.buffer[..data_size].copy_from_slice(buf);
-        let filtered_size = self.filter.code(&mut self.buffer[..data_size]);
+        let filtered_size = self.filter.code(&mut self.buffer);
 
-        // BCJ filters may not process all bytes, so we need to handle the processed portion.
         if filtered_size > 0 {
-            self.inner.write(&self.buffer[..filtered_size])?;
+            self.inner.write_all(&self.buffer[..filtered_size])?;
         }
 
-        // If not all bytes were processed, we need to handle the remainder.
-        if filtered_size < data_size {
-            self.inner.write(&self.buffer[filtered_size..data_size])?;
+        if filtered_size < self.buffer.len() {
+            self.buffer.copy_within(filtered_size.., 0);
+            self.buffer.truncate(self.buffer.len() - filtered_size);
+        } else {
+            self.buffer.clear();
         }
 
-        Ok(data_size)
+        Ok(original_len)
     }
 
     fn flush(&mut self) -> crate::Result<()> {
@@ -327,6 +340,7 @@ mod tests {
         let mut encoded_buffer = Vec::new();
         let mut writer = BCJWriter::new_x86(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
+        writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
@@ -344,6 +358,7 @@ mod tests {
         let mut encoded_buffer = Vec::new();
         let mut writer = BCJWriter::new_arm(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
+        writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
@@ -361,6 +376,7 @@ mod tests {
         let mut encoded_buffer = Vec::new();
         let mut writer = BCJWriter::new_arm64(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
+        writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
@@ -378,6 +394,7 @@ mod tests {
         let mut encoded_buffer = Vec::new();
         let mut writer = BCJWriter::new_arm_thumb(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
+        writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
@@ -395,6 +412,7 @@ mod tests {
         let mut encoded_buffer = Vec::new();
         let mut writer = BCJWriter::new_ppc(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
+        writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
@@ -412,6 +430,7 @@ mod tests {
         let mut encoded_buffer = Vec::new();
         let mut writer = BCJWriter::new_sparc(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
+        writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
@@ -429,6 +448,7 @@ mod tests {
         let mut encoded_buffer = Vec::new();
         let mut writer = BCJWriter::new_ia64(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
+        writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
@@ -446,6 +466,7 @@ mod tests {
         let mut encoded_buffer = Vec::new();
         let mut writer = BCJWriter::new_riscv(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
+        writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
