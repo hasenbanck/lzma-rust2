@@ -18,9 +18,9 @@ pub use reader::LZIPReader;
 #[cfg(feature = "std")]
 pub use reader_mt::LZIPReaderMT;
 #[cfg(feature = "encoder")]
-pub use writer::{LZIPOptions, LZIPWriter};
+pub use writer::{AutoFinishLZIPWriter, LZIPOptions, LZIPWriter};
 #[cfg(all(feature = "encoder", feature = "std"))]
-pub use writer_mt::LZIPWriterMT;
+pub use writer_mt::{AutoFinishLZIPWriterMT, LZIPWriterMT};
 
 use crate::{error_invalid_data, error_invalid_input, ByteReader, Read, Result};
 

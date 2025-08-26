@@ -93,10 +93,10 @@ pub use lz::MFType;
 pub use lzip::LZIPReader;
 #[cfg(all(feature = "lzip", feature = "std"))]
 pub use lzip::LZIPReaderMT;
-#[cfg(all(feature = "lzip", feature = "encoder", feature = "std"))]
-pub use lzip::LZIPWriterMT;
 #[cfg(all(feature = "lzip", feature = "encoder"))]
-pub use lzip::{LZIPOptions, LZIPWriter};
+pub use lzip::{AutoFinishLZIPWriter, LZIPOptions, LZIPWriter};
+#[cfg(all(feature = "lzip", feature = "encoder", feature = "std"))]
+pub use lzip::{AutoFinishLZIPWriterMT, LZIPWriterMT};
 pub use lzma2_reader::{get_memory_usage as lzma2_get_memory_usage, LZMA2Reader};
 #[cfg(feature = "std")]
 pub use lzma2_reader_mt::LZMA2ReaderMT;
@@ -113,12 +113,12 @@ pub use no_std::Write;
 use state::*;
 #[cfg(all(feature = "xz", feature = "std"))]
 pub use xz::XZReaderMT;
+#[cfg(all(feature = "xz", feature = "encoder"))]
+pub use xz::{AutoFinishXZWriter, XZOptions, XZWriter};
 #[cfg(all(feature = "xz", feature = "encoder", feature = "std"))]
-pub use xz::XZWriterMT;
+pub use xz::{AutoFinishXZWriterMT, XZWriterMT};
 #[cfg(feature = "xz")]
 pub use xz::{CheckType, XZReader};
-#[cfg(all(feature = "xz", feature = "encoder"))]
-pub use xz::{XZOptions, XZWriter};
 
 /// Result type of the crate.
 #[cfg(feature = "std")]

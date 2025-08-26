@@ -80,6 +80,11 @@ impl<W: Write> LZIPWriter<W> {
         }
     }
 
+    /// Returns a wrapper around `self` that will finish the stream on drop.
+    pub fn auto_finish(self) -> AutoFinishLZIPWriter<W> {
+        AutoFinishLZIPWriter(Some(self))
+    }
+
     /// Consume the writer and return the inner writer.
     pub fn into_inner(mut self) -> W {
         if let Some(lzma_writer) = self.lzma_writer.take() {
@@ -247,5 +252,28 @@ impl<W: Write> Write for LZIPWriter<W> {
             lzma_writer.flush()?;
         }
         Ok(())
+    }
+}
+
+/// A wrapper around an [`LZIPWriter<W>`] that finishes the stream on drop.
+///
+/// This can be created by the [`LZIPWriter::auto_finish`] method.
+pub struct AutoFinishLZIPWriter<W: Write>(Option<LZIPWriter<W>>);
+
+impl<W: Write> Drop for AutoFinishLZIPWriter<W> {
+    fn drop(&mut self) {
+        if let Some(writer) = self.0.take() {
+            let _ = writer.finish();
+        }
+    }
+}
+
+impl<W: Write> Write for AutoFinishLZIPWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        self.0.as_mut().unwrap().write(buf)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.0.as_mut().unwrap().flush()
     }
 }

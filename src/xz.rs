@@ -17,9 +17,9 @@ pub use reader::XZReader;
 pub use reader_mt::XZReaderMT;
 use sha2::Digest;
 #[cfg(feature = "encoder")]
-pub use writer::{XZOptions, XZWriter};
+pub use writer::{AutoFinishXZWriter, XZOptions, XZWriter};
 #[cfg(all(feature = "encoder", feature = "std"))]
-pub use writer_mt::XZWriterMT;
+pub use writer_mt::{AutoFinishXZWriterMT, XZWriterMT};
 
 use crate::{error_invalid_data, error_invalid_input, ByteReader, ByteWriter, Read, Write};
 #[cfg(feature = "std")]

@@ -294,6 +294,11 @@ impl<W: Write> XZWriter<W> {
         })
     }
 
+    /// Returns a wrapper around `self` that will finish the stream on drop.
+    pub fn auto_finish(self) -> AutoFinishXZWriter<W> {
+        AutoFinishXZWriter(Some(self))
+    }
+
     /// Consume the XZWriter and return the inner writer.
     pub fn into_inner(self) -> W {
         self.writer.into_inner()
@@ -485,5 +490,28 @@ impl<W: Write> Write for XZWriter<W> {
 
     fn flush(&mut self) -> Result<()> {
         self.writer.flush()
+    }
+}
+
+/// A wrapper around an [`XZWriter<W>`] that finishes the stream on drop.
+///
+/// This can be created by the [`XZWriter::auto_finish`] method.
+pub struct AutoFinishXZWriter<W: Write>(Option<XZWriter<W>>);
+
+impl<W: Write> Drop for AutoFinishXZWriter<W> {
+    fn drop(&mut self) {
+        if let Some(writer) = self.0.take() {
+            let _ = writer.finish();
+        }
+    }
+}
+
+impl<W: Write> Write for AutoFinishXZWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        self.0.as_mut().unwrap().write(buf)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.0.as_mut().unwrap().flush()
     }
 }
