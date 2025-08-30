@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{error_invalid_input, error_unsupported, Write};
 
-/// A single-threaded LZMA2 compressor.
+/// A single-threaded LZMA compressor.
 pub struct LZMAWriter<W: Write> {
     rc: RangeEncoder<W>,
     lzma: LZMAEncoder,
