@@ -70,7 +70,7 @@ impl<W: Write> LZMAWriter<W> {
         })
     }
 
-    /// Creates a new LZMA writer that includes a header with the specified input size.
+    /// Creates a new LZMA writer that includes a .lzma header with the specified input size.
     #[inline]
     pub fn new_use_header(
         out: W,
@@ -80,7 +80,7 @@ impl<W: Write> LZMAWriter<W> {
         Self::new(out, options, true, input_size.is_none(), input_size)
     }
 
-    /// Creates a new LZMA writer without a header.
+    /// Creates a new LZMA writer without a .lzma header.
     #[inline]
     pub fn new_no_header(
         out: W,
