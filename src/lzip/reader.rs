@@ -26,10 +26,10 @@ impl<R> LZIPReader<R> {
 
     /// Returns a reference to the inner reader.
     pub fn inner(&self) -> &R {
-        self.lzma_reader
-            .as_ref()
-            .map(|reader| reader.inner().inner())
-            .unwrap_or_else(|| self.inner.as_ref().expect("inner reader not set"))
+        self.lzma_reader.as_ref().map_or_else(
+            || self.inner.as_ref().expect("inner reader not set"),
+            |reader| reader.inner().inner(),
+        )
     }
 
     /// Returns a mutable reference to the inner reader.
@@ -60,14 +60,11 @@ impl<R: Read> LZIPReader<R> {
     fn start_next_member(&mut self) -> Result<bool> {
         let mut reader = self.inner.take().expect("inner reader not set");
 
-        let header = match LZIPHeader::parse(&mut reader) {
-            Ok(header) => header,
-            Err(_) => {
-                // If header parsing fails, we've probably reached EOF:
-                // Put the reader back and indicate we're done:
-                self.inner = Some(reader);
-                return Ok(false);
-            }
+        let Ok(header) = LZIPHeader::parse(&mut reader) else {
+            // If header parsing fails, we've probably reached EOF:
+            // Put the reader back and indicate we're done:
+            self.inner = Some(reader);
+            return Ok(false);
         };
 
         if header.version != 1 {
@@ -165,13 +162,12 @@ impl<R: Read> Read for LZIPReader<R> {
             } else if self.finished {
                 // Already finished, return EOF.
                 return Ok(0);
-            } else {
-                // No active LZMA reader, start the first/next member.
-                if !self.start_next_member()? {
-                    // No members found, we're done.
-                    self.finished = true;
-                    return Ok(0);
-                }
+            }
+            // No active LZMA reader, start the first/next member.
+            if !self.start_next_member()? {
+                // No members found, we're done.
+                self.finished = true;
+                return Ok(0);
             }
         }
     }

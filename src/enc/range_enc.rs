@@ -76,7 +76,7 @@ impl<W: Write> RangeEncoder<W> {
         if low_hi != 0 || self.low < 0xFF000000u64 {
             let mut temp = self.cache;
             loop {
-                self.write_byte((temp as i32 + low_hi) as u8)?;
+                self.write_byte((i32::from(temp) + low_hi) as u8)?;
                 temp = 0xFF;
                 self.cache_size -= 1;
                 if self.cache_size == 0 {
@@ -98,12 +98,12 @@ impl<W: Write> RangeEncoder<W> {
         bit: u32,
     ) -> crate::Result<()> {
         let prob = &mut probs[index];
-        let bound = (self.range >> BIT_MODEL_TOTAL_BITS) * (*prob as u32);
+        let bound = (self.range >> BIT_MODEL_TOTAL_BITS) * u32::from(*prob);
         if bit == 0 {
             self.range = bound;
-            *prob += ((BIT_MODEL_TOTAL.wrapping_sub(*prob as u32)) >> MOVE_BITS) as u16;
+            *prob += ((BIT_MODEL_TOTAL.wrapping_sub(u32::from(*prob))) >> MOVE_BITS) as u16;
         } else {
-            self.low += bound as u64;
+            self.low += u64::from(bound);
             self.range = self.range.wrapping_sub(bound);
             *prob -= (*prob) >> (MOVE_BITS as u16);
         }
@@ -158,7 +158,7 @@ impl<W: Write> RangeEncoder<W> {
             self.range >>= 1;
             count -= 1;
             let m = 0u32.wrapping_sub((value >> count) & 1);
-            self.low += (self.range & m) as u64;
+            self.low += u64::from(self.range & m);
 
             if self.range & TOP_MASK == 0 {
                 self.range <<= SHIFT_BITS;
@@ -177,7 +177,7 @@ impl RangeEncoder<()> {
     pub(crate) fn get_bit_price(prob: u32, bit: i32) -> u32 {
         debug_assert!(bit == 0 || bit == 1);
         let i = (prob ^ ((-bit) as u32 & (BIT_MODEL_TOTAL - 1))) >> MOVE_REDUCING_BITS;
-        PRICES[i as usize] as u32
+        u32::from(PRICES[i as usize])
     }
 
     pub(crate) fn get_bit_tree_price(probs: &mut [u16], symbol: u32) -> u32 {
@@ -187,7 +187,7 @@ impl RangeEncoder<()> {
         loop {
             let bit = symbol & 1;
             symbol >>= 1;
-            price += Self::get_bit_price(probs[symbol as usize] as u32, bit as i32);
+            price += Self::get_bit_price(u32::from(probs[symbol as usize]), bit as i32);
             if symbol == 1 {
                 break;
             }
@@ -204,7 +204,7 @@ impl RangeEncoder<()> {
         loop {
             let bit = symbol & 1;
             symbol >>= 1;
-            price += Self::get_bit_price(probs[index as usize] as u32, bit as i32);
+            price += Self::get_bit_price(u32::from(probs[index as usize]), bit as i32);
             index = (index << 1) | bit;
             if symbol == 1 {
                 break;

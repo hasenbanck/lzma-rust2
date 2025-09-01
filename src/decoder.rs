@@ -156,8 +156,8 @@ impl LiteralDecoder {
     }
 
     fn reset(&mut self) {
-        for ele in self.sub_decoders.iter_mut() {
-            ele.coder.reset()
+        for ele in &mut self.sub_decoders {
+            ele.coder.reset();
         }
     }
 
@@ -169,7 +169,7 @@ impl LiteralDecoder {
     ) -> crate::Result<()> {
         let i = self
             .coder
-            .get_sub_coder_index(lz.get_byte(0) as _, lz.get_pos() as _);
+            .get_sub_coder_index(lz.get_byte(0).into(), lz.get_pos() as _);
         let d = &mut self.sub_decoders[i as usize];
         d.decode(coder, lz, rc)
     }
@@ -205,7 +205,7 @@ impl LiteralSubDecoder {
             }
         } else {
             let r = coder.reps[0];
-            let mut match_byte = lz.get_byte(r as usize) as u32;
+            let mut match_byte = u32::from(lz.get_byte(r as usize));
             let mut offset = 0x100;
             let mut match_bit;
             let mut bit;

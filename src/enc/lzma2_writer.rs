@@ -223,13 +223,16 @@ impl<W: Write> LZMA2Writer<W> {
             lzma_options.nice_len as usize,
         );
 
-        let mut dict_reset_needed = true;
-        if let Some(preset_dict) = &lzma_options.preset_dict {
+        let dict_reset_needed = if let Some(preset_dict) = &lzma_options.preset_dict {
             lzma.lz.set_preset_dict(dict_size, preset_dict);
-            dict_reset_needed = false;
-        }
+            false
+        } else {
+            true
+        };
 
-        let chunk_size = options.chunk_size.map(|s| s.get().max(dict_size as u64));
+        let chunk_size = options
+            .chunk_size
+            .map(|s| s.get().max(u64::from(dict_size)));
 
         Self {
             inner,
@@ -363,7 +366,7 @@ impl<W: Write> LZMA2Writer<W> {
             self.write_uncompressed(uncompressed_size)?;
         }
         self.pending_size -= uncompressed_size;
-        self.uncompressed_size += uncompressed_size as u64;
+        self.uncompressed_size += u64::from(uncompressed_size);
 
         self.lzma.reset_uncompressed_size();
         self.rc.reset_buffer();

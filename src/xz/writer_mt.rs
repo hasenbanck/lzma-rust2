@@ -65,7 +65,9 @@ impl<W: Write> XZWriterMT<W> {
 
         let block_size = match options.block_size {
             None => return Err(error_invalid_input("block size must be set")),
-            Some(block_size) => block_size.get().max(options.lzma_options.dict_size as u64),
+            Some(block_size) => block_size
+                .get()
+                .max(u64::from(options.lzma_options.dict_size)),
         };
 
         let block_size = usize::try_from(block_size)
@@ -291,7 +293,7 @@ fn worker_thread_logic(
 
         let mut writer = LZMA2Writer::new(&mut compressed_buffer, options);
         let result = match writer.write_all(&work_unit.uncompressed_data) {
-            Ok(_) => match writer.finish() {
+            Ok(()) => match writer.finish() {
                 Ok(_) => ResultUnit {
                     compressed_data: compressed_buffer,
                     checksum,

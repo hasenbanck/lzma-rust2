@@ -235,7 +235,7 @@ impl LZMACoder {
     pub(crate) fn reset(&mut self) {
         self.reps = [0; REPS];
         self.state.reset();
-        for ele in self.is_match.iter_mut() {
+        for ele in &mut self.is_match {
             init_probs(ele);
         }
         init_probs(&mut self.is_rep);
@@ -243,10 +243,10 @@ impl LZMACoder {
         init_probs(&mut self.is_rep1);
         init_probs(&mut self.is_rep2);
 
-        for ele in self.is_rep0_long.iter_mut() {
+        for ele in &mut self.is_rep0_long {
             init_probs(ele);
         }
-        for ele in self.dist_slots.iter_mut() {
+        for ele in &mut self.dist_slots {
             init_probs(ele);
         }
         init_probs(&mut self.dist_special);
@@ -319,10 +319,10 @@ impl LengthCoder {
 
     pub fn reset(&mut self) {
         init_probs(&mut self.choice);
-        for ele in self.low.iter_mut() {
+        for ele in &mut self.low {
             init_probs(ele);
         }
-        for ele in self.mid.iter_mut() {
+        for ele in &mut self.mid {
             init_probs(ele);
         }
         init_probs(&mut self.high);

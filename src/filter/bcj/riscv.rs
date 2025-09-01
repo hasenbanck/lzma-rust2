@@ -20,11 +20,11 @@ impl BCJFilter {
         let mut i = 0;
 
         while i <= end {
-            let inst = buf[i] as u32;
+            let inst = u32::from(buf[i]);
 
             if inst == 0xEF {
                 // JAL
-                let b1 = buf[i + 1] as u32;
+                let b1 = u32::from(buf[i + 1]);
 
                 // Only filter rd=x1(ra) and rd=x5(t0).
                 if (b1 & 0x0D) != 0 {
@@ -32,8 +32,8 @@ impl BCJFilter {
                     continue;
                 }
 
-                let b2 = buf[i + 2] as u32;
-                let b3 = buf[i + 3] as u32;
+                let b2 = u32::from(buf[i + 2]);
+                let b3 = u32::from(buf[i + 3]);
                 let pc = (self.pos + i) as i32;
 
                 if self.is_encoder {
@@ -65,9 +65,9 @@ impl BCJFilter {
             } else if (inst & 0x7F) == 0x17 {
                 // AUIPC
                 let mut inst_full = inst
-                    | ((buf[i + 1] as u32) << 8)
-                    | ((buf[i + 2] as u32) << 16)
-                    | ((buf[i + 3] as u32) << 24);
+                    | (u32::from(buf[i + 1]) << 8)
+                    | (u32::from(buf[i + 2]) << 16)
+                    | (u32::from(buf[i + 3]) << 24);
 
                 if (inst_full & 0xE80) != 0 {
                     // AUIPC's rd doesn't equal x0 or x2.

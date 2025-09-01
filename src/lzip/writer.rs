@@ -62,9 +62,12 @@ impl<W: Write> LZIPWriter<W> {
             .clamp(MIN_DICT_SIZE, MAX_DICT_SIZE);
 
         if let Some(member_size) = options.member_size.as_mut() {
-            *member_size =
-                NonZeroU64::new(member_size.get().max(options.lzma_options.dict_size as u64))
-                    .expect("member size is zero");
+            *member_size = NonZeroU64::new(
+                member_size
+                    .get()
+                    .max(u64::from(options.lzma_options.dict_size)),
+            )
+            .expect("member size is zero");
         }
 
         Self {
@@ -96,10 +99,10 @@ impl<W: Write> LZIPWriter<W> {
 
     /// Returns a reference to the inner writer.
     pub fn inner(&self) -> &W {
-        self.lzma_writer
-            .as_ref()
-            .map(|reader| reader.inner().inner())
-            .unwrap_or_else(|| self.inner.as_ref().expect("inner writer not set"))
+        self.lzma_writer.as_ref().map_or_else(
+            || self.inner.as_ref().expect("inner writer not set"),
+            |reader| reader.inner().inner(),
+        )
     }
 
     /// Returns a mutable reference to the inner writer.

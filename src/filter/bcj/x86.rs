@@ -54,10 +54,10 @@ impl BCJFilter {
 
             prev_pos = i as isize;
             if test_86_ms_byte(buf[i + 4]) {
-                let mut src = buf[i + 1] as i32
-                    | ((buf[i + 2] as i32) << 8)
-                    | ((buf[i + 3] as i32) << 16)
-                    | ((buf[i + 4] as i32) << 24);
+                let mut src = i32::from(buf[i + 1])
+                    | (i32::from(buf[i + 2]) << 8)
+                    | (i32::from(buf[i + 3]) << 16)
+                    | (i32::from(buf[i + 4]) << 24);
                 let mut dest: i32;
                 loop {
                     if self.is_encoder {

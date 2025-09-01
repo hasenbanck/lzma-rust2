@@ -172,10 +172,10 @@ pub enum CheckType {
 impl CheckType {
     fn from_byte(byte: u8) -> crate::Result<Self> {
         match byte {
-            0x00 => Ok(CheckType::None),
-            0x01 => Ok(CheckType::Crc32),
-            0x04 => Ok(CheckType::Crc64),
-            0x0A => Ok(CheckType::Sha256),
+            0x00 => Ok(Self::None),
+            0x01 => Ok(Self::Crc32),
+            0x04 => Ok(Self::Crc64),
+            0x0A => Ok(Self::Sha256),
             _ => Err(error_invalid_data("unsupported XZ check type")),
         }
     }
@@ -183,10 +183,10 @@ impl CheckType {
     #[cfg(feature = "encoder")]
     fn checksum_size(self) -> u64 {
         match self {
-            CheckType::None => 0,
-            CheckType::Crc32 => 4,
-            CheckType::Crc64 => 8,
-            CheckType::Sha256 => 32,
+            Self::None => 0,
+            Self::Crc32 => 4,
+            Self::Crc64 => 8,
+            Self::Sha256 => 32,
         }
     }
 }
@@ -220,16 +220,16 @@ impl TryFrom<u64> for FilterType {
 
     fn try_from(value: u64) -> Result<Self, Self::Error> {
         match value {
-            0x03 => Ok(FilterType::Delta),
-            0x04 => Ok(FilterType::BcjX86),
-            0x05 => Ok(FilterType::BcjPPC),
-            0x06 => Ok(FilterType::BcjIA64),
-            0x07 => Ok(FilterType::BcjARM),
-            0x08 => Ok(FilterType::BcjARMThumb),
-            0x09 => Ok(FilterType::BcjSPARC),
-            0x0A => Ok(FilterType::BcjARM64),
-            0x0B => Ok(FilterType::BcjRISCV),
-            0x21 => Ok(FilterType::LZMA2),
+            0x03 => Ok(Self::Delta),
+            0x04 => Ok(Self::BcjX86),
+            0x05 => Ok(Self::BcjPPC),
+            0x06 => Ok(Self::BcjIA64),
+            0x07 => Ok(Self::BcjARM),
+            0x08 => Ok(Self::BcjARMThumb),
+            0x09 => Ok(Self::BcjSPARC),
+            0x0A => Ok(Self::BcjARM64),
+            0x0B => Ok(Self::BcjRISCV),
+            0x21 => Ok(Self::LZMA2),
             _ => Err(()),
         }
     }
@@ -245,7 +245,7 @@ fn parse_multibyte_integer(data: &[u8]) -> crate::Result<u64> {
             return Err(error_invalid_data("XZ multibyte integer too large"));
         }
 
-        result |= ((byte & 0x7F) as u64) << shift;
+        result |= u64::from(byte & 0x7F) << shift;
         shift += 7;
 
         if (byte & 0x80) == 0 {
@@ -278,7 +278,7 @@ fn parse_multibyte_integer_from_reader<R: Read>(reader: &mut R) -> crate::Result
             return Err(error_invalid_data("XZ multibyte integer too large"));
         }
 
-        result |= ((byte & 0x7F) as u64) << shift;
+        result |= u64::from(byte & 0x7F) << shift;
         shift += 7;
 
         if (byte & 0x80) == 0 {
@@ -380,7 +380,7 @@ impl BlockHeader {
 
             let filter_type =
                 FilterType::try_from(parse_multibyte_integer(&header_data[offset..])?)
-                    .map_err(|_| error_invalid_input("unsupported filter type found"))?;
+                    .map_err(|()| error_invalid_input("unsupported filter type found"))?;
 
             offset += count_multibyte_integer_size(&header_data[offset..]);
 
@@ -409,7 +409,7 @@ impl BlockHeader {
                     offset += 1;
 
                     // Distance is encoded as byte value + 1, range [1, 256].
-                    (distance_prop as u32) + 1
+                    u32::from(distance_prop) + 1
                 }
                 FilterType::BcjX86
                 | FilterType::BcjPPC
@@ -505,7 +505,7 @@ impl BlockHeader {
                     if dict_size_prop == 40 {
                         0xFFFFFFFF
                     } else {
-                        let base = 2 | ((dict_size_prop & 1) as u32);
+                        let base = 2 | u32::from(dict_size_prop & 1);
                         base << (dict_size_prop / 2 + 11)
                     }
                 }
@@ -552,7 +552,7 @@ impl BlockHeader {
             return Err(error_invalid_data("XZ block header CRC32 mismatch"));
         }
 
-        Ok(Some(BlockHeader {
+        Ok(Some(Self {
             header_size,
             compressed_size,
             uncompressed_size,
@@ -617,7 +617,7 @@ impl BlockHeader {
 
             let filter_id = parse_multibyte_integer(&header_data[offset..])?;
             let filter_type = FilterType::try_from(filter_id)
-                .map_err(|_| error_invalid_data("Unsupported filter type"))?;
+                .map_err(|()| error_invalid_data("Unsupported filter type"))?;
 
             offset += count_multibyte_integer_size(&header_data[offset..]);
 
@@ -644,7 +644,7 @@ impl BlockHeader {
 
                     let distance_prop = header_data[offset];
                     offset += 1;
-                    (distance_prop as u32) + 1
+                    u32::from(distance_prop) + 1
                 }
                 FilterType::BcjX86
                 | FilterType::BcjPPC
@@ -714,7 +714,7 @@ impl BlockHeader {
                     if dict_size_prop == 40 {
                         0xFFFFFFFF
                     } else {
-                        let base = 2 | ((dict_size_prop & 1) as u32);
+                        let base = 2 | u32::from(dict_size_prop & 1);
                         base << (dict_size_prop / 2 + 11)
                     }
                 }
@@ -748,14 +748,14 @@ impl ChecksumCalculator {
 
     fn update(&mut self, data: &[u8]) {
         match self {
-            ChecksumCalculator::None => {}
-            ChecksumCalculator::Crc32(crc) => {
+            Self::None => {}
+            Self::Crc32(crc) => {
                 crc.update(data);
             }
-            ChecksumCalculator::Crc64(crc) => {
+            Self::Crc64(crc) => {
                 crc.update(data);
             }
-            ChecksumCalculator::Sha256(sha) => {
+            Self::Sha256(sha) => {
                 sha.update(data);
             }
         }
@@ -763,8 +763,8 @@ impl ChecksumCalculator {
 
     fn verify(self, expected: &[u8]) -> bool {
         match self {
-            ChecksumCalculator::None => true,
-            ChecksumCalculator::Crc32(crc) => {
+            Self::None => true,
+            Self::Crc32(crc) => {
                 if expected.len() != 4 {
                     return false;
                 }
@@ -776,7 +776,7 @@ impl ChecksumCalculator {
 
                 final_crc == expected_crc
             }
-            ChecksumCalculator::Crc64(crc) => {
+            Self::Crc64(crc) => {
                 if expected.len() != 8 {
                     return false;
                 }
@@ -796,7 +796,7 @@ impl ChecksumCalculator {
 
                 final_crc == expected_crc
             }
-            ChecksumCalculator::Sha256(sha) => {
+            Self::Sha256(sha) => {
                 if expected.len() != 32 {
                     return false;
                 }
@@ -811,10 +811,10 @@ impl ChecksumCalculator {
     #[cfg(feature = "encoder")]
     fn finalize_to_bytes(self) -> Vec<u8> {
         match self {
-            ChecksumCalculator::None => Vec::new(),
-            ChecksumCalculator::Crc32(crc) => crc.finalize().to_le_bytes().to_vec(),
-            ChecksumCalculator::Crc64(crc) => crc.finalize().to_le_bytes().to_vec(),
-            ChecksumCalculator::Sha256(sha) => sha.finalize().to_vec(),
+            Self::None => Vec::new(),
+            Self::Crc32(crc) => crc.finalize().to_le_bytes().to_vec(),
+            Self::Crc64(crc) => crc.finalize().to_le_bytes().to_vec(),
+            Self::Sha256(sha) => sha.finalize().to_vec(),
         }
     }
 }
@@ -848,7 +848,7 @@ impl StreamHeader {
             return Err(error_invalid_data("XZ stream header CRC32 mismatch"));
         }
 
-        Ok(StreamHeader { check_type })
+        Ok(Self { check_type })
     }
 }
 
@@ -876,7 +876,7 @@ impl StreamFooter {
             return Err(error_invalid_data("invalid XZ footer magic bytes"));
         }
 
-        Ok(StreamFooter {
+        Ok(Self {
             backward_size,
             stream_flags,
         })
@@ -884,7 +884,7 @@ impl StreamFooter {
 }
 
 impl Index {
-    pub(crate) fn parse<R: Read>(reader: &mut R) -> crate::Result<Index> {
+    pub(crate) fn parse<R: Read>(reader: &mut R) -> crate::Result<Self> {
         // sic! index indicator already consumed
         let number_of_records = parse_multibyte_integer_from_reader(reader)?;
         let mut records = Vec::with_capacity(number_of_records as usize);
@@ -947,7 +947,7 @@ impl Index {
             return Err(error_invalid_data("index CRC32 mismatch"));
         }
 
-        Ok(Index {
+        Ok(Self {
             number_of_records,
             records,
         })
@@ -979,7 +979,7 @@ fn encode_lzma2_dict_size(dict_size: u32) -> crate::Result<u8> {
 
     // Find the appropriate property value.
     for prop in 0u8..40 {
-        let base = 2 | ((prop & 1) as u32);
+        let base = 2 | u32::from(prop & 1);
         let size = base << (prop / 2 + 11);
 
         if size >= dict_size {
@@ -1031,7 +1031,7 @@ fn scan_blocks<R: Read + Seek>(mut reader: R) -> io::Result<(R, Vec<Block>, Chec
 
     // Now read the index using backward size.
     let index_size = (stream_footer.backward_size + 1) * 4;
-    let index_start_pos = file_size - 12 - index_size as u64;
+    let index_start_pos = file_size - 12 - u64::from(index_size);
 
     reader.seek(SeekFrom::Start(index_start_pos))?;
 

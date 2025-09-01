@@ -105,8 +105,8 @@ fn extend_match_safe(s1: &[u8], s2: &[u8]) -> usize {
         let mut extended_len = 0;
 
         while extended_len + WORD_SIZE <= len {
-            let word1 = (ptr1 as *const usize).read_unaligned();
-            let word2 = (ptr2 as *const usize).read_unaligned();
+            let word1 = ptr1.cast::<usize>().read_unaligned();
+            let word2 = ptr2.cast::<usize>().read_unaligned();
 
             if word1 == word2 {
                 extended_len += WORD_SIZE;

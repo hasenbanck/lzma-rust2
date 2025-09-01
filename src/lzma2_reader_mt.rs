@@ -138,7 +138,7 @@ impl<R: Read> LZMA2ReaderMT<R> {
     fn read_and_dispatch_chunk(&mut self) -> io::Result<bool> {
         let mut control_buf = [0u8; 1];
         match self.inner.read_exact(&mut control_buf) {
-            Ok(_) => (),
+            Ok(()) => (),
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
                 // Clean end of stream.
                 return Ok(false);
@@ -260,10 +260,9 @@ impl<R: Read> LZMA2ReaderMT<R> {
                             if seq == self.next_sequence_to_return {
                                 self.next_sequence_to_return += 1;
                                 return Ok(Some(result));
-                            } else {
-                                self.out_of_order_chunks.insert(seq, result);
-                                continue; // Loop again to check the out_of_order_chunks
                             }
+                            self.out_of_order_chunks.insert(seq, result);
+                            continue; // Loop again to check the out_of_order_chunks
                         }
                         Err(mpsc::TryRecvError::Disconnected) => {
                             // All workers are done.
@@ -305,11 +304,10 @@ impl<R: Read> LZMA2ReaderMT<R> {
                             if seq == self.next_sequence_to_return {
                                 self.next_sequence_to_return += 1;
                                 return Ok(Some(result));
-                            } else {
-                                self.out_of_order_chunks.insert(seq, result);
-                                // We've made progress, loop to check the out_of_order_chunks
-                                continue;
                             }
+                            self.out_of_order_chunks.insert(seq, result);
+                            // We've made progress, loop to check the out_of_order_chunks
+                            continue;
                         }
                         Err(_) => {
                             // All workers are done.
@@ -331,9 +329,8 @@ impl<R: Read> LZMA2ReaderMT<R> {
                             if seq == self.next_sequence_to_return {
                                 self.next_sequence_to_return += 1;
                                 return Ok(Some(result));
-                            } else {
-                                self.out_of_order_chunks.insert(seq, result);
                             }
+                            self.out_of_order_chunks.insert(seq, result);
                         }
                         Err(_) => {
                             // All workers finished, and channel is empty. We are done.

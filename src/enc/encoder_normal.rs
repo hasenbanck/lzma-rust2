@@ -164,9 +164,9 @@ impl NormalEncoderMode {
         let literal_price = self.opts[self.opt_cur].price
             + encoder.literal_encoder.get_price(
                 encoder,
-                cur_byte as _,
-                match_byte as _,
-                encoder.lz.get_byte_backward(1) as _,
+                cur_byte.into(),
+                match_byte.into(),
+                encoder.lz.get_byte_backward(1).into(),
                 pos,
                 &self.opts[self.opt_cur].state,
             );
@@ -291,9 +291,9 @@ impl NormalEncoderMode {
                 let prev_byte = encoder.lz.get_byte(len as _, 1);
                 price += encoder.literal_encoder.get_price(
                     encoder,
-                    cur_byte as u32,
-                    match_byte as u32,
-                    prev_byte as u32,
+                    u32::from(cur_byte),
+                    u32::from(match_byte),
+                    u32::from(prev_byte),
                     pos + len as u32,
                     &next_state,
                 );
@@ -385,9 +385,9 @@ impl NormalEncoderMode {
                 next_state.update_match();
 
                 // Literal
-                let cur_byte = encoder.lz.get_byte(len as _, 0) as u32;
-                let match_byte = encoder.lz.get_byte_backward(0) as u32; // lz.getByte(len, len)
-                let prev_byte = encoder.lz.get_byte(len as _, 1) as u32;
+                let cur_byte = u32::from(encoder.lz.get_byte(len as _, 0));
+                let match_byte = u32::from(encoder.lz.get_byte_backward(0)); // lz.getByte(len, len)
+                let prev_byte = u32::from(encoder.lz.get_byte(len as _, 1));
                 let mut price = match_and_len_price
                     + encoder.literal_encoder.get_price(
                         encoder,
@@ -492,8 +492,8 @@ impl LZMAEncoderTrait for NormalEncoderMode {
             }
         }
 
-        let cur_byte = encoder.lz.get_byte_backward(0) as u32;
-        let match_byte = encoder.lz.get_byte_backward(encoder.coder.reps[0] + 1) as u32;
+        let cur_byte = u32::from(encoder.lz.get_byte_backward(0));
+        let match_byte = u32::from(encoder.lz.get_byte_backward(encoder.coder.reps[0] + 1));
 
         // If the match finder found no matches and this byte cannot be
         // encoded as a repeated match (short or long), we must be return
@@ -510,7 +510,7 @@ impl LZMAEncoderTrait for NormalEncoderMode {
 
         // Calculate the price of encoding the current byte as a literal.
         {
-            let prev_byte = encoder.lz.get_byte_backward(1) as u32;
+            let prev_byte = u32::from(encoder.lz.get_byte_backward(1));
             let state = encoder.coder.state;
             let literal_price = encoder
                 .literal_encoder

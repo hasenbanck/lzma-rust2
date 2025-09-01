@@ -58,7 +58,7 @@ impl<R: RangeReader> RangeDecoder<R> {
     #[inline(always)]
     pub(crate) fn normalize(&mut self) {
         if self.range < 0x0100_0000 {
-            let b = self.inner.read_u8() as u32;
+            let b = u32::from(self.inner.read_u8());
             self.code = (self.code << SHIFT_BITS) | b;
             self.range <<= SHIFT_BITS;
         }
@@ -67,15 +67,15 @@ impl<R: RangeReader> RangeDecoder<R> {
     #[inline(always)]
     pub(crate) fn decode_bit(&mut self, prob: &mut u16) -> i32 {
         self.normalize();
-        let bound = (self.range >> BIT_MODEL_TOTAL_BITS) * (*prob as u32);
+        let bound = (self.range >> BIT_MODEL_TOTAL_BITS) * u32::from(*prob);
 
         // This mask will be 0 for bit 0, and 0xFFFFFFFF for bit 1.
-        let mask = 0u32.wrapping_sub((self.code >= bound) as u32);
+        let mask = 0u32.wrapping_sub(u32::from(self.code >= bound));
 
         self.range = (bound & !mask) | ((self.range - bound) & mask);
         self.code -= bound & mask;
 
-        let p = *prob as u32;
+        let p = u32::from(*prob);
         let offset = RC_BIT_MODEL_OFFSET & !mask;
         *prob = p.wrapping_sub((p.wrapping_add(offset)) >> MOVE_BITS) as u16;
 
@@ -166,7 +166,7 @@ impl<R: RangeReader> RangeDecoder<R> {
             }
 
             // Slow Path
-            let b = self.inner.read_u8() as u32;
+            let b = u32::from(self.inner.read_u8());
             self.code = (self.code << SHIFT_BITS) | b;
             self.range <<= SHIFT_BITS;
         }
@@ -422,7 +422,7 @@ impl<T: Read> RangeReader for T {
         // performance.
         let mut buf = [0; 1];
         match self.read_exact(&mut buf) {
-            Ok(_) => buf[0],
+            Ok(()) => buf[0],
             Err(_) => 1,
         }
     }

@@ -62,7 +62,7 @@ impl LZIPHeader {
         let dict_size_byte = reader.read_u8()?;
         let dict_size = decode_dict_size(dict_size_byte)?;
 
-        Ok(LZIPHeader { version, dict_size })
+        Ok(Self { version, dict_size })
     }
 }
 
@@ -79,7 +79,7 @@ impl LZIPTrailer {
         let data_size = reader.read_u64()?;
         let member_size = reader.read_u64()?;
 
-        Ok(LZIPTrailer {
+        Ok(Self {
             crc32,
             data_size,
             member_size,
@@ -97,8 +97,8 @@ impl LZIPTrailer {
 ///
 /// Example: 0xD3 = 2^19 - 6 * 2^15 = 512 KiB - 6 * 32 KiB = 320 KiB
 fn decode_dict_size(encoded: u8) -> Result<u32> {
-    let base_log2 = (encoded & 0x1F) as u32;
-    let fraction_num = (encoded >> 5) as u32;
+    let base_log2 = u32::from(encoded & 0x1F);
+    let fraction_num = u32::from(encoded >> 5);
 
     if !(12..=29).contains(&base_log2) {
         return Err(error_invalid_data("invalid LZIP dictionary size base"));

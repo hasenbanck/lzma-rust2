@@ -14,7 +14,7 @@ pub fn get_memory_usage_by_props(dict_size: u32, props_byte: u8) -> crate::Resul
     let props = props_byte % (9 * 5);
     let lp = props / 9;
     let lc = props - lp * 9;
-    get_memory_usage(dict_size, lc as u32, lp as u32)
+    get_memory_usage(dict_size, u32::from(lc), u32::from(lp))
 }
 
 /// Calculates the memory usage in KiB required for LZMA decompression.
@@ -104,9 +104,9 @@ impl<R: Read> LZMAReader<R> {
         Self::construct2(
             reader,
             uncomp_size,
-            lc as _,
-            lp as _,
-            pb as _,
+            lc.into(),
+            lp.into(),
+            pb.into(),
             dict_size,
             preset_dict,
         )
@@ -125,7 +125,7 @@ impl<R: Read> LZMAReader<R> {
             return Err(error_invalid_input("invalid lc or lp or pb"));
         }
         let mut dict_size = get_dict_size(dict_size)?;
-        if uncomp_size <= u64::MAX / 2 && dict_size as u64 > uncomp_size {
+        if uncomp_size <= u64::MAX / 2 && u64::from(dict_size) > uncomp_size {
             dict_size = get_dict_size(uncomp_size as u32)?;
         }
         let rc = RangeDecoder::new_stream(reader);
@@ -216,14 +216,16 @@ impl<R: Read> LZMAReader<R> {
         let mut len = buf.len() as u64;
         let mut off = 0;
         while len > 0 {
-            let mut copy_size_max = len;
-            if self.remaining_size <= u64::MAX / 2 && self.remaining_size < len {
-                copy_size_max = self.remaining_size;
-            }
+            let copy_size_max = if self.remaining_size <= u64::MAX / 2 && self.remaining_size < len
+            {
+                self.remaining_size
+            } else {
+                len
+            };
             self.lz.set_limit(copy_size_max as usize);
 
             match self.lzma.decode(&mut self.lz, &mut self.rc) {
-                Ok(_) => {}
+                Ok(()) => {}
                 Err(e) => {
                     if self.remaining_size != u64::MAX || !self.lzma.end_marker_detected() {
                         return Err(e);

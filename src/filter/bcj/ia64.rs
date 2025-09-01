@@ -41,7 +41,7 @@ impl BCJFilter {
                 let mut instr: u64 = 0;
                 for j in 0..6 {
                     if i + byte_pos + j < buf.len() {
-                        instr |= (buf[i + byte_pos + j] as u64) << (8 * j);
+                        instr |= u64::from(buf[i + byte_pos + j]) << (8 * j);
                     }
                 }
 
@@ -69,8 +69,8 @@ impl BCJFilter {
                 // Update the instruction.
                 let mut instr_norm = instr_norm;
                 instr_norm &= !(0x8FFFFF_u64 << 13);
-                instr_norm |= ((dest & 0x0FFFFF) as u64) << 13;
-                instr_norm |= ((dest & 0x100000) as u64) << (36 - 20);
+                instr_norm |= u64::from(dest & 0x0FFFFF) << 13;
+                instr_norm |= u64::from(dest & 0x100000) << (36 - 20);
 
                 let mut instr = instr & ((1_u64 << bit_res) - 1);
                 instr |= instr_norm << bit_res;

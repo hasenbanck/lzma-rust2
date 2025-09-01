@@ -17,12 +17,12 @@ impl BCJFilter {
         let end = buf.len() - 4;
         let mut i = 0;
         while i <= end {
-            let b0 = buf[i] as i32;
-            let b1 = buf[i + 1] as i32;
+            let b0 = i32::from(buf[i]);
+            let b1 = i32::from(buf[i + 1]);
 
             if (b0 == 0x40 && (b1 & 0xC0) == 0x00) || (b0 == 0x7F && (b1 & 0xC0) == 0xC0) {
-                let b2 = buf[i + 2] as i32;
-                let b3 = buf[i + 3] as i32;
+                let b2 = i32::from(buf[i + 2]);
+                let b3 = i32::from(buf[i + 3]);
 
                 let src =
                     ((b0 & 0xFF) << 24) | ((b1 & 0xFF) << 16) | ((b2 & 0xFF) << 8) | (b3 & 0xFF);

@@ -84,7 +84,7 @@ impl BT4 {
             }
             depth -= 1;
 
-            let pair_selector = self.cyclic_size * ((delta > self.cyclic_pos) as i32);
+            let pair_selector = self.cyclic_size * i32::from(delta > self.cyclic_pos);
             let pair = sh_left(self.cyclic_pos - delta + pair_selector);
 
             let mut len = len0.min(len1);
@@ -223,7 +223,7 @@ impl MatchFind for BT4 {
             }
             depth -= 1;
 
-            let pair_selector = self.cyclic_size * ((delta > self.cyclic_pos) as i32);
+            let pair_selector = self.cyclic_size * i32::from(delta > self.cyclic_pos);
             let pair = sh_left(self.cyclic_pos - delta + pair_selector);
 
             let mut len = len0.min(len1);

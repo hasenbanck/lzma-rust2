@@ -55,7 +55,7 @@ impl Bcj2Decoder {
                     return true;
                 }
 
-                self.code = (self.code << 8) | src_bufs[self.bufs[BCJ2_STREAM_RC]] as u32;
+                self.code = (self.code << 8) | u32::from(src_bufs[self.bufs[BCJ2_STREAM_RC]]);
                 self.bufs[BCJ2_STREAM_RC] = self.bufs[BCJ2_STREAM_RC].wrapping_add(1);
                 self.range += 1;
             }
@@ -87,7 +87,7 @@ impl Bcj2Decoder {
                         return true;
                     }
                     self.range <<= 8;
-                    self.code = (self.code << 8) | src_bufs[self.bufs[BCJ2_STREAM_RC]] as u32;
+                    self.code = (self.code << 8) | u32::from(src_bufs[self.bufs[BCJ2_STREAM_RC]]);
                     self.bufs[BCJ2_STREAM_RC] = self.bufs[BCJ2_STREAM_RC].wrapping_add(1);
                 }
 
@@ -172,15 +172,13 @@ impl Bcj2Decoder {
 
                         let prob = &mut self.probs[if b == 0xE8 {
                             2 + prev as usize
-                        } else if b == 0xE9 {
-                            1
                         } else {
-                            0
+                            usize::from(b == 0xE9)
                         }];
 
                         //   _IF_BIT_0
                         let ttt = *prob;
-                        let bound = (self.range >> NUM_MODEL_BITS) * ttt as u32;
+                        let bound = (self.range >> NUM_MODEL_BITS) * u32::from(ttt);
                         if self.code < bound {
                             // _UPDATE_0
                             self.range = bound;
@@ -208,9 +206,7 @@ impl Bcj2Decoder {
                     break;
                 }
 
-                let mut val = if let Ok(v) = (&mut &src_bufs[cur..]).read_u32_be() {
-                    v
-                } else {
+                let Ok(mut val) = (&mut &src_bufs[cur..]).read_u32_be() else {
                     return false;
                 };
                 self.bufs[cj] = cur + 4;
@@ -250,7 +246,7 @@ impl Bcj2Decoder {
 
         if self.range < K_TOP_VALUE && self.bufs[BCJ2_STREAM_RC] != self.lims[BCJ2_STREAM_RC] {
             self.range <<= 8;
-            self.code = (self.code << 8) | src_bufs[self.bufs[BCJ2_STREAM_RC]] as u32;
+            self.code = (self.code << 8) | u32::from(src_bufs[self.bufs[BCJ2_STREAM_RC]]);
             self.bufs[BCJ2_STREAM_RC] = self.bufs[BCJ2_STREAM_RC].wrapping_add(1);
         }
 

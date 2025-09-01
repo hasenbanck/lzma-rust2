@@ -21,15 +21,15 @@ pub(crate) enum MatchFinders {
 impl MatchFind for MatchFinders {
     fn find_matches(&mut self, encoder: &mut LZEncoderData, matches: &mut Matches) {
         match self {
-            MatchFinders::HC4(m) => m.find_matches(encoder, matches),
-            MatchFinders::BT4(m) => m.find_matches(encoder, matches),
+            Self::HC4(m) => m.find_matches(encoder, matches),
+            Self::BT4(m) => m.find_matches(encoder, matches),
         }
     }
 
     fn skip(&mut self, encoder: &mut LZEncoderData, len: usize) {
         match self {
-            MatchFinders::HC4(m) => m.skip(encoder, len),
-            MatchFinders::BT4(m) => m.skip(encoder, len),
+            Self::HC4(m) => m.skip(encoder, len),
+            Self::BT4(m) => m.skip(encoder, len),
         }
     }
 }
@@ -53,8 +53,8 @@ impl MFType {
     #[inline]
     fn get_memory_usage(self, dict_size: u32) -> u32 {
         match self {
-            MFType::HC4 => HC4::get_mem_usage(dict_size),
-            MFType::BT4 => BT4::get_mem_usage(dict_size),
+            Self::HC4 => HC4::get_mem_usage(dict_size),
+            Self::BT4 => BT4::get_mem_usage(dict_size),
         }
     }
 }
@@ -215,7 +215,7 @@ impl LZEncoder {
 
     pub(crate) fn find_matches(&mut self) {
         self.match_finder
-            .find_matches(&mut self.data, &mut self.matches)
+            .find_matches(&mut self.data, &mut self.matches);
     }
 
     pub(crate) fn matches(&mut self) -> &mut Matches {
@@ -223,16 +223,16 @@ impl LZEncoder {
     }
 
     pub(crate) fn skip(&mut self, len: usize) {
-        self.match_finder.skip(&mut self.data, len)
+        self.match_finder.skip(&mut self.data, len);
     }
 
     pub(crate) fn set_preset_dict(&mut self, dict_size: u32, preset_dict: &[u8]) {
         self.data
-            .set_preset_dict(dict_size, preset_dict, &mut self.match_finder)
+            .set_preset_dict(dict_size, preset_dict, &mut self.match_finder);
     }
 
     pub(crate) fn set_finishing(&mut self) {
-        self.data.set_finishing(&mut self.match_finder)
+        self.data.set_finishing(&mut self.match_finder);
     }
 
     pub(crate) fn fill_window(&mut self, input: &[u8]) -> usize {
@@ -240,7 +240,7 @@ impl LZEncoder {
     }
 
     pub(crate) fn set_flushing(&mut self) {
-        self.data.set_flushing(&mut self.match_finder)
+        self.data.set_flushing(&mut self.match_finder);
     }
 
     pub(crate) fn verify_matches(&self) -> bool {
@@ -317,7 +317,7 @@ impl LZEncoderData {
             let old_pending = self.pending_size;
             self.pending_size = 0;
             match_finder.skip(self, old_pending as _);
-            debug_assert!(self.pending_size < old_pending)
+            debug_assert!(self.pending_size < old_pending);
         }
     }
 
@@ -406,8 +406,8 @@ impl LZEncoderData {
             let clamped0 = read_pos.min(self.buf_limit_u16);
             let clamped1 = (read_pos - match_dist as usize).min(self.buf_limit_u16);
 
-            if core::ptr::read_unaligned(self.buf.as_ptr().add(clamped0) as *const u16)
-                != core::ptr::read_unaligned(self.buf.as_ptr().add(clamped1) as *const u16)
+            if core::ptr::read_unaligned(self.buf.as_ptr().add(clamped0).cast::<u16>())
+                != core::ptr::read_unaligned(self.buf.as_ptr().add(clamped1).cast::<u16>())
             {
                 return 0;
             }
@@ -475,9 +475,9 @@ fn get_buf_size(
 
 #[inline(always)]
 fn normalize_scalar(positions: &mut [i32], norm_offset: i32) {
-    positions
-        .iter_mut()
-        .for_each(|p| *p = p.saturating_sub(norm_offset));
+    for p in positions.iter_mut() {
+        *p = p.saturating_sub(norm_offset);
+    }
 }
 
 /// Normalization implementation using ARM NEON for 128-bit SIMD processing.
@@ -527,14 +527,14 @@ unsafe fn normalize_avx2(positions: &mut [i32], norm_offset: i32) {
     for chunk in chunks {
         // Use ALIGNED load. This is safe because `align_to_mut`
         // guarantees that `chunk` is aligned to 32 bytes.
-        let data = _mm256_load_si256(chunk as *mut _);
+        let data = _mm256_load_si256(std::ptr::from_mut(chunk));
 
         // Perform saturated subtraction on 8 integers simultaneously.
         let max_val = _mm256_max_epi32(data, norm_v);
         let result = _mm256_sub_epi32(max_val, norm_v);
 
         // Use ALIGNED store to write the results back.
-        _mm256_store_si256(chunk as *mut _, result);
+        _mm256_store_si256(std::ptr::from_mut(chunk), result);
     }
 
     normalize_scalar(suffix, norm_offset);
@@ -557,13 +557,13 @@ unsafe fn normalize_sse41(positions: &mut [i32], norm_offset: i32) {
     // Process the aligned middle part in 128-bit (4 x i32) chunks.
     for chunk in chunks {
         // Use ALIGNED 128-bit load.
-        let data = _mm_load_si128(chunk as *mut _);
+        let data = _mm_load_si128(std::ptr::from_mut(chunk));
 
         let max_val = _mm_max_epi32(data, norm_v);
         let result = _mm_sub_epi32(max_val, norm_v);
 
         // Use ALIGNED 128-bit store.
-        _mm_store_si128(chunk as *mut _, result);
+        _mm_store_si128(std::ptr::from_mut(chunk), result);
     }
 
     normalize_scalar(suffix, norm_offset);

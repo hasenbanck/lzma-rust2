@@ -72,7 +72,7 @@ impl<R: Read> LZMA2Reader<R> {
     /// `inner` is the reader to read compressed data from.
     /// `dict_size` is the dictionary size in bytes.
     pub fn new(inner: R, dict_size: u32, preset_dict: Option<&[u8]>) -> Self {
-        let has_preset = preset_dict.as_ref().map(|a| !a.is_empty()).unwrap_or(false);
+        let has_preset = preset_dict.as_ref().is_some_and(|a| !a.is_empty());
         let lz = LZDecoder::new(get_dict_size(dict_size) as _, preset_dict);
         let rc = RangeDecoder::new_buffer(COMPRESSED_SIZE_MAX as _);
         Self {
@@ -138,7 +138,7 @@ impl<R: Read> LZMA2Reader<R> {
             } else if control >= 0xA0 {
                 // Reset state
                 if let Some(l) = self.lzma.as_mut() {
-                    l.reset()
+                    l.reset();
                 }
             }
 
@@ -165,7 +165,7 @@ impl<R: Read> LZMA2Reader<R> {
         if lc + lp > 4 {
             return Err(error_invalid_input("corrupted input data (LZMA2:4)"));
         }
-        self.lzma = Some(LZMADecoder::new(lc as _, lp as _, pb as _));
+        self.lzma = Some(LZMADecoder::new(lc.into(), lp.into(), pb.into()));
 
         Ok(())
     }
@@ -193,13 +193,13 @@ impl<R: Read> LZMA2Reader<R> {
             }
 
             let copy_size_max = self.uncompressed_size.min(len);
-            if !self.is_lzma_chunk {
-                self.lz.copy_uncompressed(&mut self.inner, copy_size_max)?;
-            } else {
+            if self.is_lzma_chunk {
                 self.lz.set_limit(copy_size_max);
                 if let Some(lzma) = self.lzma.as_mut() {
                     lzma.decode(&mut self.lz, &mut self.rc)?;
                 }
+            } else {
+                self.lz.copy_uncompressed(&mut self.inner, copy_size_max)?;
             }
 
             {

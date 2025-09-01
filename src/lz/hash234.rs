@@ -61,14 +61,14 @@ impl Hash234 {
     fn hash_byte(byte: u8) -> u32 {
         // Original CRC lookup replaced with a golden ratio constant as used for example TEA.
         // Is ever so slightly faster and also compresses constantly a little bit better.
-        (byte as u32).wrapping_mul(0x9E3779B9)
+        u32::from(byte).wrapping_mul(0x9E3779B9)
     }
 
     #[inline(always)]
     pub(crate) fn calc_hashes(&mut self, buf: &[u8]) {
-        let tmp = CRC_TABLE[buf[0] as usize] ^ (buf[1] as u32);
+        let tmp = CRC_TABLE[buf[0] as usize] ^ u32::from(buf[1]);
         self.hash2_value = (tmp & HASH2_MASK) as i32;
-        let tmp = tmp ^ ((buf[2] as u32) << 8);
+        let tmp = tmp ^ (u32::from(buf[2]) << 8);
         self.hash3_value = (tmp & HASH3_MASK) as i32;
         let tmp = tmp ^ (CRC_TABLE[buf[3] as usize] << 5);
         self.hash4_value = (tmp & self.hash4_mask) as i32;

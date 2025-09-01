@@ -24,7 +24,7 @@ impl<W: Write> LZMAWriter<W> {
         use_header: bool,
         use_end_marker: bool,
         expected_uncompressed_size: Option<u64>,
-    ) -> crate::Result<LZMAWriter<W>> {
+    ) -> crate::Result<Self> {
         let (mut lzma, mode) = LZMAEncoder::new(
             options.mode,
             options.lc,
@@ -59,7 +59,7 @@ impl<W: Write> LZMAWriter<W> {
         }
 
         let rc = RangeEncoder::new(out);
-        Ok(LZMAWriter {
+        Ok(Self {
             rc,
             lzma,
             use_end_marker,

@@ -43,7 +43,9 @@ impl<W: Write> LZIPWriterMT<W> {
     pub fn new(inner: W, options: LZIPOptions, num_workers: u32) -> io::Result<Self> {
         let member_size = match options.member_size {
             None => return Err(error_invalid_input("member size must be set")),
-            Some(member_size) => member_size.get().max(options.lzma_options.dict_size as u64),
+            Some(member_size) => member_size
+                .get()
+                .max(u64::from(options.lzma_options.dict_size)),
         };
 
         let member_size = usize::try_from(member_size)
@@ -175,7 +177,7 @@ fn worker_thread_logic(
 
         let mut writer = LZIPWriter::new(&mut compressed_buffer, work_unit.options);
         let result = match writer.write_all(&work_unit.data) {
-            Ok(_) => match writer.finish() {
+            Ok(()) => match writer.finish() {
                 Ok(_) => compressed_buffer,
                 Err(error) => {
                     active_workers.fetch_sub(1, Ordering::Release);

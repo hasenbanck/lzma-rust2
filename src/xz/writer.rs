@@ -24,21 +24,21 @@ enum FilterWriter<W: Write> {
 impl<W: Write> Write for FilterWriter<W> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         match self {
-            FilterWriter::Counting(writer) => writer.write(buf),
-            FilterWriter::LZMA2(writer) => writer.write(buf),
-            FilterWriter::Delta(writer) => writer.write(buf),
-            FilterWriter::Bcj(writer) => writer.write(buf),
-            FilterWriter::Dummy => unimplemented!(),
+            Self::Counting(writer) => writer.write(buf),
+            Self::LZMA2(writer) => writer.write(buf),
+            Self::Delta(writer) => writer.write(buf),
+            Self::Bcj(writer) => writer.write(buf),
+            Self::Dummy => unimplemented!(),
         }
     }
 
     fn flush(&mut self) -> Result<()> {
         match self {
-            FilterWriter::Counting(writer) => writer.flush(),
-            FilterWriter::LZMA2(writer) => writer.flush(),
-            FilterWriter::Delta(writer) => writer.flush(),
-            FilterWriter::Bcj(writer) => writer.flush(),
-            FilterWriter::Dummy => unimplemented!(),
+            Self::Counting(writer) => writer.flush(),
+            Self::LZMA2(writer) => writer.flush(),
+            Self::Delta(writer) => writer.flush(),
+            Self::Bcj(writer) => writer.flush(),
+            Self::Dummy => unimplemented!(),
         }
     }
 }
@@ -49,55 +49,55 @@ impl<W: Write> FilterWriter<W> {
         filters: &[FilterConfig],
         lzma_options: &LZMAOptions,
     ) -> Result<Self> {
-        let mut chain_writer = FilterWriter::Counting(inner);
+        let mut chain_writer = Self::Counting(inner);
 
         for filter_config in filters.iter().rev() {
             chain_writer = match filter_config.filter_type {
                 FilterType::Delta => {
                     let distance = filter_config.property as usize;
-                    FilterWriter::Delta(DeltaWriter::new(Box::new(chain_writer), distance))
+                    Self::Delta(DeltaWriter::new(Box::new(chain_writer), distance))
                 }
                 FilterType::BcjX86 => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_x86(Box::new(chain_writer), start_offset))
+                    Self::Bcj(BCJWriter::new_x86(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjPPC => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_ppc(Box::new(chain_writer), start_offset))
+                    Self::Bcj(BCJWriter::new_ppc(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjIA64 => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_ia64(Box::new(chain_writer), start_offset))
+                    Self::Bcj(BCJWriter::new_ia64(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjARM => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_arm(Box::new(chain_writer), start_offset))
+                    Self::Bcj(BCJWriter::new_arm(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjARMThumb => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_arm_thumb(
+                    Self::Bcj(BCJWriter::new_arm_thumb(
                         Box::new(chain_writer),
                         start_offset,
                     ))
                 }
                 FilterType::BcjSPARC => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_sparc(Box::new(chain_writer), start_offset))
+                    Self::Bcj(BCJWriter::new_sparc(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjARM64 => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_arm64(Box::new(chain_writer), start_offset))
+                    Self::Bcj(BCJWriter::new_arm64(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjRISCV => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_riscv(Box::new(chain_writer), start_offset))
+                    Self::Bcj(BCJWriter::new_riscv(Box::new(chain_writer), start_offset))
                 }
                 FilterType::LZMA2 => {
                     let options = LZMA2Options {
                         lzma_options: lzma_options.clone(),
                         ..Default::default()
                     };
-                    FilterWriter::LZMA2(LZMA2Writer::new(Box::new(chain_writer), options))
+                    Self::LZMA2(LZMA2Writer::new(Box::new(chain_writer), options))
                 }
             };
         }
@@ -107,77 +107,77 @@ impl<W: Write> FilterWriter<W> {
 
     fn into_inner(self) -> W {
         match self {
-            FilterWriter::Counting(writer) => writer.inner,
-            FilterWriter::LZMA2(writer) => {
+            Self::Counting(writer) => writer.inner,
+            Self::LZMA2(writer) => {
                 let filter_writer = writer.into_inner();
                 filter_writer.into_inner()
             }
-            FilterWriter::Delta(writer) => {
+            Self::Delta(writer) => {
                 let filter_writer = writer.into_inner();
                 filter_writer.into_inner()
             }
-            FilterWriter::Bcj(writer) => {
+            Self::Bcj(writer) => {
                 let filter_writer = writer.into_inner();
                 filter_writer.into_inner()
             }
-            FilterWriter::Dummy => unimplemented!(),
+            Self::Dummy => unimplemented!(),
         }
     }
 
     fn inner(&self) -> &W {
         match self {
-            FilterWriter::Counting(writer) => &writer.inner,
-            FilterWriter::LZMA2(writer) => {
+            Self::Counting(writer) => &writer.inner,
+            Self::LZMA2(writer) => {
                 let filter_writer = writer.inner();
                 filter_writer.inner()
             }
-            FilterWriter::Delta(writer) => {
+            Self::Delta(writer) => {
                 let filter_writer = writer.inner();
                 filter_writer.inner()
             }
-            FilterWriter::Bcj(writer) => {
+            Self::Bcj(writer) => {
                 let filter_writer = writer.inner();
                 filter_writer.inner()
             }
-            FilterWriter::Dummy => unimplemented!(),
+            Self::Dummy => unimplemented!(),
         }
     }
 
     fn inner_mut(&mut self) -> &mut W {
         match self {
-            FilterWriter::Counting(writer) => &mut writer.inner,
-            FilterWriter::LZMA2(writer) => {
+            Self::Counting(writer) => &mut writer.inner,
+            Self::LZMA2(writer) => {
                 let filter_writer = writer.inner_mut();
                 filter_writer.inner_mut()
             }
-            FilterWriter::Delta(writer) => {
+            Self::Delta(writer) => {
                 let filter_writer = writer.inner_mut();
                 filter_writer.inner_mut()
             }
-            FilterWriter::Bcj(writer) => {
+            Self::Bcj(writer) => {
                 let filter_writer = writer.inner_mut();
                 filter_writer.inner_mut()
             }
-            FilterWriter::Dummy => unimplemented!(),
+            Self::Dummy => unimplemented!(),
         }
     }
 
     fn finish(self) -> Result<CountingWriter<W>> {
         match self {
-            FilterWriter::Counting(writer) => Ok(writer),
-            FilterWriter::LZMA2(writer) => {
+            Self::Counting(writer) => Ok(writer),
+            Self::LZMA2(writer) => {
                 let inner_writer = writer.finish()?;
                 inner_writer.finish()
             }
-            FilterWriter::Delta(writer) => {
+            Self::Delta(writer) => {
                 let inner_writer = writer.into_inner();
                 inner_writer.finish()
             }
-            FilterWriter::Bcj(writer) => {
+            Self::Bcj(writer) => {
                 let inner_writer = writer.finish()?;
                 inner_writer.finish()
             }
-            FilterWriter::Dummy => unimplemented!(),
+            Self::Dummy => unimplemented!(),
         }
     }
 }
@@ -266,9 +266,12 @@ impl<W: Write> XZWriter<W> {
         }
 
         if let Some(block_size) = options.block_size.as_mut() {
-            *block_size =
-                NonZeroU64::new(block_size.get().max(options.lzma_options.dict_size as u64))
-                    .expect("block size is zero");
+            *block_size = NonZeroU64::new(
+                block_size
+                    .get()
+                    .max(u64::from(options.lzma_options.dict_size)),
+            )
+            .expect("block size is zero");
         }
 
         // Last filter is always LZMA2.

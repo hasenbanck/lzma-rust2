@@ -138,7 +138,7 @@ impl<R: Read + Seek> XZReaderMT<R> {
 
         // Now read the index using backward size.
         let index_size = (stream_footer.backward_size + 1) * 4;
-        let index_start_pos = file_size - 12 - index_size as u64;
+        let index_start_pos = file_size - 12 - u64::from(index_size);
 
         reader.seek(SeekFrom::Start(index_start_pos))?;
 
@@ -283,10 +283,9 @@ impl<R: Read + Seek> XZReaderMT<R> {
                             if seq == self.next_sequence_to_return {
                                 self.next_sequence_to_return += 1;
                                 return Ok(Some(result));
-                            } else {
-                                self.out_of_order_chunks.insert(seq, result);
-                                continue; // Loop again to check the out_of_order_chunks.
                             }
+                            self.out_of_order_chunks.insert(seq, result);
+                            continue; // Loop again to check the out_of_order_chunks.
                         }
                         Err(mpsc::TryRecvError::Disconnected) => {
                             // All workers are done.
@@ -327,11 +326,10 @@ impl<R: Read + Seek> XZReaderMT<R> {
                             if seq == self.next_sequence_to_return {
                                 self.next_sequence_to_return += 1;
                                 return Ok(Some(result));
-                            } else {
-                                self.out_of_order_chunks.insert(seq, result);
-                                // We've made progress, loop to check the out_of_order_chunks.
-                                continue;
                             }
+                            self.out_of_order_chunks.insert(seq, result);
+                            // We've made progress, loop to check the out_of_order_chunks.
+                            continue;
                         }
                         Err(_) => {
                             // All workers are done.
@@ -353,9 +351,8 @@ impl<R: Read + Seek> XZReaderMT<R> {
                             if seq == self.next_sequence_to_return {
                                 self.next_sequence_to_return += 1;
                                 return Ok(Some(result));
-                            } else {
-                                self.out_of_order_chunks.insert(seq, result);
                             }
+                            self.out_of_order_chunks.insert(seq, result);
                         }
                         Err(_) => {
                             // All workers finished, and channel is empty. We are done.

@@ -32,7 +32,7 @@ impl State {
         self.state
     }
 
-    pub(crate) fn set(&mut self, other: State) {
+    pub(crate) fn set(&mut self, other: Self) {
         self.state = other.state;
     }
 

@@ -203,10 +203,9 @@ where
                             if seq == self.next_index_to_return {
                                 self.next_index_to_return += 1;
                                 return Ok(Some(result));
-                            } else {
-                                self.out_of_order_results.insert(seq, result);
-                                continue; // Loop again to check the out_of_order_results.
                             }
+                            self.out_of_order_results.insert(seq, result);
+                            continue; // Loop again to check the out_of_order_results.
                         }
                         Err(TryRecvError::Disconnected) => {
                             // All workers are done.
@@ -244,11 +243,10 @@ where
                             if seq == self.next_index_to_return {
                                 self.next_index_to_return += 1;
                                 return Ok(Some(result));
-                            } else {
-                                self.out_of_order_results.insert(seq, result);
-                                // We've made progress, loop to check the out_of_order_results.
-                                continue;
                             }
+                            self.out_of_order_results.insert(seq, result);
+                            // We've made progress, loop to check the out_of_order_results.
+                            continue;
                         }
                         Err(_) => {
                             // All workers are done.
@@ -270,9 +268,8 @@ where
                             if seq == self.next_index_to_return {
                                 self.next_index_to_return += 1;
                                 return Ok(Some(result));
-                            } else {
-                                self.out_of_order_results.insert(seq, result);
                             }
+                            self.out_of_order_results.insert(seq, result);
                         }
                         Err(_) => {
                             // All workers finished, and channel is empty. We are done.

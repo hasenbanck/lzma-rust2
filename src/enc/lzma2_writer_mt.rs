@@ -42,7 +42,9 @@ impl<W: Write> LZMA2WriterMT<W> {
     pub fn new(inner: W, options: LZMA2Options, num_workers: u32) -> crate::Result<Self> {
         let chunk_size = match options.chunk_size {
             None => return Err(error_invalid_input("chunk size must be set")),
-            Some(chunk_size) => chunk_size.get().max(options.lzma_options.dict_size as u64),
+            Some(chunk_size) => chunk_size
+                .get()
+                .max(u64::from(options.lzma_options.dict_size)),
         };
 
         let chunk_size = usize::try_from(chunk_size)
@@ -165,8 +167,8 @@ fn worker_thread_logic(
         let mut writer = LZMA2Writer::new(&mut compressed_buffer, work_unit.options);
 
         let result = match writer.write_all(&work_unit.data) {
-            Ok(_) => match writer.flush() {
-                Ok(_) => compressed_buffer,
+            Ok(()) => match writer.flush() {
+                Ok(()) => compressed_buffer,
                 Err(error) => {
                     active_workers.fetch_sub(1, Ordering::Release);
                     set_error(error, &error_store, &shutdown_flag);

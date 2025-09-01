@@ -21,18 +21,18 @@ enum FilterReader<R: Read> {
 impl<R: Read> Read for FilterReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         match self {
-            FilterReader::Counting(reader) => reader.read(buf),
-            FilterReader::LZMA2(reader) => reader.read(buf),
-            FilterReader::Delta(reader) => reader.read(buf),
-            FilterReader::Bcj(reader) => reader.read(buf),
-            FilterReader::Dummy => unimplemented!(),
+            Self::Counting(reader) => reader.read(buf),
+            Self::LZMA2(reader) => reader.read(buf),
+            Self::Delta(reader) => reader.read(buf),
+            Self::Bcj(reader) => reader.read(buf),
+            Self::Dummy => unimplemented!(),
         }
     }
 }
 
 impl<R: Read> FilterReader<R> {
     fn create_filter_chain(inner: R, filters: &[Option<FilterType>], properties: &[u32]) -> Self {
-        let mut chain_reader = FilterReader::Counting(CountingReader::new(inner));
+        let mut chain_reader = Self::Counting(CountingReader::new(inner));
 
         for (filter, property) in filters
             .iter()
@@ -44,46 +44,46 @@ impl<R: Read> FilterReader<R> {
             chain_reader = match filter {
                 FilterType::Delta => {
                     let distance = property as usize;
-                    FilterReader::Delta(DeltaReader::new(Box::new(chain_reader), distance))
+                    Self::Delta(DeltaReader::new(Box::new(chain_reader), distance))
                 }
                 FilterType::BcjX86 => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_x86(Box::new(chain_reader), start_offset))
+                    Self::Bcj(BCJReader::new_x86(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjPPC => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_ppc(Box::new(chain_reader), start_offset))
+                    Self::Bcj(BCJReader::new_ppc(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjIA64 => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_ia64(Box::new(chain_reader), start_offset))
+                    Self::Bcj(BCJReader::new_ia64(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjARM => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_arm(Box::new(chain_reader), start_offset))
+                    Self::Bcj(BCJReader::new_arm(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjARMThumb => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_arm_thumb(
+                    Self::Bcj(BCJReader::new_arm_thumb(
                         Box::new(chain_reader),
                         start_offset,
                     ))
                 }
                 FilterType::BcjSPARC => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_sparc(Box::new(chain_reader), start_offset))
+                    Self::Bcj(BCJReader::new_sparc(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjARM64 => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_arm64(Box::new(chain_reader), start_offset))
+                    Self::Bcj(BCJReader::new_arm64(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjRISCV => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_riscv(Box::new(chain_reader), start_offset))
+                    Self::Bcj(BCJReader::new_riscv(Box::new(chain_reader), start_offset))
                 }
                 FilterType::LZMA2 => {
                     let dict_size = property;
-                    FilterReader::LZMA2(LZMA2Reader::new(Box::new(chain_reader), dict_size, None))
+                    Self::LZMA2(LZMA2Reader::new(Box::new(chain_reader), dict_size, None))
                 }
             };
         }
@@ -93,69 +93,69 @@ impl<R: Read> FilterReader<R> {
 
     fn bytes_read(&self) -> u64 {
         match self {
-            FilterReader::Counting(reader) => reader.bytes_read(),
-            FilterReader::LZMA2(reader) => reader.inner().bytes_read(),
-            FilterReader::Delta(reader) => reader.inner().bytes_read(),
-            FilterReader::Bcj(reader) => reader.inner().bytes_read(),
-            FilterReader::Dummy => unimplemented!(),
+            Self::Counting(reader) => reader.bytes_read(),
+            Self::LZMA2(reader) => reader.inner().bytes_read(),
+            Self::Delta(reader) => reader.inner().bytes_read(),
+            Self::Bcj(reader) => reader.inner().bytes_read(),
+            Self::Dummy => unimplemented!(),
         }
     }
 
     fn into_inner(self) -> R {
         match self {
-            FilterReader::Counting(reader) => reader.inner,
-            FilterReader::LZMA2(reader) => {
+            Self::Counting(reader) => reader.inner,
+            Self::LZMA2(reader) => {
                 let filter_reader = reader.into_inner();
                 filter_reader.into_inner()
             }
-            FilterReader::Delta(reader) => {
+            Self::Delta(reader) => {
                 let filter_reader = reader.into_inner();
                 filter_reader.into_inner()
             }
-            FilterReader::Bcj(reader) => {
+            Self::Bcj(reader) => {
                 let filter_reader = reader.into_inner();
                 filter_reader.into_inner()
             }
-            FilterReader::Dummy => unimplemented!(),
+            Self::Dummy => unimplemented!(),
         }
     }
 
     fn inner(&self) -> &R {
         match self {
-            FilterReader::Counting(reader) => &reader.inner,
-            FilterReader::LZMA2(reader) => {
+            Self::Counting(reader) => &reader.inner,
+            Self::LZMA2(reader) => {
                 let filter_reader = reader.inner();
 
                 filter_reader.inner()
             }
-            FilterReader::Delta(reader) => {
+            Self::Delta(reader) => {
                 let filter_reader = reader.inner();
                 filter_reader.inner()
             }
-            FilterReader::Bcj(reader) => {
+            Self::Bcj(reader) => {
                 let filter_reader = reader.inner();
                 filter_reader.inner()
             }
-            FilterReader::Dummy => unimplemented!(),
+            Self::Dummy => unimplemented!(),
         }
     }
 
     fn inner_mut(&mut self) -> &mut R {
         match self {
-            FilterReader::Counting(reader) => &mut reader.inner,
-            FilterReader::LZMA2(reader) => {
+            Self::Counting(reader) => &mut reader.inner,
+            Self::LZMA2(reader) => {
                 let filter_reader = reader.inner_mut();
                 filter_reader.inner_mut()
             }
-            FilterReader::Delta(reader) => {
+            Self::Delta(reader) => {
                 let filter_reader = reader.inner_mut();
                 filter_reader.inner_mut()
             }
-            FilterReader::Bcj(reader) => {
+            Self::Bcj(reader) => {
                 let filter_reader = reader.inner_mut();
                 filter_reader.inner_mut()
             }
-            FilterReader::Dummy => unimplemented!(),
+            Self::Dummy => unimplemented!(),
         }
     }
 }
@@ -411,17 +411,16 @@ impl<R: Read> Read for XZReader<R> {
                     }
 
                     return Ok(bytes_read);
-                } else {
-                    let reader = core::mem::replace(&mut self.reader, FilterReader::Dummy);
-                    let compressed_bytes = reader.bytes_read();
-                    self.reader = FilterReader::Counting(CountingReader::with_count(
-                        reader.into_inner(),
-                        compressed_bytes,
-                    ));
-
-                    self.consume_padding(compressed_bytes)?;
-                    self.verify_block_checksum()?;
                 }
+                let reader = core::mem::replace(&mut self.reader, FilterReader::Dummy);
+                let compressed_bytes = reader.bytes_read();
+                self.reader = FilterReader::Counting(CountingReader::with_count(
+                    reader.into_inner(),
+                    compressed_bytes,
+                ));
+
+                self.consume_padding(compressed_bytes)?;
+                self.verify_block_checksum()?;
             } else {
                 // No current block, prepare the next one.
                 if !self.prepare_next_block()? {
