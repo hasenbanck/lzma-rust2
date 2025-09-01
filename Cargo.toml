@@ -32,5 +32,4 @@ name = "comparison"
 harness = false
 
 [package.metadata.docs.rs]
-features = ["encoder"]
-rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
