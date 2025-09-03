@@ -6,18 +6,18 @@ use super::{
     write_xz_stream_header, CheckType, ChecksumCalculator, FilterConfig, FilterType, IndexRecord,
 };
 use crate::{
-    enc::{LZMA2Writer, LZMAOptions},
+    enc::{Lzma2Writer, LzmaOptions},
     error_invalid_data, error_invalid_input,
-    filter::{bcj::BCJWriter, delta::DeltaWriter},
-    CountingWriter, LZMA2Options, Result, Write,
+    filter::{bcj::BcjWriter, delta::DeltaWriter},
+    CountingWriter, Lzma2Options, Result, Write,
 };
 
 #[allow(clippy::large_enum_variant)]
 enum FilterWriter<W: Write> {
     Counting(CountingWriter<W>),
-    LZMA2(LZMA2Writer<Box<FilterWriter<W>>>),
+    LZMA2(Lzma2Writer<Box<FilterWriter<W>>>),
     Delta(DeltaWriter<Box<FilterWriter<W>>>),
-    Bcj(BCJWriter<Box<FilterWriter<W>>>),
+    Bcj(BcjWriter<Box<FilterWriter<W>>>),
     Dummy,
 }
 
@@ -47,7 +47,7 @@ impl<W: Write> FilterWriter<W> {
     fn create_filter_chain(
         inner: CountingWriter<W>,
         filters: &[FilterConfig],
-        lzma_options: &LZMAOptions,
+        lzma_options: &LzmaOptions,
     ) -> Result<Self> {
         let mut chain_writer = FilterWriter::Counting(inner);
 
@@ -59,45 +59,45 @@ impl<W: Write> FilterWriter<W> {
                 }
                 FilterType::BcjX86 => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_x86(Box::new(chain_writer), start_offset))
+                    FilterWriter::Bcj(BcjWriter::new_x86(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjPPC => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_ppc(Box::new(chain_writer), start_offset))
+                    FilterWriter::Bcj(BcjWriter::new_ppc(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjIA64 => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_ia64(Box::new(chain_writer), start_offset))
+                    FilterWriter::Bcj(BcjWriter::new_ia64(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjARM => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_arm(Box::new(chain_writer), start_offset))
+                    FilterWriter::Bcj(BcjWriter::new_arm(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjARMThumb => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_arm_thumb(
+                    FilterWriter::Bcj(BcjWriter::new_arm_thumb(
                         Box::new(chain_writer),
                         start_offset,
                     ))
                 }
                 FilterType::BcjSPARC => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_sparc(Box::new(chain_writer), start_offset))
+                    FilterWriter::Bcj(BcjWriter::new_sparc(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjARM64 => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_arm64(Box::new(chain_writer), start_offset))
+                    FilterWriter::Bcj(BcjWriter::new_arm64(Box::new(chain_writer), start_offset))
                 }
                 FilterType::BcjRISCV => {
                     let start_offset = filter_config.property as usize;
-                    FilterWriter::Bcj(BCJWriter::new_riscv(Box::new(chain_writer), start_offset))
+                    FilterWriter::Bcj(BcjWriter::new_riscv(Box::new(chain_writer), start_offset))
                 }
                 FilterType::LZMA2 => {
-                    let options = LZMA2Options {
+                    let options = Lzma2Options {
                         lzma_options: lzma_options.clone(),
                         ..Default::default()
                     };
-                    FilterWriter::LZMA2(LZMA2Writer::new(Box::new(chain_writer), options))
+                    FilterWriter::LZMA2(Lzma2Writer::new(Box::new(chain_writer), options))
                 }
             };
         }
@@ -184,9 +184,9 @@ impl<W: Write> FilterWriter<W> {
 
 /// Configuration options for XZ compression.
 #[derive(Debug, Clone)]
-pub struct XZOptions {
+pub struct XzOptions {
     /// LZMA compression options.
-    pub lzma_options: LZMAOptions,
+    pub lzma_options: LzmaOptions,
     /// Checksum type to use.
     pub check_type: CheckType,
     /// Maximum uncompressed size for each block (None = single block).
@@ -196,10 +196,10 @@ pub struct XZOptions {
     pub filters: Vec<FilterConfig>,
 }
 
-impl Default for XZOptions {
+impl Default for XzOptions {
     fn default() -> Self {
         Self {
-            lzma_options: LZMAOptions::default(),
+            lzma_options: LzmaOptions::default(),
             check_type: CheckType::Crc32,
             block_size: None,
             filters: Vec::new(),
@@ -207,11 +207,11 @@ impl Default for XZOptions {
     }
 }
 
-impl XZOptions {
+impl XzOptions {
     /// Create options with specific preset and checksum type.
     pub fn with_preset(preset: u32) -> Self {
         Self {
-            lzma_options: LZMAOptions::with_preset(preset),
+            lzma_options: LzmaOptions::with_preset(preset),
             check_type: CheckType::Crc64,
             block_size: None,
             filters: Vec::new(),
@@ -241,9 +241,9 @@ impl XZOptions {
 }
 
 /// A single-threaded XZ compressor.
-pub struct XZWriter<W: Write> {
+pub struct XzWriter<W: Write> {
     writer: FilterWriter<W>,
-    options: XZOptions,
+    options: XzOptions,
     index_records: Vec<IndexRecord>,
     block_uncompressed_size: u64,
     checksum_calculator: ChecksumCalculator,
@@ -254,9 +254,9 @@ pub struct XZWriter<W: Write> {
     current_block_header_size: u64,
 }
 
-impl<W: Write> XZWriter<W> {
+impl<W: Write> XzWriter<W> {
     /// Create a new XZ writer with the given options.
-    pub fn new(inner: W, options: XZOptions) -> Result<Self> {
+    pub fn new(inner: W, options: XzOptions) -> Result<Self> {
         let mut options = options;
 
         if options.filters.len() > 3 {
@@ -295,11 +295,11 @@ impl<W: Write> XZWriter<W> {
     }
 
     /// Returns a wrapper around `self` that will finish the stream on drop.
-    pub fn auto_finish(self) -> AutoFinishXZWriter<W> {
-        AutoFinishXZWriter(Some(self))
+    pub fn auto_finish(self) -> AutoFinishXzWriter<W> {
+        AutoFinishXzWriter(Some(self))
     }
 
-    /// Consume the XZWriter and return the inner writer.
+    /// Consume the XzWriter and return the inner writer.
     pub fn into_inner(self) -> W {
         self.writer.into_inner()
     }
@@ -437,10 +437,10 @@ impl<W: Write> XZWriter<W> {
     }
 }
 
-impl<W: Write> Write for XZWriter<W> {
+impl<W: Write> Write for XzWriter<W> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         if self.finished {
-            return Err(error_invalid_data("XZWriter already finished"));
+            return Err(error_invalid_data("XzWriter already finished"));
         }
 
         self.write_stream_header()?;
@@ -493,12 +493,12 @@ impl<W: Write> Write for XZWriter<W> {
     }
 }
 
-/// A wrapper around an [`XZWriter<W>`] that finishes the stream on drop.
+/// A wrapper around an [`XzWriter<W>`] that finishes the stream on drop.
 ///
-/// This can be created by the [`XZWriter::auto_finish`] method.
-pub struct AutoFinishXZWriter<W: Write>(Option<XZWriter<W>>);
+/// This can be created by the [`XzWriter::auto_finish`] method.
+pub struct AutoFinishXzWriter<W: Write>(Option<XzWriter<W>>);
 
-impl<W: Write> Drop for AutoFinishXZWriter<W> {
+impl<W: Write> Drop for AutoFinishXzWriter<W> {
     fn drop(&mut self) {
         if let Some(writer) = self.0.take() {
             let _ = writer.finish();
@@ -506,7 +506,7 @@ impl<W: Write> Drop for AutoFinishXZWriter<W> {
     }
 }
 
-impl<W: Write> Write for AutoFinishXZWriter<W> {
+impl<W: Write> Write for AutoFinishXzWriter<W> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         self.0.as_mut().unwrap().write(buf)
     }

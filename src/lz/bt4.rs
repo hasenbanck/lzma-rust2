@@ -3,7 +3,7 @@ use alloc::{vec, vec::Vec};
 use super::{extend_match, hash234::Hash234, LZEncoder, MatchFind, Matches};
 
 /// Binary Tree with 4-byte matching
-pub(crate) struct BT4 {
+pub(crate) struct Bt4 {
     hash: Hash234,
     tree: Vec<i32>,
     depth_limit: i32,
@@ -19,7 +19,7 @@ fn sh_left(i: i32) -> i32 {
     ((i as u32) << 1) as i32
 }
 
-impl BT4 {
+impl Bt4 {
     pub(crate) fn new(dict_size: u32, nice_len: u32, depth_limit: i32) -> Self {
         let cyclic_size = dict_size as i32 + 1;
 
@@ -123,7 +123,7 @@ impl BT4 {
     }
 }
 
-impl MatchFind for BT4 {
+impl MatchFind for Bt4 {
     fn find_matches(&mut self, encoder: &mut super::LZEncoderData, matches: &mut Matches) {
         matches.count = 0;
 

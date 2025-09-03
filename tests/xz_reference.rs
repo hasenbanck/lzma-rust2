@@ -1,9 +1,9 @@
 use std::io::Read;
 
-use lzma_rust2::XZReader;
+use lzma_rust2::XzReader;
 
 fn reference_test(compressed: &[u8], original: &[u8]) {
-    let mut reader = XZReader::new(compressed, false);
+    let mut reader = XzReader::new(compressed, false);
 
     let mut uncompressed = Vec::with_capacity(original.len());
     let count = reader.read_to_end(&mut uncompressed).unwrap();

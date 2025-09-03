@@ -43,7 +43,7 @@ enum State {
 }
 
 /// A multi-threaded XZ decompressor.
-pub struct XZReaderMT<R: Read + Seek> {
+pub struct XzReaderMt<R: Read + Seek> {
     inner: Option<R>,
     blocks: Vec<XZBlock>,
     check_type: CheckType,
@@ -64,7 +64,7 @@ pub struct XZReaderMT<R: Read + Seek> {
     allow_multiple_streams: bool,
 }
 
-impl<R: Read + Seek> XZReaderMT<R> {
+impl<R: Read + Seek> XzReaderMt<R> {
     /// Creates a new multi-threaded XZ reader.
     ///
     /// - `inner`: The reader to read compressed data from. Must implement Seek.
@@ -445,7 +445,7 @@ fn decompress_xz_block(block_data: Vec<u8>, check_type: CheckType) -> io::Result
     Ok(decompressed_data)
 }
 
-impl<R: Read + Seek> Read for XZReaderMT<R> {
+impl<R: Read + Seek> Read for XzReaderMt<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -471,7 +471,7 @@ impl<R: Read + Seek> Read for XZReaderMT<R> {
     }
 }
 
-impl<R: Read + Seek> Drop for XZReaderMT<R> {
+impl<R: Read + Seek> Drop for XzReaderMt<R> {
     fn drop(&mut self) {
         self.shutdown_flag.store(true, Ordering::Release);
         self.work_queue.close();

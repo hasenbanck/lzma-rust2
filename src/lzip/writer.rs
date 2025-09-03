@@ -5,25 +5,25 @@ use super::{
     TRAILER_SIZE,
 };
 use crate::{
-    enc::{LZMAOptions, LZMAWriter},
+    enc::{LzmaOptions, LzmaWriter},
     error_invalid_data, ByteWriter, CountingWriter, Result, Write,
 };
 
 /// Options for LZIP compression.
 #[derive(Default, Debug, Clone)]
-pub struct LZIPOptions {
+pub struct LzipOptions {
     /// LZMA compression options (will be overridden partially to use LZMA-302eos defaults).
-    pub lzma_options: LZMAOptions,
+    pub lzma_options: LzmaOptions,
     /// The maximal size of a member. If not set, the whole data will be written in one member.
     /// Will get clamped to be at least the dict size to not waste memory.
     pub member_size: Option<NonZeroU64>,
 }
 
-impl LZIPOptions {
+impl LzipOptions {
     /// Create options with specific preset.
     pub fn with_preset(preset: u32) -> Self {
         Self {
-            lzma_options: LZMAOptions::with_preset(preset),
+            lzma_options: LzmaOptions::with_preset(preset),
             member_size: None,
         }
     }
@@ -35,10 +35,10 @@ impl LZIPOptions {
 }
 
 /// A single-threaded LZIP compressor.
-pub struct LZIPWriter<W: Write> {
+pub struct LzipWriter<W: Write> {
     inner: Option<W>,
-    lzma_writer: Option<LZMAWriter<CountingWriter<W>>>,
-    options: LZIPOptions,
+    lzma_writer: Option<LzmaWriter<CountingWriter<W>>>,
+    options: LzipOptions,
     header_written: bool,
     finished: bool,
     crc_digest: crc::Digest<'static, u32, crc::Table<16>>,
@@ -47,9 +47,9 @@ pub struct LZIPWriter<W: Write> {
     current_member_uncompressed_size: u64,
 }
 
-impl<W: Write> LZIPWriter<W> {
+impl<W: Write> LzipWriter<W> {
     /// Create a new LZIP writer with the given options.
-    pub fn new(inner: W, options: LZIPOptions) -> Self {
+    pub fn new(inner: W, options: LzipOptions) -> Self {
         let mut options = options;
 
         // Overwrite with LZMA-302eos defaults.
@@ -81,8 +81,8 @@ impl<W: Write> LZIPWriter<W> {
     }
 
     /// Returns a wrapper around `self` that will finish the stream on drop.
-    pub fn auto_finish(self) -> AutoFinishLZIPWriter<W> {
-        AutoFinishLZIPWriter(Some(self))
+    pub fn auto_finish(self) -> AutoFinishLzipWriter<W> {
+        AutoFinishLzipWriter(Some(self))
     }
 
     /// Consume the writer and return the inner writer.
@@ -134,7 +134,7 @@ impl<W: Write> LZIPWriter<W> {
         let counting_writer = CountingWriter::new(writer);
 
         let lzma_writer =
-            LZMAWriter::new_no_header(counting_writer, &self.options.lzma_options, true)?;
+            LzmaWriter::new_no_header(counting_writer, &self.options.lzma_options, true)?;
 
         self.lzma_writer = Some(lzma_writer);
         self.header_written = true;
@@ -193,7 +193,7 @@ impl<W: Write> LZIPWriter<W> {
     }
 }
 
-impl<W: Write> Write for LZIPWriter<W> {
+impl<W: Write> Write for LzipWriter<W> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         if self.finished {
             return Err(error_invalid_data("LZIP writer already finished"));
@@ -255,12 +255,12 @@ impl<W: Write> Write for LZIPWriter<W> {
     }
 }
 
-/// A wrapper around an [`LZIPWriter<W>`] that finishes the stream on drop.
+/// A wrapper around an [`LzipWriter<W>`] that finishes the stream on drop.
 ///
-/// This can be created by the [`LZIPWriter::auto_finish`] method.
-pub struct AutoFinishLZIPWriter<W: Write>(Option<LZIPWriter<W>>);
+/// This can be created by the [`LzipWriter::auto_finish`] method.
+pub struct AutoFinishLzipWriter<W: Write>(Option<LzipWriter<W>>);
 
-impl<W: Write> Drop for AutoFinishLZIPWriter<W> {
+impl<W: Write> Drop for AutoFinishLzipWriter<W> {
     fn drop(&mut self) {
         if let Some(writer) = self.0.take() {
             let _ = writer.finish();
@@ -268,7 +268,7 @@ impl<W: Write> Drop for AutoFinishLZIPWriter<W> {
     }
 }
 
-impl<W: Write> Write for AutoFinishLZIPWriter<W> {
+impl<W: Write> Write for AutoFinishLzipWriter<W> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         self.0.as_mut().unwrap().write(buf)
     }

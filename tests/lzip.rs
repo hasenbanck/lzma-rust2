@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 
-use lzma_rust2::{LZIPOptions, LZIPReader, LZIPWriter};
+use lzma_rust2::{LzipOptions, LzipReader, LzipWriter};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
@@ -9,12 +9,12 @@ static PG6800: &str = "tests/data/pg6800.txt";
 fn test_round_trip(path: &str, level: u32) {
     let data = std::fs::read(path).unwrap();
 
-    let option = LZIPOptions::with_preset(level);
+    let option = LzipOptions::with_preset(level);
 
     let mut compressed = Vec::new();
 
     {
-        let mut writer = LZIPWriter::new(&mut compressed, option);
+        let mut writer = LzipWriter::new(&mut compressed, option);
         writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }
@@ -22,7 +22,7 @@ fn test_round_trip(path: &str, level: u32) {
     let mut uncompressed = Vec::new();
 
     {
-        let mut reader = LZIPReader::new(compressed.as_slice()).unwrap();
+        let mut reader = LzipReader::new(compressed.as_slice()).unwrap();
         reader.read_to_end(&mut uncompressed).unwrap();
     }
 

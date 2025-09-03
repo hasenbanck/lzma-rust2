@@ -33,7 +33,7 @@ impl BCJFilter {
 const FILTER_BUF_SIZE: usize = 4096;
 
 /// Reader that applies BCJ (Branch/Call/Jump) filtering to compressed data.
-pub struct BCJReader<R> {
+pub struct BcjReader<R> {
     inner: R,
     filter: BCJFilter,
     state: State,
@@ -49,7 +49,7 @@ struct State {
     end_reached: bool,
 }
 
-impl<R> BCJReader<R> {
+impl<R> BcjReader<R> {
     fn new(inner: R, filter: BCJFilter) -> Self {
         Self {
             inner,
@@ -126,7 +126,7 @@ impl<R> BCJReader<R> {
     }
 }
 
-impl<R: Read> Read for BCJReader<R> {
+impl<R: Read> Read for BcjReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -203,14 +203,14 @@ impl<R: Read> Read for BCJReader<R> {
 
 /// Writer that applies BCJ (Branch/Call/Jump) filtering to data before compression.
 #[cfg(feature = "encoder")]
-pub struct BCJWriter<W> {
+pub struct BcjWriter<W> {
     inner: W,
     filter: BCJFilter,
     buffer: Vec<u8>,
 }
 
 #[cfg(feature = "encoder")]
-impl<W> BCJWriter<W> {
+impl<W> BcjWriter<W> {
     fn new(inner: W, filter: BCJFilter) -> Self {
         Self {
             inner,
@@ -299,7 +299,7 @@ impl<W> BCJWriter<W> {
 }
 
 #[cfg(feature = "encoder")]
-impl<W: Write> Write for BCJWriter<W> {
+impl<W: Write> Write for BcjWriter<W> {
     fn write(&mut self, buf: &[u8]) -> crate::Result<usize> {
         let original_len = buf.len();
 
@@ -338,14 +338,14 @@ mod tests {
         let test_data = std::fs::read("tests/data/wget-x86").unwrap();
 
         let mut encoded_buffer = Vec::new();
-        let mut writer = BCJWriter::new_x86(Cursor::new(&mut encoded_buffer), 0);
+        let mut writer = BcjWriter::new_x86(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
         writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
         let mut decoded_data = Vec::new();
-        let mut reader = BCJReader::new_x86(Cursor::new(&encoded_buffer), 0);
+        let mut reader = BcjReader::new_x86(Cursor::new(&encoded_buffer), 0);
         copy(&mut reader, &mut decoded_data).expect("Failed to decode data");
 
         assert!(test_data == decoded_data);
@@ -356,14 +356,14 @@ mod tests {
         let test_data = std::fs::read("tests/data/wget-arm").unwrap();
 
         let mut encoded_buffer = Vec::new();
-        let mut writer = BCJWriter::new_arm(Cursor::new(&mut encoded_buffer), 0);
+        let mut writer = BcjWriter::new_arm(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
         writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
         let mut decoded_data = Vec::new();
-        let mut reader = BCJReader::new_arm(Cursor::new(&encoded_buffer), 0);
+        let mut reader = BcjReader::new_arm(Cursor::new(&encoded_buffer), 0);
         copy(&mut reader, &mut decoded_data).expect("Failed to decode data");
 
         assert!(test_data == decoded_data);
@@ -374,14 +374,14 @@ mod tests {
         let test_data = std::fs::read("tests/data/wget-arm64").unwrap();
 
         let mut encoded_buffer = Vec::new();
-        let mut writer = BCJWriter::new_arm64(Cursor::new(&mut encoded_buffer), 0);
+        let mut writer = BcjWriter::new_arm64(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
         writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
         let mut decoded_data = Vec::new();
-        let mut reader = BCJReader::new_arm64(Cursor::new(&encoded_buffer), 0);
+        let mut reader = BcjReader::new_arm64(Cursor::new(&encoded_buffer), 0);
         copy(&mut reader, &mut decoded_data).expect("Failed to decode data");
 
         assert!(test_data == decoded_data);
@@ -392,14 +392,14 @@ mod tests {
         let test_data = std::fs::read("tests/data/wget-arm-thumb").unwrap();
 
         let mut encoded_buffer = Vec::new();
-        let mut writer = BCJWriter::new_arm_thumb(Cursor::new(&mut encoded_buffer), 0);
+        let mut writer = BcjWriter::new_arm_thumb(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
         writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
         let mut decoded_data = Vec::new();
-        let mut reader = BCJReader::new_arm_thumb(Cursor::new(&encoded_buffer), 0);
+        let mut reader = BcjReader::new_arm_thumb(Cursor::new(&encoded_buffer), 0);
         copy(&mut reader, &mut decoded_data).expect("Failed to decode data");
 
         assert!(test_data == decoded_data);
@@ -410,14 +410,14 @@ mod tests {
         let test_data = std::fs::read("tests/data/wget-ppc").unwrap();
 
         let mut encoded_buffer = Vec::new();
-        let mut writer = BCJWriter::new_ppc(Cursor::new(&mut encoded_buffer), 0);
+        let mut writer = BcjWriter::new_ppc(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
         writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
         let mut decoded_data = Vec::new();
-        let mut reader = BCJReader::new_ppc(Cursor::new(&encoded_buffer), 0);
+        let mut reader = BcjReader::new_ppc(Cursor::new(&encoded_buffer), 0);
         copy(&mut reader, &mut decoded_data).expect("Failed to decode data");
 
         assert!(test_data == decoded_data);
@@ -428,14 +428,14 @@ mod tests {
         let test_data = std::fs::read("tests/data/wget-sparc").unwrap();
 
         let mut encoded_buffer = Vec::new();
-        let mut writer = BCJWriter::new_sparc(Cursor::new(&mut encoded_buffer), 0);
+        let mut writer = BcjWriter::new_sparc(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
         writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
         let mut decoded_data = Vec::new();
-        let mut reader = BCJReader::new_sparc(Cursor::new(&encoded_buffer), 0);
+        let mut reader = BcjReader::new_sparc(Cursor::new(&encoded_buffer), 0);
         copy(&mut reader, &mut decoded_data).expect("Failed to decode data");
 
         assert!(test_data == decoded_data);
@@ -446,14 +446,14 @@ mod tests {
         let test_data = std::fs::read("tests/data/wget-ia64").unwrap();
 
         let mut encoded_buffer = Vec::new();
-        let mut writer = BCJWriter::new_ia64(Cursor::new(&mut encoded_buffer), 0);
+        let mut writer = BcjWriter::new_ia64(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
         writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
         let mut decoded_data = Vec::new();
-        let mut reader = BCJReader::new_ia64(Cursor::new(&encoded_buffer), 0);
+        let mut reader = BcjReader::new_ia64(Cursor::new(&encoded_buffer), 0);
         copy(&mut reader, &mut decoded_data).expect("Failed to decode data");
 
         assert!(test_data == decoded_data);
@@ -464,14 +464,14 @@ mod tests {
         let test_data = std::fs::read("tests/data/wget-riscv").unwrap();
 
         let mut encoded_buffer = Vec::new();
-        let mut writer = BCJWriter::new_riscv(Cursor::new(&mut encoded_buffer), 0);
+        let mut writer = BcjWriter::new_riscv(Cursor::new(&mut encoded_buffer), 0);
         copy(&mut test_data.as_slice(), &mut writer).expect("Failed to encode data");
         writer.finish().expect("Failed to finish encoding");
 
         assert!(test_data != encoded_buffer);
 
         let mut decoded_data = Vec::new();
-        let mut reader = BCJReader::new_riscv(Cursor::new(&encoded_buffer), 0);
+        let mut reader = BcjReader::new_riscv(Cursor::new(&encoded_buffer), 0);
         copy(&mut reader, &mut decoded_data).expect("Failed to decode data");
 
         assert!(test_data == decoded_data);

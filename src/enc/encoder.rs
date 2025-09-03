@@ -3,7 +3,7 @@ use alloc::{vec, vec::Vec};
 use super::{
     encoder_fast::FastEncoderMode,
     encoder_normal::NormalEncoderMode,
-    lz::{LZEncoder, MFType},
+    lz::{LZEncoder, MfType},
     range_enc::{RangeEncoder, RangeEncoderBuffer},
 };
 use crate::{
@@ -115,7 +115,7 @@ impl LZMAEncoder {
         mode: EncodeMode,
         dict_size: u32,
         extra_size_before: u32,
-        mf: MFType,
+        mf: MfType,
     ) -> u32 {
         let mut m = 80;
         match mode {
@@ -137,7 +137,7 @@ impl LZMAEncoder {
         lc: u32,
         lp: u32,
         pb: u32,
-        mf: MFType,
+        mf: MfType,
         depth_limit: i32,
         dict_size: u32,
         nice_len: usize,
@@ -160,7 +160,7 @@ impl LZMAEncoder {
             )
         };
         let lz = match mf {
-            MFType::HC4 => LZEncoder::new_hc4(
+            MfType::Hc4 => LZEncoder::new_hc4(
                 dict_size,
                 extra_size_before,
                 extra_size_after,
@@ -168,7 +168,7 @@ impl LZMAEncoder {
                 MATCH_LEN_MAX as _,
                 depth_limit,
             ),
-            MFType::BT4 => LZEncoder::new_bt4(
+            MfType::Bt4 => LZEncoder::new_bt4(
                 dict_size,
                 extra_size_before,
                 extra_size_after,

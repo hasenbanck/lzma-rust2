@@ -3,7 +3,7 @@ use std::{
     num::{NonZero, NonZeroU64},
 };
 
-use lzma_rust2::{LZIPOptions, LZIPReaderMT, LZIPWriterMT};
+use lzma_rust2::{LzipOptions, LzipReaderMt, LzipWriterMt};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
@@ -18,7 +18,7 @@ fn test_round_trip(path: &str, level: u32) {
         .get()
         .min(256) as u32;
 
-    let mut options = LZIPOptions::with_preset(level);
+    let mut options = LzipOptions::with_preset(level);
     let dict_size = options.lzma_options.dict_size;
     options.set_member_size(NonZeroU64::new(dict_size as u64));
 
@@ -26,7 +26,7 @@ fn test_round_trip(path: &str, level: u32) {
 
     {
         let mut writer =
-            LZIPWriterMT::new(&mut compressed, options, available_parallelism).unwrap();
+            LzipWriterMt::new(&mut compressed, options, available_parallelism).unwrap();
         writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }
@@ -35,7 +35,7 @@ fn test_round_trip(path: &str, level: u32) {
 
     {
         let cursor = Cursor::new(compressed);
-        let mut reader = LZIPReaderMT::new(cursor, available_parallelism).unwrap();
+        let mut reader = LzipReaderMt::new(cursor, available_parallelism).unwrap();
         reader.read_to_end(&mut uncompressed).unwrap();
 
         if dict_size < data_len {

@@ -14,13 +14,13 @@ mod writer_mt;
 #[cfg(feature = "std")]
 use std::io::{Seek, SeekFrom};
 
-pub use reader::LZIPReader;
+pub use reader::LzipReader;
 #[cfg(feature = "std")]
-pub use reader_mt::LZIPReaderMT;
+pub use reader_mt::LzipReaderMt;
 #[cfg(feature = "encoder")]
-pub use writer::{AutoFinishLZIPWriter, LZIPOptions, LZIPWriter};
+pub use writer::{AutoFinishLzipWriter, LzipOptions, LzipWriter};
 #[cfg(all(feature = "encoder", feature = "std"))]
-pub use writer_mt::{AutoFinishLZIPWriterMT, LZIPWriterMT};
+pub use writer_mt::{AutoFinishLzipWriterMt, LzipWriterMt};
 
 use crate::{error_invalid_data, error_invalid_input, ByteReader, Read, Result};
 

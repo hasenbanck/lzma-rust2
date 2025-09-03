@@ -12,20 +12,20 @@ use alloc::{boxed::Box, vec, vec::Vec};
 #[cfg(feature = "std")]
 use std::io::{self, Seek, SeekFrom};
 
-pub use reader::XZReader;
+pub use reader::XzReader;
 #[cfg(feature = "std")]
-pub use reader_mt::XZReaderMT;
+pub use reader_mt::XzReaderMt;
 use sha2::Digest;
 #[cfg(feature = "encoder")]
-pub use writer::{AutoFinishXZWriter, XZOptions, XZWriter};
+pub use writer::{AutoFinishXzWriter, XzOptions, XzWriter};
 #[cfg(all(feature = "encoder", feature = "std"))]
-pub use writer_mt::{AutoFinishXZWriterMT, XZWriterMT};
+pub use writer_mt::{AutoFinishXzWriterMt, XzWriterMt};
 
 use crate::{error_invalid_data, error_invalid_input, ByteReader, ByteWriter, Read, Write};
 #[cfg(feature = "std")]
 use crate::{
-    filter::{bcj::BCJReader, delta::DeltaReader},
-    LZMA2Reader,
+    filter::{bcj::BcjReader, delta::DeltaReader},
+    Lzma2Reader,
 };
 
 const CRC32: crc::Crc<u32, crc::Table<16>> =
@@ -1092,39 +1092,39 @@ fn create_filter_chain<'reader>(
             }
             FilterType::BcjX86 => {
                 let start_offset = property as usize;
-                Box::new(BCJReader::new_x86(chain_reader, start_offset))
+                Box::new(BcjReader::new_x86(chain_reader, start_offset))
             }
             FilterType::BcjPPC => {
                 let start_offset = property as usize;
-                Box::new(BCJReader::new_ppc(chain_reader, start_offset))
+                Box::new(BcjReader::new_ppc(chain_reader, start_offset))
             }
             FilterType::BcjIA64 => {
                 let start_offset = property as usize;
-                Box::new(BCJReader::new_ia64(chain_reader, start_offset))
+                Box::new(BcjReader::new_ia64(chain_reader, start_offset))
             }
             FilterType::BcjARM => {
                 let start_offset = property as usize;
-                Box::new(BCJReader::new_arm(chain_reader, start_offset))
+                Box::new(BcjReader::new_arm(chain_reader, start_offset))
             }
             FilterType::BcjARMThumb => {
                 let start_offset = property as usize;
-                Box::new(BCJReader::new_arm_thumb(chain_reader, start_offset))
+                Box::new(BcjReader::new_arm_thumb(chain_reader, start_offset))
             }
             FilterType::BcjSPARC => {
                 let start_offset = property as usize;
-                Box::new(BCJReader::new_sparc(chain_reader, start_offset))
+                Box::new(BcjReader::new_sparc(chain_reader, start_offset))
             }
             FilterType::BcjARM64 => {
                 let start_offset = property as usize;
-                Box::new(BCJReader::new_arm64(chain_reader, start_offset))
+                Box::new(BcjReader::new_arm64(chain_reader, start_offset))
             }
             FilterType::BcjRISCV => {
                 let start_offset = property as usize;
-                Box::new(BCJReader::new_riscv(chain_reader, start_offset))
+                Box::new(BcjReader::new_riscv(chain_reader, start_offset))
             }
             FilterType::LZMA2 => {
                 let dict_size = property;
-                Box::new(LZMA2Reader::new(chain_reader, dict_size, None))
+                Box::new(Lzma2Reader::new(chain_reader, dict_size, None))
             }
         };
     }

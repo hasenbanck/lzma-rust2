@@ -4,8 +4,8 @@ use std::{
 };
 
 use lzma_rust2::{
-    LZIPOptions, LZIPReaderMT, LZIPWriter, LZMA2Options, LZMA2ReaderMT, LZMA2Writer, XZOptions,
-    XZReaderMT, XZWriter,
+    LzipOptions, LzipReaderMt, LzipWriter, Lzma2Options, Lzma2ReaderMt, Lzma2Writer, XzOptions,
+    XzReaderMt, XzWriter,
 };
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
@@ -15,14 +15,14 @@ const LEVEL: u32 = 3;
 fn multi_writer_lzma2() {
     let data = std::fs::read(EXECUTABLE).unwrap();
 
-    let mut option = LZMA2Options::with_preset(LEVEL);
+    let mut option = Lzma2Options::with_preset(LEVEL);
     let dict_size = option.lzma_options.dict_size;
     option.set_chunk_size(NonZeroU64::new(dict_size as u64));
 
     let mut compressed = Vec::new();
 
     {
-        let mut writer = LZMA2Writer::new(&mut compressed, option);
+        let mut writer = Lzma2Writer::new(&mut compressed, option);
         writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }
@@ -30,7 +30,7 @@ fn multi_writer_lzma2() {
     let mut uncompressed = Vec::new();
 
     {
-        let mut reader = LZMA2ReaderMT::new(Cursor::new(compressed), dict_size, None, 1);
+        let mut reader = Lzma2ReaderMt::new(Cursor::new(compressed), dict_size, None, 1);
         reader.read_to_end(&mut uncompressed).unwrap();
         assert!(reader.chunk_count() > 1);
     }
@@ -43,14 +43,14 @@ fn multi_writer_lzma2() {
 fn multi_writer_lzip2() {
     let data = std::fs::read(EXECUTABLE).unwrap();
 
-    let mut option = LZIPOptions::with_preset(LEVEL);
+    let mut option = LzipOptions::with_preset(LEVEL);
     let dict_size = option.lzma_options.dict_size;
     option.set_member_size(NonZeroU64::new(dict_size as u64));
 
     let mut compressed = Vec::new();
 
     {
-        let mut writer = LZIPWriter::new(&mut compressed, option);
+        let mut writer = LzipWriter::new(&mut compressed, option);
         writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }
@@ -58,7 +58,7 @@ fn multi_writer_lzip2() {
     let mut uncompressed = Vec::new();
 
     {
-        let mut reader = LZIPReaderMT::new(Cursor::new(compressed), 1).unwrap();
+        let mut reader = LzipReaderMt::new(Cursor::new(compressed), 1).unwrap();
         reader.read_to_end(&mut uncompressed).unwrap();
         assert!(reader.member_count() > 1);
     }
@@ -71,14 +71,14 @@ fn multi_writer_lzip2() {
 fn multi_writer_xz() {
     let data = std::fs::read(EXECUTABLE).unwrap();
 
-    let mut option = XZOptions::with_preset(LEVEL);
+    let mut option = XzOptions::with_preset(LEVEL);
     let dict_size = option.lzma_options.dict_size;
     option.set_block_size(NonZeroU64::new(dict_size as u64));
 
     let mut compressed = Vec::new();
 
     {
-        let mut writer = XZWriter::new(&mut compressed, option).unwrap();
+        let mut writer = XzWriter::new(&mut compressed, option).unwrap();
         writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }
@@ -86,7 +86,7 @@ fn multi_writer_xz() {
     let mut uncompressed = Vec::new();
 
     {
-        let mut reader = XZReaderMT::new(Cursor::new(compressed), false, 1).unwrap();
+        let mut reader = XzReaderMt::new(Cursor::new(compressed), false, 1).unwrap();
         reader.read_to_end(&mut uncompressed).unwrap();
         assert!(reader.block_count() > 1);
     }

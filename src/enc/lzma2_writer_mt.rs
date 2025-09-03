@@ -7,31 +7,31 @@ use std::{
     },
 };
 
-use super::LZMA2Writer;
+use super::Lzma2Writer;
 use crate::{
     error_invalid_input, set_error,
     work_pool::{WorkPool, WorkPoolConfig},
     work_queue::WorkerHandle,
-    ByteWriter, LZMA2Options,
+    ByteWriter, Lzma2Options,
 };
 
 /// A work unit for a worker thread.
 #[derive(Debug, Clone)]
 struct WorkUnit {
     data: Vec<u8>,
-    options: LZMA2Options,
+    options: Lzma2Options,
 }
 
 /// A multi-threaded LZMA2 compressor.
-pub struct LZMA2WriterMT<W: Write> {
+pub struct Lzma2WriterMt<W: Write> {
     inner: W,
-    options: LZMA2Options,
+    options: Lzma2Options,
     chunk_size: usize,
     current_work_unit: Vec<u8>,
     work_pool: WorkPool<WorkUnit, Vec<u8>>,
 }
 
-impl<W: Write> LZMA2WriterMT<W> {
+impl<W: Write> Lzma2WriterMt<W> {
     /// Creates a new multi-threaded LZMA2 writer.
     ///
     /// - `inner`: The writer to write compressed data to.
@@ -39,7 +39,7 @@ impl<W: Write> LZMA2WriterMT<W> {
     ///   multi-threaded encoder. If you need just one chunk, then use the single-threaded encoder.
     /// - `num_workers`: The maximum number of worker threads for compression.
     ///   Currently capped at 256 Threads.
-    pub fn new(inner: W, options: LZMA2Options, num_workers: u32) -> crate::Result<Self> {
+    pub fn new(inner: W, options: Lzma2Options, num_workers: u32) -> crate::Result<Self> {
         let chunk_size = match options.chunk_size {
             None => return Err(error_invalid_input("chunk size must be set")),
             Some(chunk_size) => chunk_size.get().max(options.lzma_options.dict_size as u64),
@@ -101,7 +101,7 @@ impl<W: Write> LZMA2WriterMT<W> {
         Ok(())
     }
 
-    /// Consume the LZMA2WriterMT and return the inner writer.
+    /// Consume the Lzma2WriterMt and return the inner writer.
     pub fn into_inner(self) -> W {
         self.inner
     }
@@ -162,7 +162,7 @@ fn worker_thread_logic(
 
         let mut compressed_buffer = Vec::new();
 
-        let mut writer = LZMA2Writer::new(&mut compressed_buffer, work_unit.options);
+        let mut writer = Lzma2Writer::new(&mut compressed_buffer, work_unit.options);
 
         let result = match writer.write_all(&work_unit.data) {
             Ok(_) => match writer.flush() {
@@ -189,7 +189,7 @@ fn worker_thread_logic(
     }
 }
 
-impl<W: Write> Write for LZMA2WriterMT<W> {
+impl<W: Write> Write for Lzma2WriterMt<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);

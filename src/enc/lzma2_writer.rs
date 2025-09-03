@@ -3,14 +3,14 @@ use core::num::NonZeroU64;
 
 use super::{
     encoder::{EncodeMode, LZMAEncoder, LZMAEncoderModes},
-    lz::MFType,
+    lz::MfType,
     range_enc::{RangeEncoder, RangeEncoderBuffer},
 };
 use crate::{ByteWriter, Write};
 
 /// Encoder settings when compressing with LZMA and LZMA2.
 #[derive(Debug, Clone)]
-pub struct LZMAOptions {
+pub struct LzmaOptions {
     /// Dictionary size in bytes.
     pub dict_size: u32,
     /// Number of literal context bits (0-8).
@@ -24,20 +24,20 @@ pub struct LZMAOptions {
     /// Match finder nice length.
     pub nice_len: u32,
     /// Match finder type.
-    pub mf: MFType,
+    pub mf: MfType,
     /// Match finder depth limit.
     pub depth_limit: i32,
     /// Preset dictionary data.
     pub preset_dict: Option<Vec<u8>>,
 }
 
-impl Default for LZMAOptions {
+impl Default for LzmaOptions {
     fn default() -> Self {
         Self::with_preset(6)
     }
 }
 
-impl LZMAOptions {
+impl LzmaOptions {
     /// Default number of literal context bits.
     pub const LC_DEFAULT: u32 = 3;
 
@@ -80,7 +80,7 @@ impl LZMAOptions {
         pb: u32,
         mode: EncodeMode,
         nice_len: u32,
-        mf: MFType,
+        mf: MfType,
         depth_limit: i32,
     ) -> Self {
         Self {
@@ -124,12 +124,12 @@ impl LZMAOptions {
         self.dict_size = Self::PRESET_TO_DICT_SIZE[preset as usize];
         if preset <= 3 {
             self.mode = EncodeMode::Fast;
-            self.mf = MFType::HC4;
+            self.mf = MfType::Hc4;
             self.nice_len = if preset <= 1 { 128 } else { Self::NICE_LEN_MAX };
             self.depth_limit = Self::PRESET_TO_DEPTH_LIMIT[preset as usize];
         } else {
             self.mode = EncodeMode::Normal;
-            self.mf = MFType::BT4;
+            self.mf = MfType::Bt4;
             self.nice_len = if preset == 4 {
                 16
             } else if preset == 5 {
@@ -157,20 +157,20 @@ impl LZMAOptions {
 
 /// Options for LZMA2 compression.
 #[derive(Default, Debug, Clone)]
-pub struct LZMA2Options {
+pub struct Lzma2Options {
     /// LZMA compression options.
-    pub lzma_options: LZMAOptions,
+    pub lzma_options: LzmaOptions,
     /// The size of each independent chunk in bytes.
     /// If not set, the whole data will be written as one chunk.
     /// Will get clamped to be at least the dict size to not waste memory.
     pub chunk_size: Option<NonZeroU64>,
 }
 
-impl LZMA2Options {
+impl Lzma2Options {
     /// Create options with specific preset.
     pub fn with_preset(preset: u32) -> Self {
         Self {
-            lzma_options: LZMAOptions::with_preset(preset),
+            lzma_options: LzmaOptions::with_preset(preset),
             chunk_size: None,
         }
     }
@@ -190,7 +190,7 @@ pub fn get_extra_size_before(dict_size: u32) -> u32 {
 }
 
 /// A single-threaded LZMA2 compressor.
-pub struct LZMA2Writer<W: Write> {
+pub struct Lzma2Writer<W: Write> {
     inner: W,
     rc: RangeEncoder<RangeEncoderBuffer>,
     lzma: LZMAEncoder,
@@ -202,12 +202,12 @@ pub struct LZMA2Writer<W: Write> {
     chunk_size: Option<u64>,
     uncompressed_size: u64,
     force_independent_chunk: bool,
-    options: LZMA2Options,
+    options: Lzma2Options,
 }
 
-impl<W: Write> LZMA2Writer<W> {
+impl<W: Write> Lzma2Writer<W> {
     /// Creates a new LZMA2 writer that will write compressed data to the given writer.
-    pub fn new(inner: W, options: LZMA2Options) -> Self {
+    pub fn new(inner: W, options: Lzma2Options) -> Self {
         let lzma_options = &options.lzma_options;
         let dict_size = lzma_options.dict_size;
 
@@ -400,7 +400,7 @@ impl<W: Write> LZMA2Writer<W> {
     }
 }
 
-impl<W: Write> Write for LZMA2Writer<W> {
+impl<W: Write> Write for Lzma2Writer<W> {
     fn write(&mut self, buf: &[u8]) -> crate::Result<usize> {
         let mut len = buf.len();
 

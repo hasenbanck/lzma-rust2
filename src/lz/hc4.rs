@@ -8,7 +8,7 @@ use super::{
 };
 
 /// Hash Chain with 4-byte matching
-pub(crate) struct HC4 {
+pub(crate) struct Hc4 {
     hash: Hash234,
     chain: Vec<i32>,
     depth_limit: i32,
@@ -17,7 +17,7 @@ pub(crate) struct HC4 {
     lz_pos: i32,
 }
 
-impl HC4 {
+impl Hc4 {
     pub(crate) fn get_mem_usage(dict_size: u32) -> u32 {
         Hash234::get_mem_usage(dict_size) + dict_size / (1024 / 4) + 10
     }
@@ -60,7 +60,7 @@ impl HC4 {
     }
 }
 
-impl MatchFind for HC4 {
+impl MatchFind for Hc4 {
     fn find_matches(&mut self, encoder: &mut LZEncoderData, matches: &mut Matches) {
         matches.count = 0;
         let mut match_len_limit = encoder.match_len_max as i32;

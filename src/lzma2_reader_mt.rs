@@ -13,7 +13,7 @@ use std::{
 use crate::{
     set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
-    LZMA2Reader,
+    Lzma2Reader,
 };
 
 /// A work unit for a worker thread.
@@ -37,7 +37,7 @@ enum State {
 }
 
 /// A multi-threaded LZMA2 decompressor.
-pub struct LZMA2ReaderMT<R: Read> {
+pub struct Lzma2ReaderMt<R: Read> {
     inner: R,
     result_rx: Receiver<ResultUnit>,
     result_tx: SyncSender<ResultUnit>,
@@ -58,7 +58,7 @@ pub struct LZMA2ReaderMT<R: Read> {
     worker_handles: Vec<thread::JoinHandle<()>>,
 }
 
-impl<R: Read> LZMA2ReaderMT<R> {
+impl<R: Read> Lzma2ReaderMt<R> {
     /// Creates a new multi-threaded LZMA2 reader.
     ///
     /// - `inner`: The reader to read compressed data from.
@@ -377,7 +377,7 @@ fn worker_thread_logic(
             }
         };
 
-        let mut reader = LZMA2Reader::new(
+        let mut reader = Lzma2Reader::new(
             work_unit_data.as_slice(),
             dict_size,
             preset_dict.as_deref().map(|v| v.as_slice()),
@@ -402,7 +402,7 @@ fn worker_thread_logic(
     }
 }
 
-impl<R: Read> Read for LZMA2ReaderMT<R> {
+impl<R: Read> Read for Lzma2ReaderMt<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -428,7 +428,7 @@ impl<R: Read> Read for LZMA2ReaderMT<R> {
     }
 }
 
-impl<R: Read> Drop for LZMA2ReaderMT<R> {
+impl<R: Read> Drop for Lzma2ReaderMt<R> {
     fn drop(&mut self) {
         self.shutdown_flag.store(true, Ordering::Release);
         self.work_queue.close();

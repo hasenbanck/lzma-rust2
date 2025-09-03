@@ -1,12 +1,12 @@
 use super::{
     encoder::{LZMAEncoder, LZMAEncoderModes},
     range_enc::RangeEncoder,
-    LZMAOptions,
+    LzmaOptions,
 };
 use crate::{error_invalid_input, error_unsupported, Write};
 
 /// A single-threaded LZMA compressor.
-pub struct LZMAWriter<W: Write> {
+pub struct LzmaWriter<W: Write> {
     rc: RangeEncoder<W>,
     lzma: LZMAEncoder,
     use_end_marker: bool,
@@ -16,15 +16,15 @@ pub struct LZMAWriter<W: Write> {
     mode: LZMAEncoderModes,
 }
 
-impl<W: Write> LZMAWriter<W> {
+impl<W: Write> LzmaWriter<W> {
     /// Creates a new LZMA writer with full control over formatting options.
     pub fn new(
         mut out: W,
-        options: &LZMAOptions,
+        options: &LzmaOptions,
         use_header: bool,
         use_end_marker: bool,
         expected_uncompressed_size: Option<u64>,
-    ) -> crate::Result<LZMAWriter<W>> {
+    ) -> crate::Result<LzmaWriter<W>> {
         let (mut lzma, mode) = LZMAEncoder::new(
             options.mode,
             options.lc,
@@ -54,7 +54,7 @@ impl<W: Write> LZMAWriter<W> {
         }
 
         let rc = RangeEncoder::new(out);
-        Ok(LZMAWriter {
+        Ok(LzmaWriter {
             rc,
             lzma,
             use_end_marker,
@@ -69,7 +69,7 @@ impl<W: Write> LZMAWriter<W> {
     #[inline]
     pub fn new_use_header(
         out: W,
-        options: &LZMAOptions,
+        options: &LzmaOptions,
         input_size: Option<u64>,
     ) -> crate::Result<Self> {
         Self::new(out, options, true, input_size.is_none(), input_size)
@@ -79,7 +79,7 @@ impl<W: Write> LZMAWriter<W> {
     #[inline]
     pub fn new_no_header(
         out: W,
-        options: &LZMAOptions,
+        options: &LzmaOptions,
         use_end_marker: bool,
     ) -> crate::Result<Self> {
         Self::new(out, options, false, use_end_marker, None)
@@ -134,7 +134,7 @@ impl<W: Write> LZMAWriter<W> {
     }
 }
 
-impl<W: Write> Write for LZMAWriter<W> {
+impl<W: Write> Write for LzmaWriter<W> {
     fn write(&mut self, buf: &[u8]) -> crate::Result<usize> {
         if let Some(exp) = self.expected_uncompressed_size {
             if exp < self.current_uncompressed_size + buf.len() as u64 {

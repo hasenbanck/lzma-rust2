@@ -5,16 +5,16 @@ use super::{
 };
 use crate::{
     error_invalid_data,
-    filter::{bcj::BCJReader, delta::DeltaReader},
-    CountingReader, LZMA2Reader, Read, Result,
+    filter::{bcj::BcjReader, delta::DeltaReader},
+    CountingReader, Lzma2Reader, Read, Result,
 };
 
 #[allow(clippy::large_enum_variant)]
 enum FilterReader<R: Read> {
     Counting(CountingReader<R>),
-    LZMA2(LZMA2Reader<Box<FilterReader<R>>>),
+    LZMA2(Lzma2Reader<Box<FilterReader<R>>>),
     Delta(DeltaReader<Box<FilterReader<R>>>),
-    Bcj(BCJReader<Box<FilterReader<R>>>),
+    Bcj(BcjReader<Box<FilterReader<R>>>),
     Dummy,
 }
 
@@ -48,42 +48,42 @@ impl<R: Read> FilterReader<R> {
                 }
                 FilterType::BcjX86 => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_x86(Box::new(chain_reader), start_offset))
+                    FilterReader::Bcj(BcjReader::new_x86(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjPPC => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_ppc(Box::new(chain_reader), start_offset))
+                    FilterReader::Bcj(BcjReader::new_ppc(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjIA64 => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_ia64(Box::new(chain_reader), start_offset))
+                    FilterReader::Bcj(BcjReader::new_ia64(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjARM => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_arm(Box::new(chain_reader), start_offset))
+                    FilterReader::Bcj(BcjReader::new_arm(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjARMThumb => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_arm_thumb(
+                    FilterReader::Bcj(BcjReader::new_arm_thumb(
                         Box::new(chain_reader),
                         start_offset,
                     ))
                 }
                 FilterType::BcjSPARC => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_sparc(Box::new(chain_reader), start_offset))
+                    FilterReader::Bcj(BcjReader::new_sparc(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjARM64 => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_arm64(Box::new(chain_reader), start_offset))
+                    FilterReader::Bcj(BcjReader::new_arm64(Box::new(chain_reader), start_offset))
                 }
                 FilterType::BcjRISCV => {
                     let start_offset = property as usize;
-                    FilterReader::Bcj(BCJReader::new_riscv(Box::new(chain_reader), start_offset))
+                    FilterReader::Bcj(BcjReader::new_riscv(Box::new(chain_reader), start_offset))
                 }
                 FilterType::LZMA2 => {
                     let dict_size = property;
-                    FilterReader::LZMA2(LZMA2Reader::new(Box::new(chain_reader), dict_size, None))
+                    FilterReader::LZMA2(Lzma2Reader::new(Box::new(chain_reader), dict_size, None))
                 }
             };
         }
@@ -161,7 +161,7 @@ impl<R: Read> FilterReader<R> {
 }
 
 /// A single-threaded XZ decompressor.
-pub struct XZReader<R: Read> {
+pub struct XzReader<R: Read> {
     reader: FilterReader<R>,
     stream_header: Option<StreamHeader>,
     checksum_calculator: Option<ChecksumCalculator>,
@@ -170,8 +170,8 @@ pub struct XZReader<R: Read> {
     blocks_processed: u64,
 }
 
-impl<R: Read> XZReader<R> {
-    /// Create a new [`XZReader`].
+impl<R: Read> XzReader<R> {
+    /// Create a new [`XzReader`].
     pub fn new(inner: R, allow_multiple_streams: bool) -> Self {
         let reader = FilterReader::Counting(CountingReader::new(inner));
 
@@ -185,7 +185,7 @@ impl<R: Read> XZReader<R> {
         }
     }
 
-    /// Consume the XZReader and return the inner reader.
+    /// Consume the XzReader and return the inner reader.
     pub fn into_inner(self) -> R {
         self.reader.into_inner()
     }
@@ -201,7 +201,7 @@ impl<R: Read> XZReader<R> {
     }
 }
 
-impl<R: Read> XZReader<R> {
+impl<R: Read> XzReader<R> {
     fn ensure_stream_header(&mut self) -> Result<()> {
         if self.stream_header.is_none() {
             let header = StreamHeader::parse(&mut self.reader)?;
@@ -393,7 +393,7 @@ impl<R: Read> XZReader<R> {
     }
 }
 
-impl<R: Read> Read for XZReader<R> {
+impl<R: Read> Read for XzReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         if self.finished {
             return Ok(0);

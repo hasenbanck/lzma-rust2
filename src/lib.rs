@@ -88,21 +88,21 @@ pub(crate) use std::io::Write;
 
 #[cfg(feature = "encoder")]
 pub use enc::*;
-pub use lz::MFType;
+pub use lz::MfType;
 #[cfg(feature = "lzip")]
-pub use lzip::LZIPReader;
+pub use lzip::LzipReader;
 #[cfg(all(feature = "lzip", feature = "std"))]
-pub use lzip::LZIPReaderMT;
+pub use lzip::LzipReaderMt;
 #[cfg(all(feature = "lzip", feature = "encoder"))]
-pub use lzip::{AutoFinishLZIPWriter, LZIPOptions, LZIPWriter};
+pub use lzip::{AutoFinishLzipWriter, LzipOptions, LzipWriter};
 #[cfg(all(feature = "lzip", feature = "encoder", feature = "std"))]
-pub use lzip::{AutoFinishLZIPWriterMT, LZIPWriterMT};
-pub use lzma2_reader::{get_memory_usage as lzma2_get_memory_usage, LZMA2Reader};
+pub use lzip::{AutoFinishLzipWriterMt, LzipWriterMt};
+pub use lzma2_reader::{get_memory_usage as lzma2_get_memory_usage, Lzma2Reader};
 #[cfg(feature = "std")]
-pub use lzma2_reader_mt::LZMA2ReaderMT;
+pub use lzma2_reader_mt::Lzma2ReaderMt;
 pub use lzma_reader::{
     get_memory_usage as lzma_get_memory_usage,
-    get_memory_usage_by_props as lzma_get_memory_usage_by_props, LZMAReader,
+    get_memory_usage_by_props as lzma_get_memory_usage_by_props, LzmaReader,
 };
 #[cfg(not(feature = "std"))]
 pub use no_std::Error;
@@ -112,13 +112,13 @@ pub use no_std::Read;
 pub use no_std::Write;
 use state::*;
 #[cfg(all(feature = "xz", feature = "std"))]
-pub use xz::XZReaderMT;
+pub use xz::XzReaderMt;
 #[cfg(all(feature = "xz", feature = "encoder"))]
-pub use xz::{AutoFinishXZWriter, XZOptions, XZWriter};
+pub use xz::{AutoFinishXzWriter, XzOptions, XzWriter};
 #[cfg(all(feature = "xz", feature = "encoder", feature = "std"))]
-pub use xz::{AutoFinishXZWriterMT, XZWriterMT};
+pub use xz::{AutoFinishXzWriterMt, XzWriterMt};
 #[cfg(feature = "xz")]
-pub use xz::{CheckType, XZReader};
+pub use xz::{CheckType, XzReader};
 
 /// Result type of the crate.
 #[cfg(feature = "std")]

@@ -1,7 +1,7 @@
 use alloc::{vec, vec::Vec};
 use core::ops::Deref;
 
-use super::{bt4::BT4, extend_match, hc4::HC4};
+use super::{bt4::Bt4, extend_match, hc4::Hc4};
 use crate::Write;
 
 /// Align to a 64-byte cache line
@@ -14,47 +14,47 @@ pub(crate) trait MatchFind {
 }
 
 pub(crate) enum MatchFinders {
-    HC4(HC4),
-    BT4(BT4),
+    Hc4(Hc4),
+    Bt4(Bt4),
 }
 
 impl MatchFind for MatchFinders {
     fn find_matches(&mut self, encoder: &mut LZEncoderData, matches: &mut Matches) {
         match self {
-            MatchFinders::HC4(m) => m.find_matches(encoder, matches),
-            MatchFinders::BT4(m) => m.find_matches(encoder, matches),
+            MatchFinders::Hc4(m) => m.find_matches(encoder, matches),
+            MatchFinders::Bt4(m) => m.find_matches(encoder, matches),
         }
     }
 
     fn skip(&mut self, encoder: &mut LZEncoderData, len: usize) {
         match self {
-            MatchFinders::HC4(m) => m.skip(encoder, len),
-            MatchFinders::BT4(m) => m.skip(encoder, len),
+            MatchFinders::Hc4(m) => m.skip(encoder, len),
+            MatchFinders::Bt4(m) => m.skip(encoder, len),
         }
     }
 }
 
 /// Match finders to use when encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MFType {
+pub enum MfType {
     /// Hash chain for 4 bytes entries (lower quality but faster).
-    HC4,
+    Hc4,
     /// Binary tree for 4 byte entries (higher quality but slower).
-    BT4,
+    Bt4,
 }
 
-impl Default for MFType {
+impl Default for MfType {
     fn default() -> Self {
-        Self::HC4
+        Self::Hc4
     }
 }
 
-impl MFType {
+impl MfType {
     #[inline]
     fn get_memory_usage(self, dict_size: u32) -> u32 {
         match self {
-            MFType::HC4 => HC4::get_mem_usage(dict_size),
-            MFType::BT4 => BT4::get_mem_usage(dict_size),
+            MfType::Hc4 => Hc4::get_mem_usage(dict_size),
+            MfType::Bt4 => Bt4::get_mem_usage(dict_size),
         }
     }
 }
@@ -102,7 +102,7 @@ impl LZEncoder {
         extra_size_before: u32,
         extra_size_after: u32,
         match_len_max: u32,
-        mf: MFType,
+        mf: MfType,
     ) -> u32 {
         get_buf_size(
             dict_size,
@@ -126,7 +126,7 @@ impl LZEncoder {
             extra_size_after,
             nice_len,
             match_len_max,
-            MatchFinders::HC4(HC4::new(dict_size, nice_len, depth_limit)),
+            MatchFinders::Hc4(Hc4::new(dict_size, nice_len, depth_limit)),
         )
     }
 
@@ -144,7 +144,7 @@ impl LZEncoder {
             extra_size_after,
             nice_len,
             match_len_max,
-            MatchFinders::BT4(BT4::new(dict_size, nice_len, depth_limit)),
+            MatchFinders::Bt4(Bt4::new(dict_size, nice_len, depth_limit)),
         )
     }
 

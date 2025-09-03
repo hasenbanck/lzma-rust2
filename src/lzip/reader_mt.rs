@@ -12,7 +12,7 @@ use crate::{
     set_error,
     work_pool::{WorkPool, WorkPoolConfig, WorkPoolState},
     work_queue::WorkerHandle,
-    LZIPReader, Read,
+    LzipReader, Read,
 };
 
 /// A work unit for a worker thread.
@@ -22,14 +22,14 @@ struct WorkUnit {
 }
 
 /// A multi-threaded LZIP decompressor.
-pub struct LZIPReaderMT<R: Read + Seek> {
+pub struct LzipReaderMt<R: Read + Seek> {
     inner: R,
     members: Vec<LZIPMember>,
     work_pool: WorkPool<WorkUnit, Vec<u8>>,
     current_chunk: Cursor<Vec<u8>>,
 }
 
-impl<R: Read + Seek> LZIPReaderMT<R> {
+impl<R: Read + Seek> LzipReaderMt<R> {
     /// Creates a new multi-threaded LZIP reader.
     ///
     /// - `inner`: The reader to read compressed data from. Must implement Seek.
@@ -92,7 +92,7 @@ fn worker_thread_logic(
 
         let (index, WorkUnit { member_data }) = work_unit;
 
-        let reader_result = LZIPReader::new(member_data.as_slice());
+        let reader_result = LzipReader::new(member_data.as_slice());
 
         let mut lzip_reader = match reader_result {
             Ok(reader) => reader,
@@ -122,7 +122,7 @@ fn worker_thread_logic(
     }
 }
 
-impl<R: Read + Seek> Read for LZIPReaderMT<R> {
+impl<R: Read + Seek> Read for LzipReaderMt<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);

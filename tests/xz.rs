@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 
-use lzma_rust2::{XZOptions, XZReader, XZWriter};
+use lzma_rust2::{XzOptions, XzReader, XzWriter};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
@@ -9,12 +9,12 @@ static PG6800: &str = "tests/data/pg6800.txt";
 fn test_round_trip(path: &str, level: u32) {
     let data = std::fs::read(path).unwrap();
 
-    let option = XZOptions::with_preset(level);
+    let option = XzOptions::with_preset(level);
 
     let mut compressed = Vec::new();
 
     {
-        let mut writer = XZWriter::new(&mut compressed, option).unwrap();
+        let mut writer = XzWriter::new(&mut compressed, option).unwrap();
         writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }
@@ -22,7 +22,7 @@ fn test_round_trip(path: &str, level: u32) {
     // Test decompression with our own reader
     let mut uncompressed = Vec::new();
     {
-        let mut reader = XZReader::new(compressed.as_slice(), false);
+        let mut reader = XzReader::new(compressed.as_slice(), false);
         reader.read_to_end(&mut uncompressed).unwrap();
     }
 

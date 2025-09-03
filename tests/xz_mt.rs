@@ -3,7 +3,7 @@ use std::{
     num::NonZeroU64,
 };
 
-use lzma_rust2::{XZOptions, XZReaderMT, XZWriterMT};
+use lzma_rust2::{XzOptions, XzReaderMt, XzWriterMt};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
@@ -12,21 +12,21 @@ static PG6800: &str = "tests/data/pg6800.txt";
 fn test_round_trip(path: &str, level: u32) {
     let data = std::fs::read(path).unwrap();
 
-    let mut options = XZOptions::with_preset(level);
+    let mut options = XzOptions::with_preset(level);
     let dict_size = options.lzma_options.dict_size as u64;
     options.set_block_size(NonZeroU64::new(dict_size));
 
     let mut compressed = Vec::new();
 
     {
-        let mut writer = XZWriterMT::new(&mut compressed, options, 2).unwrap();
+        let mut writer = XzWriterMt::new(&mut compressed, options, 2).unwrap();
         writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }
 
     let mut uncompressed = Vec::new();
     {
-        let mut reader = XZReaderMT::new(Cursor::new(compressed.as_slice()), false, 2).unwrap();
+        let mut reader = XzReaderMt::new(Cursor::new(compressed.as_slice()), false, 2).unwrap();
         let data_len = reader.read_to_end(&mut uncompressed).unwrap();
 
         if dict_size < data_len as u64 {

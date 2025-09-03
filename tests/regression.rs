@@ -1,12 +1,12 @@
 use std::io::Read;
 
-use lzma_rust2::LZMA2ReaderMT;
+use lzma_rust2::Lzma2ReaderMt;
 
 fn regression_lzma2_reader_mt(input_data: &[u8], expected_output: &[u8], dict_size: u32) {
     let mut uncompressed = Vec::new();
 
     {
-        let mut reader = LZMA2ReaderMT::new(input_data, dict_size, None, 1);
+        let mut reader = Lzma2ReaderMt::new(input_data, dict_size, None, 1);
         reader.read_to_end(&mut uncompressed).unwrap();
     }
 

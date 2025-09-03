@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use super::{LZIPOptions, LZIPWriter};
+use super::{LzipOptions, LzipWriter};
 use crate::{
     error_invalid_input, set_error,
     work_pool::{WorkPool, WorkPoolConfig},
@@ -18,13 +18,13 @@ use crate::{
 #[derive(Debug, Clone)]
 struct WorkUnit {
     data: Vec<u8>,
-    options: LZIPOptions,
+    options: LzipOptions,
 }
 
 /// A multi-threaded LZIP compressor.
-pub struct LZIPWriterMT<W: Write> {
+pub struct LzipWriterMt<W: Write> {
     inner: W,
-    options: LZIPOptions,
+    options: LzipOptions,
     current_work_unit: Vec<u8>,
     member_size: usize,
     work_pool: WorkPool<WorkUnit, Vec<u8>>,
@@ -32,7 +32,7 @@ pub struct LZIPWriterMT<W: Write> {
     pending_write_data: Vec<u8>,
 }
 
-impl<W: Write> LZIPWriterMT<W> {
+impl<W: Write> LzipWriterMt<W> {
     /// Creates a new multi-threaded LZIP writer.
     ///
     /// - `inner`: The writer to write compressed data to.
@@ -40,7 +40,7 @@ impl<W: Write> LZIPWriterMT<W> {
     ///   multi-threaded encoder. If you need just one member, then use the single-threaded encoder.
     /// - `num_workers`: The maximum number of worker threads for compression.
     ///   Currently capped at 256 threads.
-    pub fn new(inner: W, options: LZIPOptions, num_workers: u32) -> io::Result<Self> {
+    pub fn new(inner: W, options: LzipOptions, num_workers: u32) -> io::Result<Self> {
         let member_size = match options.member_size {
             None => return Err(error_invalid_input("member size must be set")),
             Some(member_size) => member_size.get().max(options.lzma_options.dict_size as u64),
@@ -104,11 +104,11 @@ impl<W: Write> LZIPWriterMT<W> {
     }
 
     /// Returns a wrapper around `self` that will finish the stream on drop.
-    pub fn auto_finish(self) -> AutoFinishLZIPWriterMT<W> {
-        AutoFinishLZIPWriterMT(Some(self))
+    pub fn auto_finish(self) -> AutoFinishLzipWriterMt<W> {
+        AutoFinishLzipWriterMt(Some(self))
     }
 
-    /// Consume the LZIPWriterMT and return the inner writer.
+    /// Consume the LzipWriterMt and return the inner writer.
     pub fn into_inner(self) -> W {
         self.inner
     }
@@ -123,7 +123,7 @@ impl<W: Write> LZIPWriterMT<W> {
         if self.work_pool.next_index_to_dispatch() == 0 {
             let mut options = self.options.clone();
             options.member_size = None;
-            let lzip_writer = LZIPWriter::new(Vec::new(), options);
+            let lzip_writer = LzipWriter::new(Vec::new(), options);
             let empty_member = lzip_writer.finish()?;
 
             self.inner.write_all(&empty_member)?;
@@ -173,7 +173,7 @@ fn worker_thread_logic(
 
         let mut compressed_buffer = Vec::new();
 
-        let mut writer = LZIPWriter::new(&mut compressed_buffer, work_unit.options);
+        let mut writer = LzipWriter::new(&mut compressed_buffer, work_unit.options);
         let result = match writer.write_all(&work_unit.data) {
             Ok(_) => match writer.finish() {
                 Ok(_) => compressed_buffer,
@@ -199,7 +199,7 @@ fn worker_thread_logic(
     }
 }
 
-impl<W: Write> Write for LZIPWriterMT<W> {
+impl<W: Write> Write for LzipWriterMt<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -245,12 +245,12 @@ impl<W: Write> Write for LZIPWriterMT<W> {
     }
 }
 
-/// A wrapper around an [`LZIPWriterMT<W>`] that finishes the stream on drop.
+/// A wrapper around an [`LzipWriterMt<W>`] that finishes the stream on drop.
 ///
-/// This can be created by the [`LZIPWriterMT::auto_finish`] method.
-pub struct AutoFinishLZIPWriterMT<W: Write>(Option<LZIPWriterMT<W>>);
+/// This can be created by the [`LzipWriterMt::auto_finish`] method.
+pub struct AutoFinishLzipWriterMt<W: Write>(Option<LzipWriterMt<W>>);
 
-impl<W: Write> Drop for AutoFinishLZIPWriterMT<W> {
+impl<W: Write> Drop for AutoFinishLzipWriterMt<W> {
     fn drop(&mut self) {
         if let Some(writer) = self.0.take() {
             let _ = writer.finish();
@@ -258,7 +258,7 @@ impl<W: Write> Drop for AutoFinishLZIPWriterMT<W> {
     }
 }
 
-impl<W: Write> Write for AutoFinishLZIPWriterMT<W> {
+impl<W: Write> Write for AutoFinishLzipWriterMt<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.0.as_mut().unwrap().write(buf)
     }

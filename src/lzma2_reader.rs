@@ -16,17 +16,17 @@ pub const COMPRESSED_SIZE_MAX: u32 = 1 << 16;
 /// ```
 /// use std::io::Read;
 ///
-/// use lzma_rust2::{LZMA2Reader, LZMAOptions};
+/// use lzma_rust2::{Lzma2Reader, LzmaOptions};
 ///
 /// let compressed: Vec<u8> = vec![
 ///     1, 0, 12, 72, 101, 108, 108, 111, 44, 32, 119, 111, 114, 108, 100, 33, 0,
 /// ];
-/// let mut reader = LZMA2Reader::new(compressed.as_slice(), LZMAOptions::DICT_SIZE_DEFAULT, None);
+/// let mut reader = Lzma2Reader::new(compressed.as_slice(), LzmaOptions::DICT_SIZE_DEFAULT, None);
 /// let mut decompressed = Vec::new();
 /// reader.read_to_end(&mut decompressed).unwrap();
 /// assert_eq!(&decompressed[..], b"Hello, world!");
 /// ```
-pub struct LZMA2Reader<R> {
+pub struct Lzma2Reader<R> {
     inner: R,
     lz: LZDecoder,
     rc: RangeDecoder<RangeDecoderBuffer>,
@@ -50,7 +50,7 @@ fn get_dict_size(dict_size: u32) -> u32 {
     (dict_size + 15) & !15
 }
 
-impl<R> LZMA2Reader<R> {
+impl<R> Lzma2Reader<R> {
     /// Unwraps the reader, returning the underlying reader.
     pub fn into_inner(self) -> R {
         self.inner
@@ -67,7 +67,7 @@ impl<R> LZMA2Reader<R> {
     }
 }
 
-impl<R: Read> LZMA2Reader<R> {
+impl<R: Read> Lzma2Reader<R> {
     /// Create a new LZMA2 reader.
     /// `inner` is the reader to read compressed data from.
     /// `dict_size` is the dictionary size in bytes.
@@ -218,7 +218,7 @@ impl<R: Read> LZMA2Reader<R> {
     }
 }
 
-impl<R: Read> Read for LZMA2Reader<R> {
+impl<R: Read> Read for Lzma2Reader<R> {
     fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
         match self.read_decode(buf) {
             Ok(size) => Ok(size),

@@ -1,12 +1,12 @@
 use alloc::vec::Vec;
 
 use super::{LZIPHeader, LZIPTrailer, CRC32, HEADER_SIZE, TRAILER_SIZE};
-use crate::{error_invalid_data, error_invalid_input, CountingReader, LZMAReader, Read, Result};
+use crate::{error_invalid_data, error_invalid_input, CountingReader, LzmaReader, Read, Result};
 
 /// A single-threaded LZIP decompressor.
-pub struct LZIPReader<R> {
+pub struct LzipReader<R> {
     inner: Option<R>,
-    lzma_reader: Option<LZMAReader<CountingReader<R>>>,
+    lzma_reader: Option<LzmaReader<CountingReader<R>>>,
     current_header: Option<LZIPHeader>,
     finished: bool,
     trailer_buf: Vec<u8>,
@@ -14,8 +14,8 @@ pub struct LZIPReader<R> {
     data_size: u64,
 }
 
-impl<R> LZIPReader<R> {
-    /// Consume the LZIPReader and return the inner reader.
+impl<R> LzipReader<R> {
+    /// Consume the LzipReader and return the inner reader.
     pub fn into_inner(mut self) -> R {
         if let Some(lzma_reader) = self.lzma_reader.take() {
             return lzma_reader.into_inner().inner;
@@ -41,7 +41,7 @@ impl<R> LZIPReader<R> {
     }
 }
 
-impl<R: Read> LZIPReader<R> {
+impl<R: Read> LzipReader<R> {
     /// Create a new LZIP reader.
     pub fn new(inner: R) -> Result<Self> {
         Ok(Self {
@@ -82,7 +82,7 @@ impl<R: Read> LZIPReader<R> {
         // - pb=2 (position bits)
         // - Unlimited uncompressed size (we'll use trailer to verify)
         let lzma_reader =
-            LZMAReader::new(counting_reader, u64::MAX, 3, 0, 2, header.dict_size, None)?;
+            LzmaReader::new(counting_reader, u64::MAX, 3, 0, 2, header.dict_size, None)?;
 
         self.current_header = Some(header);
         self.lzma_reader = Some(lzma_reader);
@@ -127,7 +127,7 @@ impl<R: Read> LZIPReader<R> {
     }
 }
 
-impl<R: Read> Read for LZIPReader<R> {
+impl<R: Read> Read for LzipReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         if buf.is_empty() {
             return Ok(0);

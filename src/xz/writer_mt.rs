@@ -12,18 +12,18 @@ use super::{
     write_xz_stream_header, CheckType, ChecksumCalculator, FilterConfig, FilterType, IndexRecord,
 };
 use crate::{
-    enc::{LZMA2Writer, LZMAOptions},
+    enc::{Lzma2Writer, LzmaOptions},
     error_invalid_input, set_error,
     work_pool::{WorkPool, WorkPoolConfig},
     work_queue::WorkerHandle,
-    LZMA2Options, Result, XZOptions,
+    Lzma2Options, Result, XzOptions,
 };
 
 /// A work unit for a worker thread.
 #[derive(Debug, Clone)]
 struct WorkUnit {
     uncompressed_data: Vec<u8>,
-    lzma_options: LZMAOptions,
+    lzma_options: LzmaOptions,
     check_type: CheckType,
 }
 
@@ -36,9 +36,9 @@ struct ResultUnit {
 }
 
 /// A multi-threaded XZ compressor.
-pub struct XZWriterMT<W: Write> {
+pub struct XzWriterMt<W: Write> {
     inner: W,
-    options: XZOptions,
+    options: XzOptions,
     current_work_unit: Vec<u8>,
     block_size: usize,
     work_pool: WorkPool<WorkUnit, ResultUnit>,
@@ -48,7 +48,7 @@ pub struct XZWriterMT<W: Write> {
     total_uncompressed_pos: u64,
 }
 
-impl<W: Write> XZWriterMT<W> {
+impl<W: Write> XzWriterMt<W> {
     /// Creates a new multi-threaded XZ writer.
     ///
     /// - `inner`: The writer to write compressed data to.
@@ -56,7 +56,7 @@ impl<W: Write> XZWriterMT<W> {
     ///   multi-threaded encoder. If you need just one block, then use the single-threaded encoder.
     /// - `num_workers`: The maximum number of worker threads for compression.
     ///   Currently capped at 256 threads.
-    pub fn new(inner: W, options: XZOptions, num_workers: u32) -> Result<Self> {
+    pub fn new(inner: W, options: XzOptions, num_workers: u32) -> Result<Self> {
         if options.filters.len() > 3 {
             return Err(error_invalid_input(
                 "XZ allows only at most 3 pre-filters plus LZMA2",
@@ -189,11 +189,11 @@ impl<W: Write> XZWriterMT<W> {
     }
 
     /// Returns a wrapper around `self` that will finish the stream on drop.
-    pub fn auto_finish(self) -> AutoFinishXZWriterMT<W> {
-        AutoFinishXZWriterMT(Some(self))
+    pub fn auto_finish(self) -> AutoFinishXzWriterMt<W> {
+        AutoFinishXzWriterMt(Some(self))
     }
 
-    /// Consume the XZWriterMT and return the inner writer.
+    /// Consume the XzWriterMt and return the inner writer.
     pub fn into_inner(self) -> W {
         self.inner
     }
@@ -284,12 +284,12 @@ fn worker_thread_logic(
         checksum_calculator.update(&work_unit.uncompressed_data);
         let checksum = checksum_calculator.finalize_to_bytes();
 
-        let options = LZMA2Options {
+        let options = Lzma2Options {
             lzma_options: work_unit.lzma_options,
             ..Default::default()
         };
 
-        let mut writer = LZMA2Writer::new(&mut compressed_buffer, options);
+        let mut writer = Lzma2Writer::new(&mut compressed_buffer, options);
         let result = match writer.write_all(&work_unit.uncompressed_data) {
             Ok(_) => match writer.finish() {
                 Ok(_) => ResultUnit {
@@ -319,7 +319,7 @@ fn worker_thread_logic(
     }
 }
 
-impl<W: Write> Write for XZWriterMT<W> {
+impl<W: Write> Write for XzWriterMt<W> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -367,12 +367,12 @@ impl<W: Write> Write for XZWriterMT<W> {
     }
 }
 
-/// A wrapper around an [`XZWriterMT<W>`] that finishes the stream on drop.
+/// A wrapper around an [`XzWriterMt<W>`] that finishes the stream on drop.
 ///
-/// This can be created by the [`XZWriterMT::auto_finish`] method.
-pub struct AutoFinishXZWriterMT<W: Write>(Option<XZWriterMT<W>>);
+/// This can be created by the [`XzWriterMt::auto_finish`] method.
+pub struct AutoFinishXzWriterMt<W: Write>(Option<XzWriterMt<W>>);
 
-impl<W: Write> Drop for AutoFinishXZWriterMT<W> {
+impl<W: Write> Drop for AutoFinishXzWriterMt<W> {
     fn drop(&mut self) {
         if let Some(writer) = self.0.take() {
             let _ = writer.finish();
@@ -380,7 +380,7 @@ impl<W: Write> Drop for AutoFinishXZWriterMT<W> {
     }
 }
 
-impl<W: Write> Write for AutoFinishXZWriterMT<W> {
+impl<W: Write> Write for AutoFinishXzWriterMt<W> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         self.0.as_mut().unwrap().write(buf)
     }

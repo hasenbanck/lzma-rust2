@@ -39,13 +39,13 @@ fn get_dict_size(dict_size: u32) -> crate::Result<u32> {
 /// ```
 /// use std::io::Read;
 ///
-/// use lzma_rust2::LZMAReader;
+/// use lzma_rust2::LzmaReader;
 ///
 /// let compressed: Vec<u8> = vec![
 ///     93, 0, 0, 128, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 36, 25, 73, 152, 111, 22, 2,
 ///     140, 232, 230, 91, 177, 71, 198, 206, 183, 99, 255, 255, 60, 172, 0, 0,
 /// ];
-/// let mut reader = LZMAReader::new_mem_limit(compressed.as_slice(), u32::MAX, None).unwrap();
+/// let mut reader = LzmaReader::new_mem_limit(compressed.as_slice(), u32::MAX, None).unwrap();
 /// let mut buf = [0; 1024];
 /// let mut out = Vec::new();
 /// loop {
@@ -57,7 +57,7 @@ fn get_dict_size(dict_size: u32) -> crate::Result<u32> {
 /// }
 /// assert_eq!(out, b"Hello, world!");
 /// ```
-pub struct LZMAReader<R> {
+pub struct LzmaReader<R> {
     lz: LZDecoder,
     rc: RangeDecoder<R>,
     lzma: LZMADecoder,
@@ -66,7 +66,7 @@ pub struct LZMAReader<R> {
     remaining_size: u64,
 }
 
-impl<R> LZMAReader<R> {
+impl<R> LzmaReader<R> {
     /// Unwraps the reader, returning the underlying reader.
     pub fn into_inner(self) -> R {
         self.rc.into_inner()
@@ -83,7 +83,7 @@ impl<R> LZMAReader<R> {
     }
 }
 
-impl<R: Read> LZMAReader<R> {
+impl<R: Read> LzmaReader<R> {
     fn construct1(
         reader: R,
         uncomp_size: u64,
@@ -257,7 +257,7 @@ impl<R: Read> LZMAReader<R> {
     }
 }
 
-impl<R: Read> Read for LZMAReader<R> {
+impl<R: Read> Read for LzmaReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
         self.read_decode(buf)
     }

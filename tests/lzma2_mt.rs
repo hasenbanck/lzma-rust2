@@ -3,7 +3,7 @@ use std::{
     num::{NonZero, NonZeroU64},
 };
 
-use lzma_rust2::{LZMA2Options, LZMA2ReaderMT, LZMA2WriterMT};
+use lzma_rust2::{Lzma2Options, Lzma2ReaderMt, Lzma2WriterMt};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
@@ -13,7 +13,7 @@ fn test_round_trip(path: &str, level: u32) {
     let data = std::fs::read(path).unwrap();
     let data_len = data.len() as u32;
 
-    let mut option = LZMA2Options::with_preset(level);
+    let mut option = Lzma2Options::with_preset(level);
     let dict_size = option.lzma_options.dict_size;
     option.set_chunk_size(NonZeroU64::new(dict_size as u64));
 
@@ -26,7 +26,7 @@ fn test_round_trip(path: &str, level: u32) {
 
     {
         let mut writer =
-            LZMA2WriterMT::new(&mut compressed, option, available_parallelism).unwrap();
+            Lzma2WriterMt::new(&mut compressed, option, available_parallelism).unwrap();
         writer.write_all(&data).unwrap();
         writer.finish().unwrap();
     }
@@ -34,7 +34,7 @@ fn test_round_trip(path: &str, level: u32) {
     let mut uncompressed = Vec::new();
 
     {
-        let mut reader = LZMA2ReaderMT::new(
+        let mut reader = Lzma2ReaderMt::new(
             Cursor::new(compressed),
             dict_size,
             None,

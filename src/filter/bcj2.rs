@@ -63,7 +63,7 @@ impl Default for Bcj2Coder {
 }
 
 /// Reader for BCJ2-filtered data with multiple input streams.
-pub struct BCJ2Reader<R> {
+pub struct Bcj2Reader<R> {
     base: Bcj2Coder,
     inputs: Vec<R>,
     decoder: Bcj2Decoder,
@@ -72,7 +72,7 @@ pub struct BCJ2Reader<R> {
     uncompressed_size: u64,
 }
 
-impl<R> BCJ2Reader<R> {
+impl<R> Bcj2Reader<R> {
     /// Creates a new BCJ2 reader with the given input streams and expected output size.
     pub fn new(inputs: Vec<R>, uncompressed_size: u64) -> Self {
         Self {
@@ -98,7 +98,7 @@ impl<R> BCJ2Reader<R> {
     }
 }
 
-impl<R: Read> Read for BCJ2Reader<R> {
+impl<R: Read> Read for Bcj2Reader<R> {
     fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
         let mut dest_buf = buf;
         if dest_buf.len() > self.uncompressed_size as usize {
