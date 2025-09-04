@@ -157,13 +157,14 @@ impl FilterConfig {
 }
 
 /// Supported checksum types in XZ format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckType {
     /// No checksum
     None = 0x00,
     /// CRC32
     Crc32 = 0x01,
     /// CRC64
+    #[default]
     Crc64 = 0x04,
     /// SHA-256
     Sha256 = 0x0A,
