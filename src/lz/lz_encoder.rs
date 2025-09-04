@@ -35,18 +35,13 @@ impl MatchFind for MatchFinders {
 }
 
 /// Match finders to use when encoding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MfType {
     /// Hash chain for 4 bytes entries (lower quality but faster).
+    #[default]
     Hc4,
     /// Binary tree for 4 byte entries (higher quality but slower).
     Bt4,
-}
-
-impl Default for MfType {
-    fn default() -> Self {
-        Self::Hc4
-    }
 }
 
 impl MfType {
