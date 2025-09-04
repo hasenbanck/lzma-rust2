@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 #[derive(Debug, Copy, Clone)]
 pub enum Error {
     /// End of file reached unexpectedly.
-    EOF,
+    Eof,
     /// Operation was interrupted.
     Interrupted,
     /// Invalid data encountered.
@@ -49,7 +49,7 @@ fn default_read_exact<R: Read + ?Sized>(this: &mut R, mut buf: &mut [u8]) -> cra
     }
 
     if !buf.is_empty() {
-        Err(Error::EOF)
+        Err(Error::Eof)
     } else {
         Ok(())
     }

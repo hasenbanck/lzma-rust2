@@ -17,7 +17,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-struct XZBlock {
+struct XzBlock {
     start_pos: u64,
     unpadded_size: u64,
     uncompressed_size: u64,
@@ -45,7 +45,7 @@ enum State {
 /// A multi-threaded XZ decompressor.
 pub struct XzReaderMt<R: Read + Seek> {
     inner: Option<R>,
-    blocks: Vec<XZBlock>,
+    blocks: Vec<XzBlock>,
     check_type: CheckType,
     result_rx: Receiver<ResultUnit>,
     result_tx: SyncSender<ResultUnit>,
@@ -154,7 +154,7 @@ impl<R: Read + Seek> XzReaderMt<R> {
         let mut block_start_pos = header_end_pos;
 
         for record in &index.records {
-            self.blocks.push(XZBlock {
+            self.blocks.push(XzBlock {
                 start_pos: block_start_pos,
                 unpadded_size: record.unpadded_size,
                 uncompressed_size: record.uncompressed_size,

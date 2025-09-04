@@ -9,7 +9,7 @@ const fn test_86_ms_byte(b: u8) -> bool {
     b == 0x00 || b == 0xFF
 }
 
-impl BCJFilter {
+impl BcjFilter {
     pub(crate) fn new_x86(start_pos: usize, encoder: bool) -> Self {
         Self {
             is_encoder: encoder,

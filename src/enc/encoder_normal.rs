@@ -1,8 +1,8 @@
 use alloc::{vec, vec::Vec};
 
 use super::{
-    encoder::{LZMAEncoder, LZMAEncoderTrait},
-    lz::{LZEncoder, MfType},
+    encoder::{LzmaEncoder, LzmaEncoderTrait},
+    lz::{LzEncoder, MfType},
     state::State,
     MATCH_LEN_MAX, MATCH_LEN_MIN, REPS,
 };
@@ -21,7 +21,7 @@ impl NormalEncoderMode {
     pub(crate) const EXTRA_SIZE_AFTER: u32 = Self::OPTS;
 
     pub(crate) fn get_memory_usage(dict_size: u32, extra_size_before: u32, mf: MfType) -> u32 {
-        LZEncoder::get_memory_usage(
+        LzEncoder::get_memory_usage(
             dict_size,
             extra_size_before.max(Self::EXTRA_SIZE_BEFORE),
             Self::EXTRA_SIZE_AFTER,
@@ -38,7 +38,7 @@ impl NormalEncoderMode {
         }
     }
 
-    fn convert_opts(&mut self, encoder: &mut LZMAEncoder) -> usize {
+    fn convert_opts(&mut self, encoder: &mut LzmaEncoder) -> usize {
         self.opt_end = self.opt_cur;
 
         let mut opt_prev = self.opts[self.opt_cur].opt_prev;
@@ -147,7 +147,7 @@ impl NormalEncoderMode {
 
     fn calc1_byte_prices(
         &mut self,
-        encoder: &mut LZMAEncoder,
+        encoder: &mut LzmaEncoder,
         pos: u32,
         pos_state: u32,
         avail: i32,
@@ -220,7 +220,7 @@ impl NormalEncoderMode {
 
     fn calc_long_rep_prices(
         &mut self,
-        encoder: &mut LZMAEncoder,
+        encoder: &mut LzmaEncoder,
         pos: u32,
         pos_state: u32,
         avail: i32,
@@ -319,7 +319,7 @@ impl NormalEncoderMode {
 
     fn calc_normal_match_prices(
         &mut self,
-        encoder: &mut LZMAEncoder,
+        encoder: &mut LzmaEncoder,
         pos: u32,
         pos_state: u32,
         avail: i32,
@@ -422,8 +422,8 @@ impl NormalEncoderMode {
     }
 }
 
-impl LZMAEncoderTrait for NormalEncoderMode {
-    fn get_next_symbol(&mut self, encoder: &mut LZMAEncoder) -> u32 {
+impl LzmaEncoderTrait for NormalEncoderMode {
+    fn get_next_symbol(&mut self, encoder: &mut LzmaEncoder) -> u32 {
         // If there are pending symbols from an earlier call to this
         // function, return those symbols first.
         let pos = encoder.lz.get_pos();

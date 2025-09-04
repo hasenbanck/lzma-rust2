@@ -181,7 +181,7 @@ fn set_error(
     shutdown_flag.store(true, std::sync::atomic::Ordering::Release);
 }
 
-pub(crate) struct LZMACoder {
+pub(crate) struct LzmaCoder {
     pub(crate) pos_mask: u32,
     pub(crate) reps: [i32; REPS],
     pub(crate) state: State,
@@ -212,7 +212,7 @@ pub(crate) fn get_dist_state(len: u32) -> u32 {
     }) as u32
 }
 
-impl LZMACoder {
+impl LzmaCoder {
     pub(crate) fn new(pb: usize) -> Self {
         let mut c = Self {
             pos_mask: (1 << pb) - 1,
@@ -464,7 +464,7 @@ fn copy_error(error: &Error) -> Error {
 #[cfg(not(feature = "std"))]
 #[inline(always)]
 fn error_eof() -> Error {
-    Error::EOF
+    Error::Eof
 }
 
 #[cfg(not(feature = "std"))]

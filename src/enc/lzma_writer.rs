@@ -1,5 +1,5 @@
 use super::{
-    encoder::{LZMAEncoder, LZMAEncoderModes},
+    encoder::{LzmaEncoder, LzmaEncoderModes},
     range_enc::RangeEncoder,
     LzmaOptions,
 };
@@ -8,12 +8,12 @@ use crate::{error_invalid_input, error_unsupported, Write};
 /// A single-threaded LZMA compressor.
 pub struct LzmaWriter<W: Write> {
     rc: RangeEncoder<W>,
-    lzma: LZMAEncoder,
+    lzma: LzmaEncoder,
     use_end_marker: bool,
     current_uncompressed_size: u64,
     expected_uncompressed_size: Option<u64>,
     props: u8,
-    mode: LZMAEncoderModes,
+    mode: LzmaEncoderModes,
 }
 
 impl<W: Write> LzmaWriter<W> {
@@ -25,7 +25,7 @@ impl<W: Write> LzmaWriter<W> {
         use_end_marker: bool,
         expected_uncompressed_size: Option<u64>,
     ) -> crate::Result<LzmaWriter<W>> {
-        let (mut lzma, mode) = LZMAEncoder::new(
+        let (mut lzma, mode) = LzmaEncoder::new(
             options.mode,
             options.lc,
             options.lp,

@@ -3,7 +3,7 @@ use alloc::{vec, vec::Vec};
 use crate::{error_other, Read};
 
 #[derive(Default)]
-pub(crate) struct LZDecoder {
+pub(crate) struct LzDecoder {
     buf: Vec<u8>,
     buf_size: usize,
     start: usize,
@@ -14,7 +14,7 @@ pub(crate) struct LZDecoder {
     pending_dist: usize,
 }
 
-impl LZDecoder {
+impl LzDecoder {
     pub(crate) fn new(dict_size: usize, preset_dict: Option<&[u8]>) -> Self {
         let mut buf = vec![0; dict_size];
         let mut pos = 0;

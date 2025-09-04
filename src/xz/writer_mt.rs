@@ -107,7 +107,7 @@ impl<W: Write> XzWriterMt<W> {
         // Add LZMA2 filter to the list
         let mut filters = self.options.filters.clone();
         filters.push(FilterConfig {
-            filter_type: FilterType::LZMA2,
+            filter_type: FilterType::Lzma2,
             property: 0,
         });
 

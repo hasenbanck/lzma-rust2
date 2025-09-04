@@ -1,6 +1,6 @@
 use super::{
-    decoder::LZMADecoder, error_invalid_data, error_invalid_input, error_out_of_memory,
-    lz::LZDecoder, range_dec::RangeDecoder, ByteReader, Read, DICT_SIZE_MAX,
+    decoder::LzmaDecoder, error_invalid_data, error_invalid_input, error_out_of_memory,
+    lz::LzDecoder, range_dec::RangeDecoder, ByteReader, Read, DICT_SIZE_MAX,
 };
 
 /// Calculates the memory usage in KiB required for LZMA decompression from properties byte.
@@ -58,9 +58,9 @@ fn get_dict_size(dict_size: u32) -> crate::Result<u32> {
 /// assert_eq!(out, b"Hello, world!");
 /// ```
 pub struct LzmaReader<R> {
-    lz: LZDecoder,
+    lz: LzDecoder,
     rc: RangeDecoder<R>,
-    lzma: LZMADecoder,
+    lzma: LzmaDecoder,
     end_reached: bool,
     relaxed_end_cond: bool,
     remaining_size: u64,
@@ -135,8 +135,8 @@ impl<R: Read> LzmaReader<R> {
                 return Err(e);
             }
         };
-        let lz = LZDecoder::new(get_dict_size(dict_size)? as _, preset_dict);
-        let lzma = LZMADecoder::new(lc, lp, pb);
+        let lz = LzDecoder::new(get_dict_size(dict_size)? as _, preset_dict);
+        let lzma = LzmaDecoder::new(lc, lp, pb);
         Ok(Self {
             // reader,
             lz,

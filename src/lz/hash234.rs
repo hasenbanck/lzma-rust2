@@ -1,6 +1,6 @@
 use alloc::{vec, vec::Vec};
 
-use super::LZEncoder;
+use super::LzEncoder;
 
 const HASH2_SIZE: u32 = 1 << 10;
 const HASH2_MASK: u32 = HASH2_SIZE - 1;
@@ -93,9 +93,9 @@ impl Hash234 {
     }
 
     pub(crate) fn normalize(&mut self, offset: i32) {
-        LZEncoder::normalize(&mut self.hash2_table, offset);
-        LZEncoder::normalize(&mut self.hash3_table, offset);
-        LZEncoder::normalize(&mut self.hash4_table, offset);
+        LzEncoder::normalize(&mut self.hash2_table, offset);
+        LzEncoder::normalize(&mut self.hash3_table, offset);
+        LzEncoder::normalize(&mut self.hash4_table, offset);
     }
 }
 

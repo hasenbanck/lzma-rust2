@@ -102,7 +102,7 @@ impl FilterConfig {
     /// Creates a new BCJ ARM filter configuration.
     pub fn new_bcj_arm(start_pos: u32) -> Self {
         Self {
-            filter_type: FilterType::BcjARM,
+            filter_type: FilterType::BcjArm,
             property: start_pos,
         }
     }
@@ -110,7 +110,7 @@ impl FilterConfig {
     /// Creates a new BCJ ARM Thumb filter configuration.
     pub fn new_bcj_arm_thumb(start_pos: u32) -> Self {
         Self {
-            filter_type: FilterType::BcjARMThumb,
+            filter_type: FilterType::BcjArmThumb,
             property: start_pos,
         }
     }
@@ -118,7 +118,7 @@ impl FilterConfig {
     /// Creates a new BCJ ARM64 filter configuration.
     pub fn new_bcj_arm64(start_pos: u32) -> Self {
         Self {
-            filter_type: FilterType::BcjARM64,
+            filter_type: FilterType::BcjArm64,
             property: start_pos,
         }
     }
@@ -126,7 +126,7 @@ impl FilterConfig {
     /// Creates a new BCJ IA64 filter configuration.
     pub fn new_bcj_ia64(start_pos: u32) -> Self {
         Self {
-            filter_type: FilterType::BcjIA64,
+            filter_type: FilterType::BcjIa64,
             property: start_pos,
         }
     }
@@ -134,7 +134,7 @@ impl FilterConfig {
     /// Creates a new BCJ PPC filter configuration.
     pub fn new_bcj_ppc(start_pos: u32) -> Self {
         Self {
-            filter_type: FilterType::BcjPPC,
+            filter_type: FilterType::BcjPpc,
             property: start_pos,
         }
     }
@@ -142,7 +142,7 @@ impl FilterConfig {
     /// Creates a new BCJ SPARC filter configuration.
     pub fn new_bcj_sparc(start_pos: u32) -> Self {
         Self {
-            filter_type: FilterType::BcjSPARC,
+            filter_type: FilterType::BcjSparc,
             property: start_pos,
         }
     }
@@ -150,7 +150,7 @@ impl FilterConfig {
     /// Creates a new BCJ RISC-V filter configuration.
     pub fn new_bcj_risc_v(start_pos: u32) -> Self {
         Self {
-            filter_type: FilterType::BcjRISCV,
+            filter_type: FilterType::BcjRiscv,
             property: start_pos,
         }
     }
@@ -198,21 +198,21 @@ pub enum FilterType {
     /// BCJ x86 filter
     BcjX86,
     /// BCJ PowerPC filter
-    BcjPPC,
+    BcjPpc,
     /// BCJ IA64 filter
-    BcjIA64,
+    BcjIa64,
     /// BCJ ARM filter
-    BcjARM,
+    BcjArm,
     /// BCJ ARM Thumb
-    BcjARMThumb,
+    BcjArmThumb,
     /// BCJ SPARC filter
-    BcjSPARC,
+    BcjSparc,
     /// BCJ ARM64 filter
-    BcjARM64,
+    BcjArm64,
     /// BCJ RISC-V filter
-    BcjRISCV,
+    BcjRiscv,
     /// LZMA2 filter
-    LZMA2,
+    Lzma2,
 }
 
 impl TryFrom<u64> for FilterType {
@@ -222,14 +222,14 @@ impl TryFrom<u64> for FilterType {
         match value {
             0x03 => Ok(FilterType::Delta),
             0x04 => Ok(FilterType::BcjX86),
-            0x05 => Ok(FilterType::BcjPPC),
-            0x06 => Ok(FilterType::BcjIA64),
-            0x07 => Ok(FilterType::BcjARM),
-            0x08 => Ok(FilterType::BcjARMThumb),
-            0x09 => Ok(FilterType::BcjSPARC),
-            0x0A => Ok(FilterType::BcjARM64),
-            0x0B => Ok(FilterType::BcjRISCV),
-            0x21 => Ok(FilterType::LZMA2),
+            0x05 => Ok(FilterType::BcjPpc),
+            0x06 => Ok(FilterType::BcjIa64),
+            0x07 => Ok(FilterType::BcjArm),
+            0x08 => Ok(FilterType::BcjArmThumb),
+            0x09 => Ok(FilterType::BcjSparc),
+            0x0A => Ok(FilterType::BcjArm64),
+            0x0B => Ok(FilterType::BcjRiscv),
+            0x21 => Ok(FilterType::Lzma2),
             _ => Err(()),
         }
     }
@@ -412,13 +412,13 @@ impl BlockHeader {
                     (distance_prop as u32) + 1
                 }
                 FilterType::BcjX86
-                | FilterType::BcjPPC
-                | FilterType::BcjIA64
-                | FilterType::BcjARM
-                | FilterType::BcjARMThumb
-                | FilterType::BcjSPARC
-                | FilterType::BcjARM64
-                | FilterType::BcjRISCV => {
+                | FilterType::BcjPpc
+                | FilterType::BcjIa64
+                | FilterType::BcjArm
+                | FilterType::BcjArmThumb
+                | FilterType::BcjSparc
+                | FilterType::BcjArm64
+                | FilterType::BcjRiscv => {
                     if offset >= header_data.len() {
                         return Err(error_invalid_data(
                             "XZ block header too short for BCJ properties",
@@ -452,13 +452,13 @@ impl BlockHeader {
                             // Validate alignment based on filter type.
                             let bcj_alignment = match filter_type {
                                 FilterType::BcjX86 => 1,
-                                FilterType::BcjPPC => 4,
-                                FilterType::BcjIA64 => 16,
-                                FilterType::BcjARM => 4,
-                                FilterType::BcjARMThumb => 2,
-                                FilterType::BcjSPARC => 4,
-                                FilterType::BcjARM64 => 4,
-                                FilterType::BcjRISCV => 2,
+                                FilterType::BcjPpc => 4,
+                                FilterType::BcjIa64 => 16,
+                                FilterType::BcjArm => 4,
+                                FilterType::BcjArmThumb => 2,
+                                FilterType::BcjSparc => 4,
+                                FilterType::BcjArm64 => 4,
+                                FilterType::BcjRiscv => 2,
                                 _ => unreachable!(),
                             };
 
@@ -475,7 +475,7 @@ impl BlockHeader {
                         }
                     }
                 }
-                FilterType::LZMA2 => {
+                FilterType::Lzma2 => {
                     if offset >= header_data.len() {
                         return Err(error_invalid_data(
                             "XZ block header too short for LZMA2 properties",
@@ -515,7 +515,7 @@ impl BlockHeader {
             properties[i] = property;
         }
 
-        if filters.iter().filter_map(|x| *x).next_back() != Some(FilterType::LZMA2) {
+        if filters.iter().filter_map(|x| *x).next_back() != Some(FilterType::Lzma2) {
             return Err(error_invalid_input(
                 "XZ block's last filter must be a LZMA2 filter",
             ));
@@ -647,13 +647,13 @@ impl BlockHeader {
                     (distance_prop as u32) + 1
                 }
                 FilterType::BcjX86
-                | FilterType::BcjPPC
-                | FilterType::BcjIA64
-                | FilterType::BcjARM
-                | FilterType::BcjARMThumb
-                | FilterType::BcjSPARC
-                | FilterType::BcjARM64
-                | FilterType::BcjRISCV => {
+                | FilterType::BcjPpc
+                | FilterType::BcjIa64
+                | FilterType::BcjArm
+                | FilterType::BcjArmThumb
+                | FilterType::BcjSparc
+                | FilterType::BcjArm64
+                | FilterType::BcjRiscv => {
                     if offset >= header_data.len() {
                         return Err(error_invalid_data(
                             "Block header too short for BCJ properties",
@@ -684,7 +684,7 @@ impl BlockHeader {
                         _ => return Err(error_invalid_data("Invalid BCJ properties size")),
                     }
                 }
-                FilterType::LZMA2 => {
+                FilterType::Lzma2 => {
                     if offset >= header_data.len() {
                         return Err(error_invalid_data(
                             "Block header too short for LZMA2 properties",
@@ -1094,35 +1094,35 @@ fn create_filter_chain<'reader>(
                 let start_offset = property as usize;
                 Box::new(BcjReader::new_x86(chain_reader, start_offset))
             }
-            FilterType::BcjPPC => {
+            FilterType::BcjPpc => {
                 let start_offset = property as usize;
                 Box::new(BcjReader::new_ppc(chain_reader, start_offset))
             }
-            FilterType::BcjIA64 => {
+            FilterType::BcjIa64 => {
                 let start_offset = property as usize;
                 Box::new(BcjReader::new_ia64(chain_reader, start_offset))
             }
-            FilterType::BcjARM => {
+            FilterType::BcjArm => {
                 let start_offset = property as usize;
                 Box::new(BcjReader::new_arm(chain_reader, start_offset))
             }
-            FilterType::BcjARMThumb => {
+            FilterType::BcjArmThumb => {
                 let start_offset = property as usize;
                 Box::new(BcjReader::new_arm_thumb(chain_reader, start_offset))
             }
-            FilterType::BcjSPARC => {
+            FilterType::BcjSparc => {
                 let start_offset = property as usize;
                 Box::new(BcjReader::new_sparc(chain_reader, start_offset))
             }
-            FilterType::BcjARM64 => {
+            FilterType::BcjArm64 => {
                 let start_offset = property as usize;
                 Box::new(BcjReader::new_arm64(chain_reader, start_offset))
             }
-            FilterType::BcjRISCV => {
+            FilterType::BcjRiscv => {
                 let start_offset = property as usize;
                 Box::new(BcjReader::new_riscv(chain_reader, start_offset))
             }
-            FilterType::LZMA2 => {
+            FilterType::Lzma2 => {
                 let dict_size = property;
                 Box::new(Lzma2Reader::new(chain_reader, dict_size, None))
             }
@@ -1165,14 +1165,14 @@ fn generate_block_header_data(
         let filter_id = match filter_config.filter_type {
             FilterType::Delta => 0x03,
             FilterType::BcjX86 => 0x04,
-            FilterType::BcjPPC => 0x05,
-            FilterType::BcjIA64 => 0x06,
-            FilterType::BcjARM => 0x07,
-            FilterType::BcjARMThumb => 0x08,
-            FilterType::BcjSPARC => 0x09,
-            FilterType::BcjARM64 => 0x0A,
-            FilterType::BcjRISCV => 0x0B,
-            FilterType::LZMA2 => 0x21,
+            FilterType::BcjPpc => 0x05,
+            FilterType::BcjIa64 => 0x06,
+            FilterType::BcjArm => 0x07,
+            FilterType::BcjArmThumb => 0x08,
+            FilterType::BcjSparc => 0x09,
+            FilterType::BcjArm64 => 0x0A,
+            FilterType::BcjRiscv => 0x0B,
+            FilterType::Lzma2 => 0x21,
         };
         let size = encode_multibyte_integer(filter_id, &mut temp_buf)?;
         header_data.extend_from_slice(&temp_buf[..size]);
@@ -1188,13 +1188,13 @@ fn generate_block_header_data(
                 header_data.push(distance_prop);
             }
             FilterType::BcjX86
-            | FilterType::BcjPPC
-            | FilterType::BcjIA64
-            | FilterType::BcjARM
-            | FilterType::BcjARMThumb
-            | FilterType::BcjSPARC
-            | FilterType::BcjARM64
-            | FilterType::BcjRISCV => {
+            | FilterType::BcjPpc
+            | FilterType::BcjIa64
+            | FilterType::BcjArm
+            | FilterType::BcjArmThumb
+            | FilterType::BcjSparc
+            | FilterType::BcjArm64
+            | FilterType::BcjRiscv => {
                 if filter_config.property == 0 {
                     // No start offset.
                     let size = encode_multibyte_integer(0, &mut temp_buf)?;
@@ -1206,7 +1206,7 @@ fn generate_block_header_data(
                     header_data.extend_from_slice(&filter_config.property.to_le_bytes());
                 }
             }
-            FilterType::LZMA2 => {
+            FilterType::Lzma2 => {
                 let size = encode_multibyte_integer(1, &mut temp_buf)?;
                 header_data.extend_from_slice(&temp_buf[..size]);
 

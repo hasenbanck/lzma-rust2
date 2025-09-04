@@ -9,8 +9,8 @@ const MOVE_BLOCK_ALIGN: i32 = 64;
 const MOVE_BLOCK_ALIGN_MASK: i32 = !(MOVE_BLOCK_ALIGN - 1);
 
 pub(crate) trait MatchFind {
-    fn find_matches(&mut self, encoder: &mut LZEncoderData, matches: &mut Matches);
-    fn skip(&mut self, encoder: &mut LZEncoderData, len: usize);
+    fn find_matches(&mut self, encoder: &mut LzEncoderData, matches: &mut Matches);
+    fn skip(&mut self, encoder: &mut LzEncoderData, len: usize);
 }
 
 pub(crate) enum MatchFinders {
@@ -19,14 +19,14 @@ pub(crate) enum MatchFinders {
 }
 
 impl MatchFind for MatchFinders {
-    fn find_matches(&mut self, encoder: &mut LZEncoderData, matches: &mut Matches) {
+    fn find_matches(&mut self, encoder: &mut LzEncoderData, matches: &mut Matches) {
         match self {
             MatchFinders::Hc4(m) => m.find_matches(encoder, matches),
             MatchFinders::Bt4(m) => m.find_matches(encoder, matches),
         }
     }
 
-    fn skip(&mut self, encoder: &mut LZEncoderData, len: usize) {
+    fn skip(&mut self, encoder: &mut LzEncoderData, len: usize) {
         match self {
             MatchFinders::Hc4(m) => m.skip(encoder, len),
             MatchFinders::Bt4(m) => m.skip(encoder, len),
@@ -59,13 +59,13 @@ impl MfType {
     }
 }
 
-pub(crate) struct LZEncoder {
-    pub(crate) data: LZEncoderData,
+pub(crate) struct LzEncoder {
+    pub(crate) data: LzEncoderData,
     pub(crate) matches: Matches,
     pub(crate) match_finder: MatchFinders,
 }
 
-pub(crate) struct LZEncoderData {
+pub(crate) struct LzEncoderData {
     pub(crate) keep_size_before: u32,
     pub(crate) keep_size_after: u32,
     pub(crate) match_len_max: u32,
@@ -96,7 +96,7 @@ impl Matches {
     }
 }
 
-impl LZEncoder {
+impl LzEncoder {
     pub(crate) fn get_memory_usage(
         dict_size: u32,
         extra_size_before: u32,
@@ -170,7 +170,7 @@ impl LZEncoder {
         let keep_size_after = extra_size_after + match_len_max;
 
         Self {
-            data: LZEncoderData {
+            data: LzEncoderData {
                 keep_size_before,
                 keep_size_after,
                 match_len_max,
@@ -248,7 +248,7 @@ impl LZEncoder {
     }
 }
 
-impl LZEncoderData {
+impl LzEncoderData {
     pub(crate) fn is_started(&self) -> bool {
         self.read_pos != -1
     }
@@ -453,8 +453,8 @@ impl LZEncoderData {
     }
 }
 
-impl Deref for LZEncoder {
-    type Target = LZEncoderData;
+impl Deref for LzEncoder {
+    type Target = LzEncoderData;
 
     fn deref(&self) -> &Self::Target {
         &self.data

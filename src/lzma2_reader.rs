@@ -1,7 +1,7 @@
 use super::{
-    decoder::LZMADecoder,
+    decoder::LzmaDecoder,
     error_invalid_input,
-    lz::LZDecoder,
+    lz::LzDecoder,
     range_dec::{RangeDecoder, RangeDecoderBuffer},
     Read,
 };
@@ -27,9 +27,9 @@ pub const COMPRESSED_SIZE_MAX: u32 = 1 << 16;
 /// ```
 pub struct Lzma2Reader<R> {
     inner: R,
-    lz: LZDecoder,
+    lz: LzDecoder,
     rc: RangeDecoder<RangeDecoderBuffer>,
-    lzma: Option<LZMADecoder>,
+    lzma: Option<LzmaDecoder>,
     uncompressed_size: usize,
     is_lzma_chunk: bool,
     need_dict_reset: bool,
@@ -71,7 +71,7 @@ impl<R: Read> Lzma2Reader<R> {
     /// `dict_size` is the dictionary size in bytes.
     pub fn new(inner: R, dict_size: u32, preset_dict: Option<&[u8]>) -> Self {
         let has_preset = preset_dict.as_ref().map(|a| !a.is_empty()).unwrap_or(false);
-        let lz = LZDecoder::new(get_dict_size(dict_size) as _, preset_dict);
+        let lz = LzDecoder::new(get_dict_size(dict_size) as _, preset_dict);
         let rc = RangeDecoder::new_buffer(COMPRESSED_SIZE_MAX as _);
         Self {
             inner,
@@ -162,7 +162,7 @@ impl<R: Read> Lzma2Reader<R> {
         if lc + lp > 4 {
             return Err(error_invalid_input("corrupted input data (LZMA2:4)"));
         }
-        self.lzma = Some(LZMADecoder::new(lc as _, lp as _, pb as _));
+        self.lzma = Some(LzmaDecoder::new(lc as _, lp as _, pb as _));
 
         Ok(())
     }

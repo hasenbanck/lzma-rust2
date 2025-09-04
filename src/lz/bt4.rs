@@ -1,6 +1,6 @@
 use alloc::{vec, vec::Vec};
 
-use super::{extend_match, hash234::Hash234, LZEncoder, MatchFind, Matches};
+use super::{extend_match, hash234::Hash234, LzEncoder, MatchFind, Matches};
 
 /// Binary Tree with 4-byte matching
 pub(crate) struct Bt4 {
@@ -43,14 +43,14 @@ impl Bt4 {
         Hash234::get_mem_usage(dict_size) + dict_size / (1024 / 8) + 10
     }
 
-    fn move_pos(&mut self, encoder: &mut super::LZEncoderData) -> i32 {
+    fn move_pos(&mut self, encoder: &mut super::LzEncoderData) -> i32 {
         let avail = encoder.move_pos(encoder.nice_len as _, 4);
         if avail != 0 {
             self.lz_pos += 1;
             if self.lz_pos == MAX_POS {
                 let normalization_offset = MAX_POS - self.cyclic_size;
                 self.hash.normalize(normalization_offset);
-                LZEncoder::normalize(&mut self.tree, normalization_offset);
+                LzEncoder::normalize(&mut self.tree, normalization_offset);
                 self.lz_pos -= normalization_offset;
             }
             self.cyclic_pos += 1;
@@ -63,7 +63,7 @@ impl Bt4 {
 
     fn skip(
         &mut self,
-        encoder: &mut super::LZEncoderData,
+        encoder: &mut super::LzEncoderData,
         nice_len_limit: i32,
         mut current_match: i32,
     ) {
@@ -124,7 +124,7 @@ impl Bt4 {
 }
 
 impl MatchFind for Bt4 {
-    fn find_matches(&mut self, encoder: &mut super::LZEncoderData, matches: &mut Matches) {
+    fn find_matches(&mut self, encoder: &mut super::LzEncoderData, matches: &mut Matches) {
         matches.count = 0;
 
         let mut match_len_limit = encoder.match_len_max as i32;
@@ -265,7 +265,7 @@ impl MatchFind for Bt4 {
         }
     }
 
-    fn skip(&mut self, encoder: &mut super::LZEncoderData, len: usize) {
+    fn skip(&mut self, encoder: &mut super::LzEncoderData, len: usize) {
         let mut len = len as i32;
         while {
             let n = len > 0;

@@ -1,13 +1,13 @@
 use alloc::vec::Vec;
 
-use super::{LZIPHeader, LZIPTrailer, CRC32, HEADER_SIZE, TRAILER_SIZE};
+use super::{LzipHeader, LzipTrailer, CRC32, HEADER_SIZE, TRAILER_SIZE};
 use crate::{error_invalid_data, error_invalid_input, CountingReader, LzmaReader, Read, Result};
 
 /// A single-threaded LZIP decompressor.
 pub struct LzipReader<R> {
     inner: Option<R>,
     lzma_reader: Option<LzmaReader<CountingReader<R>>>,
-    current_header: Option<LZIPHeader>,
+    current_header: Option<LzipHeader>,
     finished: bool,
     trailer_buf: Vec<u8>,
     crc_digest: Option<crc::Digest<'static, u32, crc::Table<16>>>,
@@ -60,7 +60,7 @@ impl<R: Read> LzipReader<R> {
     fn start_next_member(&mut self) -> Result<bool> {
         let mut reader = self.inner.take().expect("inner reader not set");
 
-        let header = match LZIPHeader::parse(&mut reader) {
+        let header = match LzipHeader::parse(&mut reader) {
             Ok(header) => header,
             Err(_) => {
                 // If header parsing fails, we've probably reached EOF:
@@ -100,7 +100,7 @@ impl<R: Read> LzipReader<R> {
         let compressed_bytes = counting_reader.bytes_read();
 
         let mut inner_reader = counting_reader.inner;
-        let trailer = LZIPTrailer::parse(&mut inner_reader)?;
+        let trailer = LzipTrailer::parse(&mut inner_reader)?;
 
         let computed_crc = self.crc_digest.take().expect("no CRC digest").finalize();
 

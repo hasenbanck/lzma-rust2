@@ -1,6 +1,6 @@
 use super::{
-    encoder::LZMAEncoderTrait,
-    lz::{LZEncoder, MfType},
+    encoder::LzmaEncoderTrait,
+    lz::{LzEncoder, MfType},
     MATCH_LEN_MAX, MATCH_LEN_MIN, REPS,
 };
 
@@ -12,7 +12,7 @@ impl FastEncoderMode {
     pub(crate) const EXTRA_SIZE_AFTER: u32 = MATCH_LEN_MAX as u32 - 1;
 
     pub(crate) fn get_memory_usage(dict_size: u32, extra_size_before: u32, mf: MfType) -> u32 {
-        LZEncoder::get_memory_usage(
+        LzEncoder::get_memory_usage(
             dict_size,
             extra_size_before.max(Self::EXTRA_SIZE_BEFORE),
             Self::EXTRA_SIZE_AFTER,
@@ -26,8 +26,8 @@ fn change_pair(small_dist: u32, big_dist: u32) -> bool {
     small_dist < (big_dist >> 7)
 }
 
-impl LZMAEncoderTrait for FastEncoderMode {
-    fn get_next_symbol(&mut self, encoder: &mut super::encoder::LZMAEncoder) -> u32 {
+impl LzmaEncoderTrait for FastEncoderMode {
+    fn get_next_symbol(&mut self, encoder: &mut super::encoder::LzmaEncoder) -> u32 {
         if encoder.data.read_ahead == -1 {
             encoder.find_matches();
         }

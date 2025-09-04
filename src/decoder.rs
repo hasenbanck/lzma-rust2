@@ -1,20 +1,20 @@
 use alloc::{vec, vec::Vec};
 
 use super::{
-    coder_get_dict_size, lz::LZDecoder, range_dec::RangeDecoder, LZMACoder, LengthCoder,
-    LiteralCoder, LiteralSubCoder, ALIGN_BITS, DIST_MODEL_END, DIST_MODEL_START, LOW_SYMBOLS,
+    coder_get_dict_size, lz::LzDecoder, range_dec::RangeDecoder, LengthCoder, LiteralCoder,
+    LiteralSubCoder, LzmaCoder, ALIGN_BITS, DIST_MODEL_END, DIST_MODEL_START, LOW_SYMBOLS,
     MATCH_LEN_MIN, MID_SYMBOLS,
 };
 use crate::range_dec::RangeReader;
 
-pub(crate) struct LZMADecoder {
-    coder: LZMACoder,
+pub(crate) struct LzmaDecoder {
+    coder: LzmaCoder,
     literal_decoder: LiteralDecoder,
     match_len_decoder: LengthCoder,
     rep_len_decoder: LengthCoder,
 }
 
-impl LZMADecoder {
+impl LzmaDecoder {
     pub(crate) fn new(lc: u32, lp: u32, pb: u32) -> Self {
         let mut literal_decoder = LiteralDecoder::new(lc, lp);
         literal_decoder.reset();
@@ -29,7 +29,7 @@ impl LZMADecoder {
             l
         };
         Self {
-            coder: LZMACoder::new(pb as _),
+            coder: LzmaCoder::new(pb as _),
             literal_decoder,
             match_len_decoder,
             rep_len_decoder,
@@ -49,7 +49,7 @@ impl LZMADecoder {
 
     pub(crate) fn decode<R: RangeReader>(
         &mut self,
-        lz: &mut LZDecoder,
+        lz: &mut LzDecoder,
         rc: &mut RangeDecoder<R>,
     ) -> crate::Result<()> {
         lz.repeat_pending()?;
@@ -163,8 +163,8 @@ impl LiteralDecoder {
 
     fn decode<R: RangeReader>(
         &mut self,
-        coder: &mut LZMACoder,
-        lz: &mut LZDecoder,
+        coder: &mut LzmaCoder,
+        lz: &mut LzDecoder,
         rc: &mut RangeDecoder<R>,
     ) -> crate::Result<()> {
         let i = self
@@ -189,8 +189,8 @@ impl LiteralSubDecoder {
 
     pub(crate) fn decode<R: RangeReader>(
         &mut self,
-        coder: &mut LZMACoder,
-        lz: &mut LZDecoder,
+        coder: &mut LzmaCoder,
+        lz: &mut LzDecoder,
         rc: &mut RangeDecoder<R>,
     ) -> crate::Result<()> {
         let mut symbol: u32 = 1;

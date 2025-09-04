@@ -3,11 +3,11 @@ use alloc::{vec, vec::Vec};
 use super::{
     encoder_fast::FastEncoderMode,
     encoder_normal::NormalEncoderMode,
-    lz::{LZEncoder, MfType},
+    lz::{LzEncoder, MfType},
     range_enc::{RangeEncoder, RangeEncoderBuffer},
 };
 use crate::{
-    get_dist_state, state::State, LZMACoder, LengthCoder, LiteralCoder, LiteralSubCoder, Write,
+    get_dist_state, state::State, LengthCoder, LiteralCoder, LiteralSubCoder, LzmaCoder, Write,
     ALIGN_BITS, ALIGN_MASK, ALIGN_SIZE, DIST_MODEL_END, DIST_MODEL_START, DIST_STATES,
     FULL_DISTANCES, LOW_SYMBOLS, MATCH_LEN_MAX, MATCH_LEN_MIN, MID_SYMBOLS, REPS,
 };
@@ -28,42 +28,42 @@ pub enum EncodeMode {
     Normal,
 }
 
-pub(crate) trait LZMAEncoderTrait {
-    fn get_next_symbol(&mut self, encoder: &mut LZMAEncoder) -> u32;
+pub(crate) trait LzmaEncoderTrait {
+    fn get_next_symbol(&mut self, encoder: &mut LzmaEncoder) -> u32;
     fn reset(&mut self) {}
 }
 
-pub(crate) enum LZMAEncoderModes {
+pub(crate) enum LzmaEncoderModes {
     Fast(FastEncoderMode),
     Normal(NormalEncoderMode),
 }
 
-impl LZMAEncoderTrait for LZMAEncoderModes {
-    fn get_next_symbol(&mut self, encoder: &mut LZMAEncoder) -> u32 {
+impl LzmaEncoderTrait for LzmaEncoderModes {
+    fn get_next_symbol(&mut self, encoder: &mut LzmaEncoder) -> u32 {
         match self {
-            LZMAEncoderModes::Fast(a) => a.get_next_symbol(encoder),
-            LZMAEncoderModes::Normal(a) => a.get_next_symbol(encoder),
+            LzmaEncoderModes::Fast(a) => a.get_next_symbol(encoder),
+            LzmaEncoderModes::Normal(a) => a.get_next_symbol(encoder),
         }
     }
 
     fn reset(&mut self) {
         match self {
-            LZMAEncoderModes::Fast(a) => a.reset(),
-            LZMAEncoderModes::Normal(a) => a.reset(),
+            LzmaEncoderModes::Fast(a) => a.reset(),
+            LzmaEncoderModes::Normal(a) => a.reset(),
         }
     }
 }
 
-pub(crate) struct LZMAEncoder {
-    pub(crate) coder: LZMACoder,
-    pub(crate) lz: LZEncoder,
+pub(crate) struct LzmaEncoder {
+    pub(crate) coder: LzmaCoder,
+    pub(crate) lz: LzEncoder,
     pub(crate) literal_encoder: LiteralEncoder,
     pub(crate) match_len_encoder: LengthEncoder,
     pub(crate) rep_len_encoder: LengthEncoder,
-    pub(crate) data: LZMAEncData,
+    pub(crate) data: LzmaEncData,
 }
 
-pub(crate) struct LZMAEncData {
+pub(crate) struct LzmaEncData {
     pub(crate) nice_len: usize,
     dist_price_count: i32,
     align_price_count: i32,
@@ -76,7 +76,7 @@ pub(crate) struct LZMAEncData {
     pub(crate) uncompressed_size: u32,
 }
 
-impl LZMAEncoder {
+impl LzmaEncoder {
     pub(crate) fn get_dist_slot(dist: u32) -> u32 {
         if dist <= DIST_MODEL_START as u32 {
             return dist;
@@ -130,7 +130,7 @@ impl LZMAEncoder {
     }
 }
 
-impl LZMAEncoder {
+impl LzmaEncoder {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         mode: EncodeMode,
@@ -141,12 +141,12 @@ impl LZMAEncoder {
         depth_limit: i32,
         dict_size: u32,
         nice_len: usize,
-    ) -> (Self, LZMAEncoderModes) {
+    ) -> (Self, LzmaEncoderModes) {
         let fast_mode = mode == EncodeMode::Fast;
-        let mut mode: LZMAEncoderModes = if fast_mode {
-            LZMAEncoderModes::Fast(FastEncoderMode::default())
+        let mut mode: LzmaEncoderModes = if fast_mode {
+            LzmaEncoderModes::Fast(FastEncoderMode::default())
         } else {
-            LZMAEncoderModes::Normal(NormalEncoderMode::new())
+            LzmaEncoderModes::Normal(NormalEncoderMode::new())
         };
         let (extra_size_before, extra_size_after) = if fast_mode {
             (
@@ -160,7 +160,7 @@ impl LZMAEncoder {
             )
         };
         let lz = match mf {
-            MfType::Hc4 => LZEncoder::new_hc4(
+            MfType::Hc4 => LzEncoder::new_hc4(
                 dict_size,
                 extra_size_before,
                 extra_size_after,
@@ -168,7 +168,7 @@ impl LZMAEncoder {
                 MATCH_LEN_MAX as _,
                 depth_limit,
             ),
-            MfType::Bt4 => LZEncoder::new_bt4(
+            MfType::Bt4 => LzEncoder::new_bt4(
                 dict_size,
                 extra_size_before,
                 extra_size_after,
@@ -181,14 +181,14 @@ impl LZMAEncoder {
         let literal_encoder = LiteralEncoder::new(lc, lp);
         let match_len_encoder = LengthEncoder::new(pb, nice_len);
         let rep_len_encoder = LengthEncoder::new(pb, nice_len);
-        let dist_slot_price_size = LZMAEncoder::get_dist_slot(dict_size - 1) + 1;
+        let dist_slot_price_size = LzmaEncoder::get_dist_slot(dict_size - 1) + 1;
         let mut e = Self {
-            coder: LZMACoder::new(pb as usize),
+            coder: LzmaCoder::new(pb as usize),
             lz,
             literal_encoder,
             match_len_encoder,
             rep_len_encoder,
-            data: LZMAEncData {
+            data: LzmaEncData {
                 nice_len,
                 dist_price_count: 0,
                 align_price_count: 0,
@@ -206,7 +206,7 @@ impl LZMAEncoder {
         (e, mode)
     }
 
-    pub(crate) fn reset(&mut self, mode: &mut dyn LZMAEncoderTrait) {
+    pub(crate) fn reset(&mut self, mode: &mut dyn LzmaEncoderTrait) {
         self.coder.reset();
         self.literal_encoder.reset();
         self.match_len_encoder.reset();
@@ -227,7 +227,7 @@ impl LZMAEncoder {
     pub(crate) fn encode_for_lzma1<W: Write>(
         &mut self,
         rc: &mut RangeEncoder<W>,
-        mode: &mut dyn LZMAEncoderTrait,
+        mode: &mut dyn LzmaEncoderTrait,
     ) -> crate::Result<()> {
         if !self.lz.is_started() && !self.encode_init(rc)? {
             return Ok(());
@@ -272,7 +272,7 @@ impl LZMAEncoder {
     fn encode_symbol<W: Write>(
         &mut self,
         rc: &mut RangeEncoder<W>,
-        mode: &mut dyn LZMAEncoderTrait,
+        mode: &mut dyn LzmaEncoderTrait,
     ) -> crate::Result<bool> {
         if !self.lz.has_enough_data(self.data.read_ahead + 1) {
             return Ok(false);
@@ -315,7 +315,7 @@ impl LZMAEncoder {
     ) -> crate::Result<()> {
         self.coder.state.update_match();
         self.match_len_encoder.encode(len, pos_state, rc)?;
-        let dist_slot = LZMAEncoder::get_dist_slot(dist);
+        let dist_slot = LzmaEncoder::get_dist_slot(dist);
         rc.encode_bit_tree(
             &mut self.coder.dist_slots[get_dist_state(len) as usize],
             dist_slot,
@@ -506,7 +506,7 @@ impl LZMAEncoder {
         } else {
             // Note that distSlotPrices includes also
             // the price of direct bits.
-            let dist_slot = LZMAEncoder::get_dist_slot(dist);
+            let dist_slot = LzmaEncoder::get_dist_slot(dist);
             price += self.data.dist_slot_prices[dist_state as usize][dist_slot as usize]
                 + self.data.align_prices[(dist & ALIGN_MASK as u32) as usize];
         }
@@ -587,11 +587,11 @@ impl LZMAEncoder {
     }
 }
 
-impl LZMAEncoder {
+impl LzmaEncoder {
     pub fn encode_for_lzma2(
         &mut self,
         rc: &mut RangeEncoder<RangeEncoderBuffer>,
-        mode: &mut dyn LZMAEncoderTrait,
+        mode: &mut dyn LzmaEncoderTrait,
     ) -> crate::Result<bool> {
         if !self.lz.is_started() && !self.encode_init(rc)? {
             return Ok(false);
@@ -633,9 +633,9 @@ impl LiteralEncoder {
 
     pub(crate) fn encode_init<W: Write>(
         &mut self,
-        lz: &LZEncoder,
-        data: &LZMAEncData,
-        coder: &mut LZMACoder,
+        lz: &LzEncoder,
+        data: &LzmaEncData,
+        coder: &mut LzmaCoder,
         rc: &mut RangeEncoder<W>,
     ) -> crate::Result<()> {
         debug_assert!(data.read_ahead >= 0);
@@ -644,9 +644,9 @@ impl LiteralEncoder {
 
     pub(crate) fn encode<W: Write>(
         &mut self,
-        lz: &LZEncoder,
-        data: &LZMAEncData,
-        coder: &mut LZMACoder,
+        lz: &LzEncoder,
+        data: &LzmaEncData,
+        coder: &mut LzmaCoder,
         rc: &mut RangeEncoder<W>,
     ) -> crate::Result<()> {
         debug_assert!(data.read_ahead >= 0);
@@ -659,7 +659,7 @@ impl LiteralEncoder {
 
     pub(crate) fn get_price(
         &self,
-        encoder: &LZMAEncoder,
+        encoder: &LzmaEncoder,
         cur_byte: u32,
         match_byte: u32,
         prev_byte: u32,
@@ -694,9 +694,9 @@ impl LiteralSubEncoder {
 
     fn encode<W: Write>(
         &mut self,
-        lz: &LZEncoder,
-        data: &LZMAEncData,
-        coder: &mut LZMACoder,
+        lz: &LzEncoder,
+        data: &LzmaEncData,
+        coder: &mut LzmaCoder,
         rc: &mut RangeEncoder<W>,
     ) -> crate::Result<()> {
         let mut symbol = lz.get_byte_backward(data.read_ahead) as u32 | 0x100;

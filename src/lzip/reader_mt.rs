@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use super::{scan_members, LZIPMember};
+use super::{scan_members, LzipMember};
 use crate::{
     set_error,
     work_pool::{WorkPool, WorkPoolConfig, WorkPoolState},
@@ -24,7 +24,7 @@ struct WorkUnit {
 /// A multi-threaded LZIP decompressor.
 pub struct LzipReaderMt<R: Read + Seek> {
     inner: R,
-    members: Vec<LZIPMember>,
+    members: Vec<LzipMember>,
     work_pool: WorkPool<WorkUnit, Vec<u8>>,
     current_chunk: Cursor<Vec<u8>>,
 }

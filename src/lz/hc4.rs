@@ -3,8 +3,8 @@ use alloc::{vec, vec::Vec};
 use super::{
     extend_match,
     hash234::Hash234,
-    lz_encoder::{LZEncoder, MatchFind, Matches},
-    LZEncoderData,
+    lz_encoder::{LzEncoder, MatchFind, Matches},
+    LzEncoderData,
 };
 
 /// Hash Chain with 4-byte matching
@@ -39,14 +39,14 @@ impl Hc4 {
         }
     }
 
-    fn move_pos(&mut self, encoder: &mut LZEncoderData) -> i32 {
+    fn move_pos(&mut self, encoder: &mut LzEncoderData) -> i32 {
         let avail = encoder.move_pos(4, 4);
         if avail != 0 {
             self.lz_pos += 1;
             if self.lz_pos == 0x7FFFFFFF {
                 let norm_offset = 0x7FFFFFFF - self.cyclic_size;
                 self.hash.normalize(norm_offset);
-                LZEncoder::normalize(&mut self.chain, norm_offset);
+                LzEncoder::normalize(&mut self.chain, norm_offset);
                 self.lz_pos = self.lz_pos.wrapping_sub(norm_offset);
             }
 
@@ -61,7 +61,7 @@ impl Hc4 {
 }
 
 impl MatchFind for Hc4 {
-    fn find_matches(&mut self, encoder: &mut LZEncoderData, matches: &mut Matches) {
+    fn find_matches(&mut self, encoder: &mut LzEncoderData, matches: &mut Matches) {
         matches.count = 0;
         let mut match_len_limit = encoder.match_len_max as i32;
         let mut nice_len_limit = encoder.nice_len as i32;
@@ -179,7 +179,7 @@ impl MatchFind for Hc4 {
         }
     }
 
-    fn skip(&mut self, encoder: &mut LZEncoderData, mut len: usize) {
+    fn skip(&mut self, encoder: &mut LzEncoderData, mut len: usize) {
         while len > 0 {
             len -= 1;
             if self.move_pos(encoder) != 0 {

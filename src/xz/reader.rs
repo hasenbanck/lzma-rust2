@@ -12,7 +12,7 @@ use crate::{
 #[allow(clippy::large_enum_variant)]
 enum FilterReader<R: Read> {
     Counting(CountingReader<R>),
-    LZMA2(Lzma2Reader<Box<FilterReader<R>>>),
+    Lzma2(Lzma2Reader<Box<FilterReader<R>>>),
     Delta(DeltaReader<Box<FilterReader<R>>>),
     Bcj(BcjReader<Box<FilterReader<R>>>),
     Dummy,
@@ -22,7 +22,7 @@ impl<R: Read> Read for FilterReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         match self {
             FilterReader::Counting(reader) => reader.read(buf),
-            FilterReader::LZMA2(reader) => reader.read(buf),
+            FilterReader::Lzma2(reader) => reader.read(buf),
             FilterReader::Delta(reader) => reader.read(buf),
             FilterReader::Bcj(reader) => reader.read(buf),
             FilterReader::Dummy => unimplemented!(),
@@ -50,40 +50,40 @@ impl<R: Read> FilterReader<R> {
                     let start_offset = property as usize;
                     FilterReader::Bcj(BcjReader::new_x86(Box::new(chain_reader), start_offset))
                 }
-                FilterType::BcjPPC => {
+                FilterType::BcjPpc => {
                     let start_offset = property as usize;
                     FilterReader::Bcj(BcjReader::new_ppc(Box::new(chain_reader), start_offset))
                 }
-                FilterType::BcjIA64 => {
+                FilterType::BcjIa64 => {
                     let start_offset = property as usize;
                     FilterReader::Bcj(BcjReader::new_ia64(Box::new(chain_reader), start_offset))
                 }
-                FilterType::BcjARM => {
+                FilterType::BcjArm => {
                     let start_offset = property as usize;
                     FilterReader::Bcj(BcjReader::new_arm(Box::new(chain_reader), start_offset))
                 }
-                FilterType::BcjARMThumb => {
+                FilterType::BcjArmThumb => {
                     let start_offset = property as usize;
                     FilterReader::Bcj(BcjReader::new_arm_thumb(
                         Box::new(chain_reader),
                         start_offset,
                     ))
                 }
-                FilterType::BcjSPARC => {
+                FilterType::BcjSparc => {
                     let start_offset = property as usize;
                     FilterReader::Bcj(BcjReader::new_sparc(Box::new(chain_reader), start_offset))
                 }
-                FilterType::BcjARM64 => {
+                FilterType::BcjArm64 => {
                     let start_offset = property as usize;
                     FilterReader::Bcj(BcjReader::new_arm64(Box::new(chain_reader), start_offset))
                 }
-                FilterType::BcjRISCV => {
+                FilterType::BcjRiscv => {
                     let start_offset = property as usize;
                     FilterReader::Bcj(BcjReader::new_riscv(Box::new(chain_reader), start_offset))
                 }
-                FilterType::LZMA2 => {
+                FilterType::Lzma2 => {
                     let dict_size = property;
-                    FilterReader::LZMA2(Lzma2Reader::new(Box::new(chain_reader), dict_size, None))
+                    FilterReader::Lzma2(Lzma2Reader::new(Box::new(chain_reader), dict_size, None))
                 }
             };
         }
@@ -94,7 +94,7 @@ impl<R: Read> FilterReader<R> {
     fn bytes_read(&self) -> u64 {
         match self {
             FilterReader::Counting(reader) => reader.bytes_read(),
-            FilterReader::LZMA2(reader) => reader.inner().bytes_read(),
+            FilterReader::Lzma2(reader) => reader.inner().bytes_read(),
             FilterReader::Delta(reader) => reader.inner().bytes_read(),
             FilterReader::Bcj(reader) => reader.inner().bytes_read(),
             FilterReader::Dummy => unimplemented!(),
@@ -104,7 +104,7 @@ impl<R: Read> FilterReader<R> {
     fn into_inner(self) -> R {
         match self {
             FilterReader::Counting(reader) => reader.inner,
-            FilterReader::LZMA2(reader) => {
+            FilterReader::Lzma2(reader) => {
                 let filter_reader = reader.into_inner();
                 filter_reader.into_inner()
             }
@@ -123,7 +123,7 @@ impl<R: Read> FilterReader<R> {
     fn inner(&self) -> &R {
         match self {
             FilterReader::Counting(reader) => &reader.inner,
-            FilterReader::LZMA2(reader) => {
+            FilterReader::Lzma2(reader) => {
                 let filter_reader = reader.inner();
 
                 filter_reader.inner()
@@ -143,7 +143,7 @@ impl<R: Read> FilterReader<R> {
     fn inner_mut(&mut self) -> &mut R {
         match self {
             FilterReader::Counting(reader) => &mut reader.inner,
-            FilterReader::LZMA2(reader) => {
+            FilterReader::Lzma2(reader) => {
                 let filter_reader = reader.inner_mut();
                 filter_reader.inner_mut()
             }

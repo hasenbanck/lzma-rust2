@@ -15,7 +15,7 @@ use crate::{
 #[allow(clippy::large_enum_variant)]
 enum FilterWriter<W: Write> {
     Counting(CountingWriter<W>),
-    LZMA2(Lzma2Writer<Box<FilterWriter<W>>>),
+    Lzma2(Lzma2Writer<Box<FilterWriter<W>>>),
     Delta(DeltaWriter<Box<FilterWriter<W>>>),
     Bcj(BcjWriter<Box<FilterWriter<W>>>),
     Dummy,
@@ -25,7 +25,7 @@ impl<W: Write> Write for FilterWriter<W> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         match self {
             FilterWriter::Counting(writer) => writer.write(buf),
-            FilterWriter::LZMA2(writer) => writer.write(buf),
+            FilterWriter::Lzma2(writer) => writer.write(buf),
             FilterWriter::Delta(writer) => writer.write(buf),
             FilterWriter::Bcj(writer) => writer.write(buf),
             FilterWriter::Dummy => unimplemented!(),
@@ -35,7 +35,7 @@ impl<W: Write> Write for FilterWriter<W> {
     fn flush(&mut self) -> Result<()> {
         match self {
             FilterWriter::Counting(writer) => writer.flush(),
-            FilterWriter::LZMA2(writer) => writer.flush(),
+            FilterWriter::Lzma2(writer) => writer.flush(),
             FilterWriter::Delta(writer) => writer.flush(),
             FilterWriter::Bcj(writer) => writer.flush(),
             FilterWriter::Dummy => unimplemented!(),
@@ -61,43 +61,43 @@ impl<W: Write> FilterWriter<W> {
                     let start_offset = filter_config.property as usize;
                     FilterWriter::Bcj(BcjWriter::new_x86(Box::new(chain_writer), start_offset))
                 }
-                FilterType::BcjPPC => {
+                FilterType::BcjPpc => {
                     let start_offset = filter_config.property as usize;
                     FilterWriter::Bcj(BcjWriter::new_ppc(Box::new(chain_writer), start_offset))
                 }
-                FilterType::BcjIA64 => {
+                FilterType::BcjIa64 => {
                     let start_offset = filter_config.property as usize;
                     FilterWriter::Bcj(BcjWriter::new_ia64(Box::new(chain_writer), start_offset))
                 }
-                FilterType::BcjARM => {
+                FilterType::BcjArm => {
                     let start_offset = filter_config.property as usize;
                     FilterWriter::Bcj(BcjWriter::new_arm(Box::new(chain_writer), start_offset))
                 }
-                FilterType::BcjARMThumb => {
+                FilterType::BcjArmThumb => {
                     let start_offset = filter_config.property as usize;
                     FilterWriter::Bcj(BcjWriter::new_arm_thumb(
                         Box::new(chain_writer),
                         start_offset,
                     ))
                 }
-                FilterType::BcjSPARC => {
+                FilterType::BcjSparc => {
                     let start_offset = filter_config.property as usize;
                     FilterWriter::Bcj(BcjWriter::new_sparc(Box::new(chain_writer), start_offset))
                 }
-                FilterType::BcjARM64 => {
+                FilterType::BcjArm64 => {
                     let start_offset = filter_config.property as usize;
                     FilterWriter::Bcj(BcjWriter::new_arm64(Box::new(chain_writer), start_offset))
                 }
-                FilterType::BcjRISCV => {
+                FilterType::BcjRiscv => {
                     let start_offset = filter_config.property as usize;
                     FilterWriter::Bcj(BcjWriter::new_riscv(Box::new(chain_writer), start_offset))
                 }
-                FilterType::LZMA2 => {
+                FilterType::Lzma2 => {
                     let options = Lzma2Options {
                         lzma_options: lzma_options.clone(),
                         ..Default::default()
                     };
-                    FilterWriter::LZMA2(Lzma2Writer::new(Box::new(chain_writer), options))
+                    FilterWriter::Lzma2(Lzma2Writer::new(Box::new(chain_writer), options))
                 }
             };
         }
@@ -108,7 +108,7 @@ impl<W: Write> FilterWriter<W> {
     fn into_inner(self) -> W {
         match self {
             FilterWriter::Counting(writer) => writer.inner,
-            FilterWriter::LZMA2(writer) => {
+            FilterWriter::Lzma2(writer) => {
                 let filter_writer = writer.into_inner();
                 filter_writer.into_inner()
             }
@@ -127,7 +127,7 @@ impl<W: Write> FilterWriter<W> {
     fn inner(&self) -> &W {
         match self {
             FilterWriter::Counting(writer) => &writer.inner,
-            FilterWriter::LZMA2(writer) => {
+            FilterWriter::Lzma2(writer) => {
                 let filter_writer = writer.inner();
                 filter_writer.inner()
             }
@@ -146,7 +146,7 @@ impl<W: Write> FilterWriter<W> {
     fn inner_mut(&mut self) -> &mut W {
         match self {
             FilterWriter::Counting(writer) => &mut writer.inner,
-            FilterWriter::LZMA2(writer) => {
+            FilterWriter::Lzma2(writer) => {
                 let filter_writer = writer.inner_mut();
                 filter_writer.inner_mut()
             }
@@ -165,7 +165,7 @@ impl<W: Write> FilterWriter<W> {
     fn finish(self) -> Result<CountingWriter<W>> {
         match self {
             FilterWriter::Counting(writer) => Ok(writer),
-            FilterWriter::LZMA2(writer) => {
+            FilterWriter::Lzma2(writer) => {
                 let inner_writer = writer.finish()?;
                 inner_writer.finish()
             }
@@ -273,7 +273,7 @@ impl<W: Write> XzWriter<W> {
 
         // Last filter is always LZMA2.
         options.filters.push(FilterConfig {
-            filter_type: FilterType::LZMA2,
+            filter_type: FilterType::Lzma2,
             property: 0,
         });
 

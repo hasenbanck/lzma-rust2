@@ -1,6 +1,6 @@
 use super::*;
 
-impl BCJFilter {
+impl BcjFilter {
     pub(crate) fn new_ia64(start_pos: usize, encoder: bool) -> Self {
         Self {
             is_encoder: encoder,

@@ -40,12 +40,12 @@ const MIN_DICT_SIZE: u32 = 4 * 1024;
 const MAX_DICT_SIZE: u32 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
-pub(crate) struct LZIPHeader {
+pub(crate) struct LzipHeader {
     version: u8,
     dict_size: u32,
 }
 
-impl LZIPHeader {
+impl LzipHeader {
     fn parse<R: Read>(reader: &mut R) -> Result<Self> {
         let mut magic = [0u8; 4];
         reader.read_exact(&mut magic)?;
@@ -62,24 +62,24 @@ impl LZIPHeader {
         let dict_size_byte = reader.read_u8()?;
         let dict_size = decode_dict_size(dict_size_byte)?;
 
-        Ok(LZIPHeader { version, dict_size })
+        Ok(LzipHeader { version, dict_size })
     }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct LZIPTrailer {
+pub(crate) struct LzipTrailer {
     crc32: u32,
     data_size: u64,
     member_size: u64,
 }
 
-impl LZIPTrailer {
+impl LzipTrailer {
     fn parse<R: Read>(reader: &mut R) -> Result<Self> {
         let crc32 = reader.read_u32()?;
         let data_size = reader.read_u64()?;
         let member_size = reader.read_u64()?;
 
-        Ok(LZIPTrailer {
+        Ok(LzipTrailer {
             crc32,
             data_size,
             member_size,
@@ -177,7 +177,7 @@ fn encode_dict_size(dict_size: u32) -> Result<u8> {
 
 #[cfg(feature = "std")]
 #[derive(Debug, Clone)]
-struct LZIPMember {
+struct LzipMember {
     start_pos: u64,
     compressed_size: u64,
 }
@@ -185,7 +185,7 @@ struct LZIPMember {
 /// Scan the LZIP file to collect information about all members.
 /// This reads from the back of the file to efficiently locate member boundaries.
 #[cfg(feature = "std")]
-fn scan_members<R: Read + Seek>(mut reader: R) -> Result<(R, Vec<LZIPMember>)> {
+fn scan_members<R: Read + Seek>(mut reader: R) -> Result<(R, Vec<LzipMember>)> {
     let file_size = reader.seek(SeekFrom::End(0))?;
 
     if file_size < (HEADER_SIZE + TRAILER_SIZE) as u64 {
@@ -234,7 +234,7 @@ fn scan_members<R: Read + Seek>(mut reader: R) -> Result<(R, Vec<LZIPMember>)> {
             return Err(error_invalid_data("invalid LZIP magic bytes"));
         }
 
-        members.push(LZIPMember {
+        members.push(LzipMember {
             start_pos: member_start,
             compressed_size: member_size,
         });

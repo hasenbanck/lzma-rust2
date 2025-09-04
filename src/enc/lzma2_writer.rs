@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::num::NonZeroU64;
 
 use super::{
-    encoder::{EncodeMode, LZMAEncoder, LZMAEncoderModes},
+    encoder::{EncodeMode, LzmaEncoder, LzmaEncoderModes},
     lz::MfType,
     range_enc::{RangeEncoder, RangeEncoderBuffer},
 };
@@ -145,7 +145,7 @@ impl LzmaOptions {
     pub fn get_memory_usage(&self) -> u32 {
         let dict_size = self.dict_size;
         let extra_size_before = get_extra_size_before(dict_size);
-        70 + LZMAEncoder::get_mem_usage(self.mode, dict_size, extra_size_before, self.mf)
+        70 + LzmaEncoder::get_mem_usage(self.mode, dict_size, extra_size_before, self.mf)
     }
 
     /// Returns the LZMA properties byte for these options.
@@ -193,8 +193,8 @@ pub fn get_extra_size_before(dict_size: u32) -> u32 {
 pub struct Lzma2Writer<W: Write> {
     inner: W,
     rc: RangeEncoder<RangeEncoderBuffer>,
-    lzma: LZMAEncoder,
-    mode: LZMAEncoderModes,
+    lzma: LzmaEncoder,
+    mode: LzmaEncoderModes,
     dict_reset_needed: bool,
     state_reset_needed: bool,
     props_needed: bool,
@@ -212,7 +212,7 @@ impl<W: Write> Lzma2Writer<W> {
         let dict_size = lzma_options.dict_size;
 
         let rc = RangeEncoder::new_buffer(COMPRESSED_SIZE_MAX as usize);
-        let (mut lzma, mode) = LZMAEncoder::new(
+        let (mut lzma, mode) = LzmaEncoder::new(
             lzma_options.mode,
             lzma_options.lc,
             lzma_options.lp,
@@ -272,7 +272,7 @@ impl<W: Write> Lzma2Writer<W> {
 
         let lzma_options = &self.options.lzma_options;
 
-        let (new_lzma, new_mode) = LZMAEncoder::new(
+        let (new_lzma, new_mode) = LzmaEncoder::new(
             lzma_options.mode,
             lzma_options.lc,
             lzma_options.lp,
