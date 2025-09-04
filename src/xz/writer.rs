@@ -201,7 +201,7 @@ impl XzOptions {
     pub fn with_preset(preset: u32) -> Self {
         Self {
             lzma_options: LzmaOptions::with_preset(preset),
-            check_type: CheckType::default(),
+            check_type: CheckType::Crc64,
             block_size: None,
             filters: Vec::new(),
         }
