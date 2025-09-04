@@ -183,7 +183,7 @@ impl<W: Write> FilterWriter<W> {
 }
 
 /// Configuration options for XZ compression.
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct XzOptions {
     /// LZMA compression options.
     pub lzma_options: LzmaOptions,
@@ -194,17 +194,6 @@ pub struct XzOptions {
     pub block_size: Option<NonZeroU64>,
     /// Pre-filter to use (at most 3).
     pub filters: Vec<FilterConfig>,
-}
-
-impl Default for XzOptions {
-    fn default() -> Self {
-        Self {
-            lzma_options: LzmaOptions::default(),
-            check_type: CheckType::Crc32,
-            block_size: None,
-            filters: Vec::new(),
-        }
-    }
 }
 
 impl XzOptions {
