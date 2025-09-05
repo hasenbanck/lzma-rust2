@@ -3,7 +3,7 @@ use super::{
     range_enc::RangeEncoder,
     LzmaOptions,
 };
-use crate::{error_invalid_input, error_unsupported, Write};
+use crate::{error_invalid_input, error_unsupported, AutoFinish, AutoFinisher, Write};
 
 /// A single-threaded LZMA compressor.
 pub struct LzmaWriter<W: Write> {
@@ -85,6 +85,11 @@ impl<W: Write> LzmaWriter<W> {
         Self::new(out, options, false, use_end_marker, None)
     }
 
+    /// Returns a wrapper around `self` that will finish the stream on drop.
+    pub fn auto_finish(self) -> AutoFinisher<Self> {
+        AutoFinisher(Some(self))
+    }
+
     /// Returns the LZMA properties byte.
     #[inline]
     pub fn props(&self) -> u8 {
@@ -158,5 +163,11 @@ impl<W: Write> Write for LzmaWriter<W> {
 
     fn flush(&mut self) -> crate::Result<()> {
         Ok(())
+    }
+}
+
+impl<W: Write> AutoFinish for LzmaWriter<W> {
+    fn auto_finish(self) {
+        let _ = self.finish();
     }
 }

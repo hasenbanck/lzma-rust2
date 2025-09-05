@@ -12,6 +12,7 @@ use crate::{
     error_invalid_input, set_error,
     work_pool::{WorkPool, WorkPoolConfig},
     work_queue::WorkerHandle,
+    AutoFinish, AutoFinisher,
 };
 
 /// A work unit for a worker thread.
@@ -104,8 +105,8 @@ impl<W: Write> LzipWriterMt<W> {
     }
 
     /// Returns a wrapper around `self` that will finish the stream on drop.
-    pub fn auto_finish(self) -> AutoFinishLzipWriterMt<W> {
-        AutoFinishLzipWriterMt(Some(self))
+    pub fn auto_finish(self) -> AutoFinisher<Self> {
+        AutoFinisher(Some(self))
     }
 
     /// Consume the LzipWriterMt and return the inner writer.
@@ -245,25 +246,8 @@ impl<W: Write> Write for LzipWriterMt<W> {
     }
 }
 
-/// A wrapper around an [`LzipWriterMt<W>`] that finishes the stream on drop.
-///
-/// This can be created by the [`LzipWriterMt::auto_finish`] method.
-pub struct AutoFinishLzipWriterMt<W: Write>(Option<LzipWriterMt<W>>);
-
-impl<W: Write> Drop for AutoFinishLzipWriterMt<W> {
-    fn drop(&mut self) {
-        if let Some(writer) = self.0.take() {
-            let _ = writer.finish();
-        }
-    }
-}
-
-impl<W: Write> Write for AutoFinishLzipWriterMt<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.as_mut().unwrap().write(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.0.as_mut().unwrap().flush()
+impl<W: Write> AutoFinish for LzipWriterMt<W> {
+    fn auto_finish(self) {
+        let _ = self.finish();
     }
 }

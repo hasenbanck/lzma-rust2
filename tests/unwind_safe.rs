@@ -20,12 +20,12 @@ fn writers_are_unwind_safe() {
     #[cfg(feature = "lzip")]
     {
         assert_unwind_safe::<lzma_rust2::LzipWriter<Vec<u8>>>();
-        assert_unwind_safe::<lzma_rust2::AutoFinishLzipWriter<Vec<u8>>>();
+        assert_unwind_safe::<lzma_rust2::AutoFinisher<lzma_rust2::LzipWriter<Vec<u8>>>>();
     }
     #[cfg(feature = "xz")]
     {
         assert_unwind_safe::<lzma_rust2::XzWriter<Vec<u8>>>();
-        assert_unwind_safe::<lzma_rust2::AutoFinishXzWriter<Vec<u8>>>();
+        assert_unwind_safe::<lzma_rust2::AutoFinisher<lzma_rust2::XzWriter<Vec<u8>>>>();
     }
 }
 

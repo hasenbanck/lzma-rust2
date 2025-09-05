@@ -93,10 +93,10 @@ pub use lz::MfType;
 pub use lzip::LzipReader;
 #[cfg(all(feature = "lzip", feature = "std"))]
 pub use lzip::LzipReaderMt;
-#[cfg(all(feature = "lzip", feature = "encoder"))]
-pub use lzip::{AutoFinishLzipWriter, LzipOptions, LzipWriter};
 #[cfg(all(feature = "lzip", feature = "encoder", feature = "std"))]
-pub use lzip::{AutoFinishLzipWriterMt, LzipWriterMt};
+pub use lzip::LzipWriterMt;
+#[cfg(all(feature = "lzip", feature = "encoder"))]
+pub use lzip::{LzipOptions, LzipWriter};
 pub use lzma2_reader::{get_memory_usage as lzma2_get_memory_usage, Lzma2Reader};
 #[cfg(feature = "std")]
 pub use lzma2_reader_mt::Lzma2ReaderMt;
@@ -113,12 +113,12 @@ pub use no_std::Write;
 use state::*;
 #[cfg(all(feature = "xz", feature = "std"))]
 pub use xz::XzReaderMt;
-#[cfg(all(feature = "xz", feature = "encoder"))]
-pub use xz::{AutoFinishXzWriter, XzOptions, XzWriter};
 #[cfg(all(feature = "xz", feature = "encoder", feature = "std"))]
-pub use xz::{AutoFinishXzWriterMt, XzWriterMt};
+pub use xz::XzWriterMt;
 #[cfg(feature = "xz")]
 pub use xz::{CheckType, XzReader};
+#[cfg(all(feature = "xz", feature = "encoder"))]
+pub use xz::{XzOptions, XzWriter};
 
 /// Result type of the crate.
 #[cfg(feature = "std")]
@@ -587,5 +587,50 @@ impl<W: Write> Write for CountingWriter<W> {
 
     fn flush(&mut self) -> Result<()> {
         self.inner.flush()
+    }
+}
+
+/// A marker trait for writers that finishes the stream on drop.
+trait AutoFinish {
+    fn auto_finish(self);
+}
+
+/// A wrapper around a writer that finishes the stream on drop.
+#[allow(private_bounds)]
+pub struct AutoFinisher<T: AutoFinish>(Option<T>);
+
+impl<T: AutoFinish> Drop for AutoFinisher<T> {
+    fn drop(&mut self) {
+        if let Some(writer) = self.0.take() {
+            writer.auto_finish();
+        }
+    }
+}
+
+impl<T: AutoFinish> core::ops::Deref for AutoFinisher<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().unwrap()
+    }
+}
+
+impl<T: AutoFinish> core::ops::DerefMut for AutoFinisher<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut().unwrap()
+    }
+}
+
+impl<T: AutoFinish + Write> Write for AutoFinisher<T> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        use core::ops::DerefMut;
+
+        self.deref_mut().write(buf)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        use core::ops::DerefMut;
+
+        self.deref_mut().flush()
     }
 }

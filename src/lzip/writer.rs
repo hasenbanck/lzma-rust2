@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     enc::{LzmaOptions, LzmaWriter},
-    error_invalid_data, ByteWriter, CountingWriter, Result, Write,
+    error_invalid_data, AutoFinish, AutoFinisher, ByteWriter, CountingWriter, Result, Write,
 };
 
 /// Options for LZIP compression.
@@ -81,8 +81,8 @@ impl<W: Write> LzipWriter<W> {
     }
 
     /// Returns a wrapper around `self` that will finish the stream on drop.
-    pub fn auto_finish(self) -> AutoFinishLzipWriter<W> {
-        AutoFinishLzipWriter(Some(self))
+    pub fn auto_finish(self) -> AutoFinisher<Self> {
+        AutoFinisher(Some(self))
     }
 
     /// Consume the writer and return the inner writer.
@@ -255,25 +255,8 @@ impl<W: Write> Write for LzipWriter<W> {
     }
 }
 
-/// A wrapper around an [`LzipWriter<W>`] that finishes the stream on drop.
-///
-/// This can be created by the [`LzipWriter::auto_finish`] method.
-pub struct AutoFinishLzipWriter<W: Write>(Option<LzipWriter<W>>);
-
-impl<W: Write> Drop for AutoFinishLzipWriter<W> {
-    fn drop(&mut self) {
-        if let Some(writer) = self.0.take() {
-            let _ = writer.finish();
-        }
-    }
-}
-
-impl<W: Write> Write for AutoFinishLzipWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        self.0.as_mut().unwrap().write(buf)
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        self.0.as_mut().unwrap().flush()
+impl<W: Write> AutoFinish for LzipWriter<W> {
+    fn auto_finish(self) {
+        let _ = self.finish();
     }
 }

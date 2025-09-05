@@ -16,7 +16,7 @@ use crate::{
     error_invalid_input, set_error,
     work_pool::{WorkPool, WorkPoolConfig},
     work_queue::WorkerHandle,
-    Lzma2Options, Result, XzOptions,
+    AutoFinish, AutoFinisher, Lzma2Options, Result, XzOptions,
 };
 
 /// A work unit for a worker thread.
@@ -189,8 +189,8 @@ impl<W: Write> XzWriterMt<W> {
     }
 
     /// Returns a wrapper around `self` that will finish the stream on drop.
-    pub fn auto_finish(self) -> AutoFinishXzWriterMt<W> {
-        AutoFinishXzWriterMt(Some(self))
+    pub fn auto_finish(self) -> AutoFinisher<Self> {
+        AutoFinisher(Some(self))
     }
 
     /// Consume the XzWriterMt and return the inner writer.
@@ -367,25 +367,8 @@ impl<W: Write> Write for XzWriterMt<W> {
     }
 }
 
-/// A wrapper around an [`XzWriterMt<W>`] that finishes the stream on drop.
-///
-/// This can be created by the [`XzWriterMt::auto_finish`] method.
-pub struct AutoFinishXzWriterMt<W: Write>(Option<XzWriterMt<W>>);
-
-impl<W: Write> Drop for AutoFinishXzWriterMt<W> {
-    fn drop(&mut self) {
-        if let Some(writer) = self.0.take() {
-            let _ = writer.finish();
-        }
-    }
-}
-
-impl<W: Write> Write for AutoFinishXzWriterMt<W> {
-    fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        self.0.as_mut().unwrap().write(buf)
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        self.0.as_mut().unwrap().flush()
+impl<W: Write> AutoFinish for XzWriterMt<W> {
+    fn auto_finish(self) {
+        let _ = self.finish();
     }
 }
