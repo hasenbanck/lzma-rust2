@@ -27,6 +27,38 @@ sha2 = { version = "0.10.9", optional = true }
 criterion = { version = "0.7", features = ["html_reports"] }
 liblzma = { version = "0.4", features = ["static"] }
 
+[[example]]
+name = "lzip_reader"
+required-features = ["std", "lzip"]
+
+[[example]]
+name = "lzip_writer"
+required-features = ["std", "encoder", "lzip"]
+
+[[example]]
+name = "lzma2_reader"
+required-features = ["std"]
+
+[[example]]
+name = "lzma2_writer"
+required-features = ["std", "encoder"]
+
+[[example]]
+name = "lzma_reader"
+required-features = ["std"]
+
+[[example]]
+name = "lzma_writer"
+required-features = ["std", "encoder"]
+
+[[example]]
+name = "xz_reader"
+required-features = ["std", "xz"]
+
+[[example]]
+name = "xz_writer"
+required-features = ["std", "encoder", "xz"]
+
 [[bench]]
 name = "comparison"
 harness = false
