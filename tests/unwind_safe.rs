@@ -16,7 +16,9 @@ fn readers_are_unwind_safe() {
 #[cfg(feature = "encoder")]
 fn writers_are_unwind_safe() {
     assert_unwind_safe::<lzma_rust2::LzmaWriter<Vec<u8>>>();
+    assert_unwind_safe::<lzma_rust2::AutoFinisher<lzma_rust2::LzmaWriter<Vec<u8>>>>();
     assert_unwind_safe::<lzma_rust2::Lzma2Writer<Vec<u8>>>();
+    assert_unwind_safe::<lzma_rust2::AutoFinisher<lzma_rust2::Lzma2Writer<Vec<u8>>>>();
     #[cfg(feature = "lzip")]
     {
         assert_unwind_safe::<lzma_rust2::LzipWriter<Vec<u8>>>();

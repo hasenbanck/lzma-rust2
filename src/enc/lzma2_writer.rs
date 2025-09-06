@@ -6,7 +6,7 @@ use super::{
     lz::MfType,
     range_enc::{RangeEncoder, RangeEncoderBuffer},
 };
-use crate::{ByteWriter, Write};
+use crate::{AutoFinish, AutoFinisher, ByteWriter, Write};
 
 /// Encoder settings when compressing with LZMA and LZMA2.
 #[derive(Debug, Clone)]
@@ -370,6 +370,11 @@ impl<W: Write> Lzma2Writer<W> {
         Ok(())
     }
 
+    /// Returns a wrapper around `self` that will finish the stream on drop.
+    pub fn auto_finish(self) -> AutoFinisher<Self> {
+        AutoFinisher(Some(self))
+    }
+
     /// Unwraps the writer, returning the underlying writer.
     pub fn into_inner(self) -> W {
         self.inner
@@ -430,5 +435,11 @@ impl<W: Write> Write for Lzma2Writer<W> {
         }
 
         self.inner.flush()
+    }
+}
+
+impl<W: Write> AutoFinish for Lzma2Writer<W> {
+    fn auto_finish(self) {
+        let _ = self.finish();
     }
 }
