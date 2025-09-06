@@ -1,13 +1,25 @@
-use std::io::{self, Write};
+use std::{
+    env,
+    fs::File,
+    io::{self, BufReader},
+    time::Instant,
+};
 
 use lzma_rust2::{Lzma2Options, Lzma2Writer};
 
 fn main() -> io::Result<()> {
-    let input = b"Hello, world!";
-    let mut writer = Lzma2Writer::new(Vec::new(), Lzma2Options::default());
-    writer.write_all(input)?;
+    let mut args = env::args();
 
-    println!("{input:?} in");
-    println!("{:?} out", writer.finish()?);
+    let mut input = BufReader::new(File::open(args.nth(1).unwrap())?);
+    let output = File::create(args.next().unwrap())?;
+    let input_len = input.get_ref().metadata()?.len();
+    let start = Instant::now();
+    let mut writer = Lzma2Writer::new(output, Lzma2Options::default());
+    io::copy(&mut input, &mut writer)?;
+    let output = writer.finish()?;
+
+    println!("{input_len} in");
+    println!("{} out", output.metadata()?.len());
+    println!("{:?}", start.elapsed());
     Ok(())
 }
