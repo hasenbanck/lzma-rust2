@@ -16,10 +16,11 @@ fn main() -> io::Result<()> {
     let start = Instant::now();
     let mut writer = Lzma2Writer::new(output, Lzma2Options::default());
     io::copy(&mut input, &mut writer)?;
-    let output = writer.finish()?;
+    let output_len = writer.finish()?.metadata()?.len();
+    let elapsed = start.elapsed();
 
     println!("{input_len} in");
-    println!("{} out", output.metadata()?.len());
-    println!("{:?}", start.elapsed());
+    println!("{output_len} out");
+    println!("{elapsed:?}");
     Ok(())
 }

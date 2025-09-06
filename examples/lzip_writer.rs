@@ -12,13 +12,15 @@ fn main() -> io::Result<()> {
 
     let mut input = BufReader::new(File::open(args.nth(1).unwrap())?);
     let output = File::create(args.next().unwrap())?;
+    let input_len = input.get_ref().metadata()?.len();
     let start = Instant::now();
     let mut writer = LzipWriter::new(output, LzipOptions::default());
     io::copy(&mut input, &mut writer)?;
-    let output = writer.finish()?;
+    let output_len = writer.finish()?.metadata()?.len();
+    let elapsed = start.elapsed();
 
-    println!("{} in", input.get_ref().metadata()?.len());
-    println!("{} out", output.metadata()?.len());
-    println!("{:?}", start.elapsed());
+    println!("{input_len} in");
+    println!("{output_len} out");
+    println!("{elapsed:?}");
     Ok(())
 }

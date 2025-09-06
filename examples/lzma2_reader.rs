@@ -16,9 +16,11 @@ fn main() -> io::Result<()> {
     let start = Instant::now();
     let mut reader = Lzma2Reader::new(input, LzmaOptions::DICT_SIZE_DEFAULT, None);
     io::copy(&mut reader, &mut output)?;
+    let output_len = output.metadata()?.len();
+    let elapsed = start.elapsed();
 
     println!("{input_len} in");
-    println!("{} out", output.metadata()?.len());
-    println!("{:?}", start.elapsed());
+    println!("{output_len} out");
+    println!("{elapsed:?}");
     Ok(())
 }
