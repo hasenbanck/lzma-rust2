@@ -12,7 +12,7 @@ use crate::{
     error_invalid_input, set_error,
     work_pool::{WorkPool, WorkPoolConfig},
     work_queue::WorkerHandle,
-    ByteWriter, Lzma2Options,
+    AutoFinish, AutoFinisher, ByteWriter, Lzma2Options,
 };
 
 /// A work unit for a worker thread.
@@ -99,6 +99,11 @@ impl<W: Write> Lzma2WriterMt<W> {
             self.inner.write_all(&compressed_data)?;
         }
         Ok(())
+    }
+
+    /// Returns a wrapper around `self` that will finish the stream on drop.
+    pub fn auto_finish(self) -> AutoFinisher<Self> {
+        AutoFinisher(Some(self))
     }
 
     /// Consume the Lzma2WriterMt and return the inner writer.
@@ -230,5 +235,11 @@ impl<W: Write> Write for Lzma2WriterMt<W> {
         }
 
         self.inner.flush()
+    }
+}
+
+impl<W: Write> AutoFinish for Lzma2WriterMt<W> {
+    fn finish_ignore_error(self) {
+        let _ = self.finish();
     }
 }
