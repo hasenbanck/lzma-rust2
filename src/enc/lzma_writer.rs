@@ -167,7 +167,7 @@ impl<W: Write> Write for LzmaWriter<W> {
 }
 
 impl<W: Write> AutoFinish for LzmaWriter<W> {
-    fn auto_finish(self) {
+    fn finish_ignore_error(self) {
         let _ = self.finish();
     }
 }

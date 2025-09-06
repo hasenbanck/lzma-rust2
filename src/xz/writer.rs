@@ -483,7 +483,7 @@ impl<W: Write> Write for XzWriter<W> {
 }
 
 impl<W: Write> AutoFinish for XzWriter<W> {
-    fn auto_finish(self) {
+    fn finish_ignore_error(self) {
         let _ = self.finish();
     }
 }

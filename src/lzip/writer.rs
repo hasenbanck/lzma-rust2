@@ -256,7 +256,7 @@ impl<W: Write> Write for LzipWriter<W> {
 }
 
 impl<W: Write> AutoFinish for LzipWriter<W> {
-    fn auto_finish(self) {
+    fn finish_ignore_error(self) {
         let _ = self.finish();
     }
 }

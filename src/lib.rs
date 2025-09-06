@@ -590,9 +590,10 @@ impl<W: Write> Write for CountingWriter<W> {
     }
 }
 
-/// A marker trait for writers that finishes the stream on drop.
+/// A trait for writers that finishes the stream on drop.
 trait AutoFinish {
-    fn auto_finish(self);
+    /// Finish writing the stream without error handling.
+    fn finish_ignore_error(self);
 }
 
 /// A wrapper around a writer that finishes the stream on drop.
@@ -602,7 +603,7 @@ pub struct AutoFinisher<T: AutoFinish>(Option<T>);
 impl<T: AutoFinish> Drop for AutoFinisher<T> {
     fn drop(&mut self) {
         if let Some(writer) = self.0.take() {
-            writer.auto_finish();
+            writer.finish_ignore_error();
         }
     }
 }
