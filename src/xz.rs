@@ -78,7 +78,9 @@ struct Block {
 /// Configuration for a filter in the XZ filter chain.
 #[derive(Debug, Clone)]
 pub struct FilterConfig {
+    /// Filter type to use.
     pub filter_type: FilterType,
+    /// Property to use.
     pub property: u32,
 }
 
@@ -192,6 +194,7 @@ impl CheckType {
     }
 }
 
+/// Supported filter types in XZ format.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum FilterType {
     /// Delta filter
