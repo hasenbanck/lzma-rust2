@@ -45,7 +45,7 @@ pub fn get_memory_usage(dict_size: u32) -> u32 {
 
 #[inline]
 fn get_dict_size(dict_size: u32) -> u32 {
-    (dict_size + 15) & !15
+    dict_size.saturating_add(15) & !15
 }
 
 impl<R> Lzma2Reader<R> {
