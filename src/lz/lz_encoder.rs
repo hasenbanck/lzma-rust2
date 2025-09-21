@@ -190,7 +190,7 @@ impl LzEncoder {
     }
 
     pub(crate) fn normalize(positions: &mut [i32], norm_offset: i32) {
-        #[cfg(all(feature = "std", target_arch = "x86_64"))]
+        #[cfg(all(feature = "std", feature = "optimization", target_arch = "x86_64"))]
         {
             if std::arch::is_x86_feature_detected!("avx2") {
                 // SAFETY: We've checked that the CPU supports AVX2.
@@ -202,7 +202,7 @@ impl LzEncoder {
             }
         }
 
-        #[cfg(all(feature = "std", target_arch = "aarch64"))]
+        #[cfg(all(feature = "std", feature = "optimization", target_arch = "aarch64"))]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
                 // SAFETY: We've checked that the CPU supports NEON.
@@ -481,7 +481,7 @@ fn normalize_scalar(positions: &mut [i32], norm_offset: i32) {
 }
 
 /// Normalization implementation using ARM NEON for 128-bit SIMD processing.
-#[cfg(all(feature = "std", target_arch = "aarch64"))]
+#[cfg(all(feature = "std", feature = "optimization", target_arch = "aarch64"))]
 #[target_feature(enable = "neon")]
 unsafe fn normalize_neon(positions: &mut [i32], norm_offset: i32) {
     use core::arch::aarch64::*;
@@ -511,7 +511,7 @@ unsafe fn normalize_neon(positions: &mut [i32], norm_offset: i32) {
 }
 
 /// Normalization implementation using AVX2 for 256-bit SIMD processing.
-#[cfg(all(feature = "std", target_arch = "x86_64"))]
+#[cfg(all(feature = "std", feature = "optimization", target_arch = "x86_64"))]
 #[target_feature(enable = "avx2")]
 unsafe fn normalize_avx2(positions: &mut [i32], norm_offset: i32) {
     use core::arch::x86_64::*;
@@ -541,7 +541,7 @@ unsafe fn normalize_avx2(positions: &mut [i32], norm_offset: i32) {
 }
 
 /// Normalization implementation using SSE4.1 for 128-bit SIMD processing.
-#[cfg(all(feature = "std", target_arch = "x86_64"))]
+#[cfg(all(feature = "std", feature = "optimization", target_arch = "x86_64"))]
 #[target_feature(enable = "sse4.1")]
 unsafe fn normalize_sse41(positions: &mut [i32], norm_offset: i32) {
     use core::arch::x86_64::*;
