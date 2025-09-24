@@ -330,7 +330,7 @@ impl<R: Read> XzReader<R> {
             }
 
             // Non-zero byte found - check if it starts XZ magic.
-            if byte == XZ_MAGIC[0] {
+            if byte != XZ_MAGIC[0] {
                 return Err(error_invalid_data("invalid data after stream"));
             }
 
