@@ -45,6 +45,10 @@ pub fn get_memory_usage(dict_size: u32) -> u32 {
 
 #[inline]
 fn get_dict_size(dict_size: u32) -> u32 {
+    if dict_size >= (u32::MAX - 15) {
+        return u32::MAX;
+    }
+
     (dict_size + 15) & !15
 }
 
