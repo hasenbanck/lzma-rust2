@@ -41,7 +41,11 @@ jobs:
       - name: Build (no_std)
         run: cargo build --workspace --release --no-default-features --features=encoder,optimization
       - name: Build (safe)
-        run: cargo test --workspace --no-default-features --features std,encoder,lzip,xz
+        run: cargo build --workspace --no-default-features --features std,encoder,lzip,xz
+      - name: Build (decoder)
+        run: cargo build --workspace --no-default-features --features std,optimization,lzip,xz
+      - name: Build (safe decoder)
+        run: cargo build --workspace --no-default-features --features std,lzip,xz
       - name: Run tests
         run: cargo test --workspace --release --all-features
 

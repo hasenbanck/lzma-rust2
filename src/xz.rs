@@ -21,12 +21,14 @@ pub use writer::{XzOptions, XzWriter};
 #[cfg(all(feature = "encoder", feature = "std"))]
 pub use writer_mt::XzWriterMt;
 
-use crate::{error_invalid_data, error_invalid_input, ByteReader, ByteWriter, Read, Write};
+use crate::{error_invalid_data, error_invalid_input, ByteReader, Read};
 #[cfg(feature = "std")]
 use crate::{
     filter::{bcj::BcjReader, delta::DeltaReader},
     Lzma2Reader,
 };
+#[cfg(feature = "encoder")]
+use crate::{ByteWriter, Write};
 
 const CRC32: crc::Crc<u32, crc::Table<16>> =
     crc::Crc::<u32, crc::Table<16>>::new(&crc::CRC_32_ISO_HDLC);
@@ -183,7 +185,7 @@ impl CheckType {
         }
     }
 
-    #[cfg(feature = "encoder")]
+    #[cfg(any(feature = "encoder", feature = "xz"))]
     fn checksum_size(self) -> u64 {
         match self {
             CheckType::None => 0,
