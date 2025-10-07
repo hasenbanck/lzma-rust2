@@ -893,7 +893,8 @@ impl Index {
     pub(crate) fn parse<R: Read>(reader: &mut R) -> crate::Result<Index> {
         // sic! index indicator already consumed
         let number_of_records = parse_multibyte_integer_from_reader(reader)?;
-        let mut records = Vec::with_capacity(number_of_records as usize);
+        let mut records = Vec::new();
+        records.try_reserve_exact(number_of_records as usize)?;
 
         for _ in 0..number_of_records {
             let unpadded_size = parse_multibyte_integer_from_reader(reader)?;
