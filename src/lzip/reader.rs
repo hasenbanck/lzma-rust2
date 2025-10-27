@@ -43,8 +43,8 @@ impl<R> LzipReader<R> {
 
 impl<R: Read> LzipReader<R> {
     /// Create a new LZIP reader.
-    pub fn new(inner: R) -> Result<Self> {
-        Ok(Self {
+    pub fn new(inner: R) -> Self {
+        Self {
             inner: Some(inner),
             lzma_reader: None,
             current_header: None,
@@ -52,7 +52,7 @@ impl<R: Read> LzipReader<R> {
             trailer_buf: Vec::with_capacity(TRAILER_SIZE),
             crc_digest: None,
             data_size: 0,
-        })
+        }
     }
 
     /// Start processing the next LZIP member.

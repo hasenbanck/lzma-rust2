@@ -3,7 +3,7 @@ use std::io::Read;
 use lzma_rust2::LzipReader;
 
 fn reference_test(compressed: &[u8], original: &[u8]) {
-    let mut reader = LzipReader::new(compressed).unwrap();
+    let mut reader = LzipReader::new(compressed);
 
     let mut uncompressed = Vec::with_capacity(original.len());
     let count = reader.read_to_end(&mut uncompressed).unwrap();

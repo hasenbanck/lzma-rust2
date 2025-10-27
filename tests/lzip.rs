@@ -22,7 +22,7 @@ fn test_round_trip(path: &str, level: u32) {
     let mut uncompressed = Vec::new();
 
     {
-        let mut reader = LzipReader::new(compressed.as_slice()).unwrap();
+        let mut reader = LzipReader::new(compressed.as_slice());
         reader.read_to_end(&mut uncompressed).unwrap();
     }
 

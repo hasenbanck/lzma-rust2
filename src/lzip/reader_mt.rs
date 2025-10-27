@@ -92,16 +92,7 @@ fn worker_thread_logic(
 
         let (index, WorkUnit { member_data }) = work_unit;
 
-        let reader_result = LzipReader::new(member_data.as_slice());
-
-        let mut lzip_reader = match reader_result {
-            Ok(reader) => reader,
-            Err(error) => {
-                active_workers.fetch_sub(1, Ordering::Release);
-                set_error(error, &error_store, &shutdown_flag);
-                return;
-            }
-        };
+        let mut lzip_reader = LzipReader::new(member_data.as_slice());
 
         let mut decompressed_data = Vec::new();
         let result = match lzip_reader.read_to_end(&mut decompressed_data) {

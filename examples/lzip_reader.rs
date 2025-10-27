@@ -14,7 +14,7 @@ fn main() -> io::Result<()> {
     let mut output = File::create(args.next().unwrap())?;
     let input_len = input.get_ref().metadata()?.len();
     let start = Instant::now();
-    let mut reader = LzipReader::new(input)?;
+    let mut reader = LzipReader::new(input);
     io::copy(&mut reader, &mut output)?;
     let output_len = output.metadata()?.len();
     let elapsed = start.elapsed();
