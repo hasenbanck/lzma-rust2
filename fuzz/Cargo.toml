@@ -1,0 +1,36 @@
+[package]
+name = "lzma-rust2-fuzz"
+version = "0.1.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+lzma-rust2 = { path = "..", features = [ "lzip", "xz" ] }
+
+[[bin]]
+name = "lzip"
+path = "fuzz_targets/lzip.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "lzma"
+path = "fuzz_targets/lzma.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "lzma2"
+path = "fuzz_targets/lzma2.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "xz"
+path = "fuzz_targets/xz.rs"
+test = false
+doc = false
