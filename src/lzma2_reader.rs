@@ -1,3 +1,5 @@
+use std::io;
+
 use super::{
     decoder::LzmaDecoder,
     error_invalid_input,
@@ -207,7 +209,12 @@ impl<R: Read> Read for Lzma2Reader<R> {
                 off += copied_size;
                 len -= copied_size;
                 size += copied_size;
-                self.uncompressed_size -= copied_size;
+                self.uncompressed_size =
+                    self.uncompressed_size
+                        .checked_sub(copied_size)
+                        .ok_or(io::Error::other(
+                            "copied_size is greater than uncompressed_size",
+                        ))?;
                 if self.uncompressed_size == 0 && (!self.rc.is_finished() || self.lz.has_pending())
                 {
                     return Err(error_invalid_input("rc not finished or lz has pending"));
