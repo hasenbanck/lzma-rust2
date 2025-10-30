@@ -63,13 +63,13 @@ impl LzDecoder {
         self.pos
     }
 
-    pub(crate) fn get_byte(&self, dist: usize) -> u8 {
+    pub(crate) fn get_byte(&self, dist: usize) -> Option<u8> {
         let offset = if dist >= self.pos {
-            self.buf_size + self.pos - dist - 1
+            (self.buf_size + self.pos).checked_sub(dist + 1)?
         } else {
             self.pos - dist - 1
         };
-        self.buf[offset]
+        self.buf.get(offset).copied()
     }
 
     pub(crate) fn put_byte(&mut self, b: u8) {

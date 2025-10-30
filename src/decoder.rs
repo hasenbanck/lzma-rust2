@@ -1,3 +1,5 @@
+use std::io;
+
 use alloc::{vec, vec::Vec};
 
 use super::{
@@ -167,9 +169,11 @@ impl LiteralDecoder {
         lz: &mut LzDecoder,
         rc: &mut RangeDecoder<R>,
     ) -> crate::Result<()> {
-        let i = self
-            .coder
-            .get_sub_coder_index(lz.get_byte(0) as _, lz.get_pos() as _);
+        let i = self.coder.get_sub_coder_index(
+            lz.get_byte(0)
+                .ok_or(io::Error::other("unable to get byte"))? as _,
+            lz.get_pos() as _,
+        );
         let d = &mut self.sub_decoders[i as usize];
         d.decode(coder, lz, rc)
     }
@@ -205,7 +209,9 @@ impl LiteralSubDecoder {
             }
         } else {
             let r = coder.reps[0];
-            let mut match_byte = lz.get_byte(r as usize) as u32;
+            let mut match_byte =
+                lz.get_byte(r as usize)
+                    .ok_or(io::Error::other("unable to get byte"))? as u32;
             let mut offset = 0x100;
             let mut match_bit;
             let mut bit;
