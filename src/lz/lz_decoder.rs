@@ -1,3 +1,5 @@
+use std::io;
+
 use alloc::{vec, vec::Vec};
 
 use crate::{error_other, Read};
@@ -155,15 +157,24 @@ impl LzDecoder {
         Ok(())
     }
 
-    pub(crate) fn flush(&mut self, out: &mut [u8], out_off: usize) -> usize {
+    pub(crate) fn flush(&mut self, out: &mut [u8], out_off: usize) -> crate::Result<usize> {
         let copy_size = self.pos - self.start;
         if self.pos == self.buf_size {
             self.pos = 0;
         }
-        out[out_off..(out_off + copy_size)]
-            .copy_from_slice(&self.buf[self.start..(self.start + copy_size)]);
+
+        let src = self
+            .buf
+            .get(self.start..(self.start + copy_size))
+            .ok_or(io::Error::other("could not get the source range"))?;
+
+        let dst = out
+            .get_mut(out_off..(out_off + copy_size))
+            .ok_or(io::Error::other("could not get the destination range"))?;
+
+        dst.copy_from_slice(src);
 
         self.start = self.pos;
-        copy_size
+        Ok(copy_size)
     }
 }

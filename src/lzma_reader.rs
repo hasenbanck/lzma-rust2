@@ -233,7 +233,7 @@ impl<R: Read> LzmaReader<R> {
                 }
             }
 
-            let copied_size = self.lz.flush(buf, off as _) as u64;
+            let copied_size = self.lz.flush(buf, off as _)? as u64;
             off += copied_size;
             len -= copied_size;
             size += copied_size;

@@ -203,7 +203,7 @@ impl<R: Read> Read for Lzma2Reader<R> {
             }
 
             {
-                let copied_size = self.lz.flush(buf, off);
+                let copied_size = self.lz.flush(buf, off)?;
                 off += copied_size;
                 len -= copied_size;
                 size += copied_size;
