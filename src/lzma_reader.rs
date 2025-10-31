@@ -212,9 +212,9 @@ impl<R: Read> LzmaReader<R> {
         if self.end_reached {
             return Ok(0);
         }
-        let mut size = 0;
+        let mut size: u64 = 0;
         let mut len = buf.len() as u64;
-        let mut off = 0;
+        let mut off: u64 = 0;
         while len > 0 {
             let mut copy_size_max = len;
             if self.remaining_size <= u64::MAX / 2 && self.remaining_size < len {
@@ -224,21 +224,21 @@ impl<R: Read> LzmaReader<R> {
 
             match self.lzma.decode(&mut self.lz, &mut self.rc) {
                 Ok(_) => {}
-                Err(e) => {
+                Err(error) => {
                     if self.remaining_size != u64::MAX || !self.lzma.end_marker_detected() {
-                        return Err(e);
+                        return Err(error);
                     }
                     self.end_reached = true;
                     self.rc.normalize();
                 }
             }
 
-            let copied_size = self.lz.flush(buf, off as _) as u64;
-            off += copied_size;
-            len -= copied_size;
-            size += copied_size;
+            let copied_size = self.lz.flush(buf, off as _)? as u64;
+            off = off.saturating_add(copied_size);
+            len = len.saturating_sub(copied_size);
+            size = size.saturating_add(copied_size);
             if self.remaining_size <= u64::MAX / 2 {
-                self.remaining_size -= copied_size;
+                self.remaining_size = self.remaining_size.saturating_sub(copied_size);
                 if self.remaining_size == 0 {
                     self.end_reached = true;
                 }

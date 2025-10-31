@@ -1,6 +1,6 @@
 use alloc::{vec, vec::Vec};
 
-use crate::{error_other, Read};
+use crate::{error_invalid_data, error_other, Read};
 
 #[derive(Default)]
 pub(crate) struct LzDecoder {
@@ -63,11 +63,15 @@ impl LzDecoder {
 
     pub(crate) fn get_byte(&self, dist: usize) -> u8 {
         let offset = if dist >= self.pos {
-            self.buf_size + self.pos - dist - 1
+            self.buf_size
+                .saturating_add(self.pos)
+                .saturating_sub(dist)
+                .saturating_sub(1)
         } else {
-            self.pos - dist - 1
+            self.pos.saturating_sub(dist).saturating_sub(1)
         };
-        self.buf[offset]
+
+        self.buf.get(offset).copied().unwrap_or(0)
     }
 
     pub(crate) fn put_byte(&mut self, b: u8) {
@@ -155,15 +159,26 @@ impl LzDecoder {
         Ok(())
     }
 
-    pub(crate) fn flush(&mut self, out: &mut [u8], out_off: usize) -> usize {
-        let copy_size = self.pos - self.start;
+    pub(crate) fn flush(&mut self, out: &mut [u8], out_off: usize) -> crate::Result<usize> {
+        let copy_size = self.pos.saturating_sub(self.start);
+
         if self.pos == self.buf_size {
             self.pos = 0;
         }
-        out[out_off..(out_off + copy_size)]
-            .copy_from_slice(&self.buf[self.start..(self.start + copy_size)]);
+
+        let src = self
+            .buf
+            .get(self.start..(self.start + copy_size))
+            .ok_or(error_invalid_data("invalid source range"))?;
+
+        let dst = out
+            .get_mut(out_off..(out_off + copy_size))
+            .ok_or(error_invalid_data("invalid destination range"))?;
+
+        dst.copy_from_slice(src);
 
         self.start = self.pos;
-        copy_size
+
+        Ok(copy_size)
     }
 }

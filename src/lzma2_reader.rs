@@ -203,17 +203,18 @@ impl<R: Read> Read for Lzma2Reader<R> {
             }
 
             {
-                let copied_size = self.lz.flush(buf, off);
-                off += copied_size;
-                len -= copied_size;
-                size += copied_size;
-                self.uncompressed_size -= copied_size;
+                let copied_size = self.lz.flush(buf, off)?;
+                off = off.saturating_add(copied_size);
+                len = len.saturating_sub(copied_size);
+                size = size.saturating_add(copied_size);
+                self.uncompressed_size = self.uncompressed_size.saturating_sub(copied_size);
                 if self.uncompressed_size == 0 && (!self.rc.is_finished() || self.lz.has_pending())
                 {
                     return Err(error_invalid_input("rc not finished or lz has pending"));
                 }
             }
         }
+
         Ok(size)
     }
 }
