@@ -20,7 +20,7 @@ jobs:
           - lzma2
           - xz
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install rust version
         uses: dtolnay/rust-toolchain@nightly
         with:
