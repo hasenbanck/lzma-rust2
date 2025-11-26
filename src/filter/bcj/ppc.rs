@@ -27,8 +27,12 @@ impl BcjFilter {
                 let src =
                     ((b0 & 0x03) << 24) | ((b1 & 0xFF) << 16) | ((b2 & 0xFF) << 8) | (b3 & 0xFC);
 
-                let p = (self.pos + i) as i32;
-                let dest = if self.is_encoder { src + p } else { src - p };
+                let p = self.pos.wrapping_add(i) as i32;
+                let dest = if self.is_encoder {
+                    src.wrapping_add(p)
+                } else {
+                    src.wrapping_sub(p)
+                };
 
                 buf[i] = (0x48 | ((dest >> 24) & 0x03)) as u8;
                 buf[i + 1] = (dest >> 16) as u8;

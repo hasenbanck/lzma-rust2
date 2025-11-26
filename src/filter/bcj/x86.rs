@@ -61,9 +61,9 @@ impl BcjFilter {
                 let mut dest: i32;
                 loop {
                     if self.is_encoder {
-                        dest = src + (self.pos + i) as i32;
+                        dest = src.wrapping_add((self.pos.wrapping_add(i)) as i32);
                     } else {
-                        dest = src - (self.pos + i) as i32;
+                        dest = src.wrapping_sub((self.pos.wrapping_add(i)) as i32);
                     }
 
                     if prev_mask == 0 {
