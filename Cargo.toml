@@ -5,7 +5,7 @@ homepage = "https://github.com/hasenbanck/lzma-rust2/"
 name = "lzma-rust2"
 repository = "https://github.com/hasenbanck/lzma-rust2/"
 rust-version = "1.82"
-version = "0.15.3"
+version = "0.15.4"
 keywords = ["lzma", "lzip", "xz"]
 categories = ["compression", "no-std"]
 license = "Apache-2.0"
@@ -20,11 +20,11 @@ xz = ["crc", "sha2"]
 lzip = ["crc"]
 
 [dependencies]
-crc = { version = "<=3.3", optional = true }
+crc = { version = "=3.3", optional = true }
 sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
-criterion = { version = "<=0.7", features = ["html_reports"] }
+criterion = { version = "=0.7", features = ["html_reports"] }
 liblzma = { version = "0.4", features = ["static"] }
 
 [[example]]
