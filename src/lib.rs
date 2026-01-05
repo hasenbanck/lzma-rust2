@@ -133,7 +133,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 pub const DICT_SIZE_MIN: u32 = 4096;
 
 /// The maximal size of a dictionary.
-pub const DICT_SIZE_MAX: u32 = u32::MAX & !15_u32;
+pub const DICT_SIZE_MAX: u32 = !15_u32;
 
 const LOW_SYMBOLS: usize = 1 << 3;
 const MID_SYMBOLS: usize = 1 << 3;
