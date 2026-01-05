@@ -7,7 +7,11 @@ use std::{
         Arc, Mutex,
     },
     thread,
+    time::Duration,
 };
+
+/// Interval for checking worker errors while waiting for results.
+const ERROR_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
 use crate::{
     set_error,
@@ -239,20 +243,29 @@ where
                     }
 
                     // Now we MUST wait for a result to make progress.
-                    match self.result_rx.recv() {
-                        Ok((seq, result)) => {
-                            if seq == self.next_index_to_return {
-                                self.next_index_to_return += 1;
-                                return Ok(Some(result));
-                            } else {
-                                self.out_of_order_results.insert(seq, result);
-                                // We've made progress, loop to check the out_of_order_results.
-                                continue;
+                    loop {
+                        match self.result_rx.recv_timeout(ERROR_CHECK_INTERVAL) {
+                            Ok((seq, result)) => {
+                                if seq == self.next_index_to_return {
+                                    self.next_index_to_return += 1;
+                                    return Ok(Some(result));
+                                } else {
+                                    self.out_of_order_results.insert(seq, result);
+                                    // We've made progress, loop to check the out_of_order_results.
+                                    break;
+                                }
                             }
-                        }
-                        Err(_) => {
-                            // All workers are done.
-                            self.state = WorkPoolState::Draining;
+                            Err(mpsc::RecvTimeoutError::Timeout) => {
+                                if let Some(err) = self.error_store.lock().unwrap().take() {
+                                    self.state = WorkPoolState::Error;
+                                    return Err(err);
+                                }
+                            }
+                            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                                // All workers are done.
+                                self.state = WorkPoolState::Draining;
+                                break;
+                            }
                         }
                     }
                 }
@@ -265,18 +278,28 @@ where
                     }
 
                     // In Draining state, we only wait for results.
-                    match self.result_rx.recv() {
-                        Ok((seq, result)) => {
-                            if seq == self.next_index_to_return {
-                                self.next_index_to_return += 1;
-                                return Ok(Some(result));
-                            } else {
-                                self.out_of_order_results.insert(seq, result);
+                    loop {
+                        match self.result_rx.recv_timeout(ERROR_CHECK_INTERVAL) {
+                            Ok((seq, result)) => {
+                                if seq == self.next_index_to_return {
+                                    self.next_index_to_return += 1;
+                                    return Ok(Some(result));
+                                } else {
+                                    self.out_of_order_results.insert(seq, result);
+                                    break;
+                                }
                             }
-                        }
-                        Err(_) => {
-                            // All workers finished, and channel is empty. We are done.
-                            self.state = WorkPoolState::Finished;
+                            Err(mpsc::RecvTimeoutError::Timeout) => {
+                                if let Some(err) = self.error_store.lock().unwrap().take() {
+                                    self.state = WorkPoolState::Error;
+                                    return Err(err);
+                                }
+                            }
+                            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                                // All workers finished, and channel is empty. We are done.
+                                self.state = WorkPoolState::Finished;
+                                break;
+                            }
                         }
                     }
                 }
