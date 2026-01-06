@@ -1,8 +1,8 @@
 use alloc::{vec, vec::Vec};
 
 use crate::{
-    error_eof, error_invalid_data, error_invalid_input, ByteReader, Read, BIT_MODEL_TOTAL_BITS,
-    MOVE_BITS, RC_BIT_MODEL_OFFSET, SHIFT_BITS,
+    error_eof, error_invalid_data, error_invalid_input, error_other, ByteReader, Read,
+    BIT_MODEL_TOTAL_BITS, MOVE_BITS, RC_BIT_MODEL_OFFSET, SHIFT_BITS,
 };
 
 pub(crate) struct RangeDecoder<R> {
@@ -460,9 +460,12 @@ impl RangeReader for RangeDecoderBuffer {
 
     #[inline(always)]
     fn read_u32_be(&mut self) -> crate::Result<u32> {
-        let array: [u8; 4] = self.buf[self.pos..self.pos + 4]
+        let array: [u8; 4] = self
+            .buf
+            .get(self.pos..self.pos + 4)
+            .ok_or_else(|| error_invalid_data("not enough data for reading u32 BE bytes"))?
             .try_into()
-            .map_err(|_| error_invalid_data("not enough data for reading u32 BE bytes"))?;
+            .map_err(|_| error_other("slice doesn't match array size for u32 BE bytes"))?;
         let b = u32::from_be_bytes(array);
         self.pos += 4;
         Ok(b)
