@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{collections::TryReserveError, vec::Vec};
 
 /// `no_std` compatible error type.
 ///
@@ -21,6 +21,12 @@ pub enum Error {
     Unsupported(&'static str),
     /// Could not write any bytes.
     WriteZero(&'static str),
+}
+
+impl From<TryReserveError> for Error {
+    fn from(_value: TryReserveError) -> Self {
+        Self::OutOfMemory("TryReserveError")
+    }
 }
 
 /// `no_std` compatible `std::io::Read` trait
