@@ -20,7 +20,7 @@ xz = ["crc", "sha2"]
 lzip = ["crc"]
 
 [dependencies]
-crc = { version = "=3.3", optional = true }
+crc = { version = "3", optional = true }
 sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
