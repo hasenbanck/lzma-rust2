@@ -1,10 +1,10 @@
 [package]
 description = "LZMA / LZMA2 / LZIP / XZ compression ported from 'tukaani xz for java'"
-edition = "2021"
+edition = "2024"
 homepage = "https://github.com/hasenbanck/lzma-rust2/"
 name = "lzma-rust2"
 repository = "https://github.com/hasenbanck/lzma-rust2/"
-rust-version = "1.82"
+rust-version = "1.85"
 version = "0.15.7"
 keywords = ["lzma", "lzip", "xz"]
 categories = ["compression", "no-std"]
