@@ -1,9 +1,9 @@
 use super::{
+    Read,
     decoder::LzmaDecoder,
     error_invalid_input,
     lz::LzDecoder,
     range_dec::{RangeDecoder, RangeDecoderBuffer},
-    Read,
 };
 use crate::ByteReader;
 

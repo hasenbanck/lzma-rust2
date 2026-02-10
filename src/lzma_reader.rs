@@ -1,6 +1,6 @@
 use super::{
-    decoder::LzmaDecoder, error_invalid_data, error_invalid_input, error_out_of_memory,
-    lz::LzDecoder, range_dec::RangeDecoder, ByteReader, Read, DICT_SIZE_MAX,
+    ByteReader, DICT_SIZE_MAX, Read, decoder::LzmaDecoder, error_invalid_data, error_invalid_input,
+    error_out_of_memory, lz::LzDecoder, range_dec::RangeDecoder,
 };
 
 /// Calculates the memory usage in KiB required for LZMA decompression from properties byte.

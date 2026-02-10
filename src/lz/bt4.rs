@@ -1,6 +1,6 @@
 use alloc::{vec, vec::Vec};
 
-use super::{extend_match, hash234::Hash234, LzEncoder, MatchFind, Matches};
+use super::{LzEncoder, MatchFind, Matches, extend_match, hash234::Hash234};
 
 /// Binary Tree with 4-byte matching
 pub(crate) struct Bt4 {

@@ -7,9 +7,9 @@ use super::{
     range_enc::{RangeEncoder, RangeEncoderBuffer},
 };
 use crate::{
-    get_dist_state, state::State, LengthCoder, LiteralCoder, LiteralSubCoder, LzmaCoder, Write,
     ALIGN_BITS, ALIGN_MASK, ALIGN_SIZE, DIST_MODEL_END, DIST_MODEL_START, DIST_STATES,
-    FULL_DISTANCES, LOW_SYMBOLS, MATCH_LEN_MAX, MATCH_LEN_MIN, MID_SYMBOLS, REPS,
+    FULL_DISTANCES, LOW_SYMBOLS, LengthCoder, LiteralCoder, LiteralSubCoder, LzmaCoder,
+    MATCH_LEN_MAX, MATCH_LEN_MIN, MID_SYMBOLS, REPS, Write, get_dist_state, state::State,
 };
 
 const LZMA2_UNCOMPRESSED_LIMIT: u32 = (2 << 20) - MATCH_LEN_MAX as u32;

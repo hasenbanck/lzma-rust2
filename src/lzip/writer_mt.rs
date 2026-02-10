@@ -1,18 +1,17 @@
 use std::{
     io::{self, Cursor, Write},
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::SyncSender,
-        Arc, Mutex,
     },
 };
 
 use super::{LzipOptions, LzipWriter};
 use crate::{
-    error_invalid_input, set_error,
+    AutoFinish, AutoFinisher, error_invalid_input, set_error,
     work_pool::{WorkPool, WorkPoolConfig},
     work_queue::WorkerHandle,
-    AutoFinish, AutoFinisher,
 };
 
 /// A work unit for a worker thread.

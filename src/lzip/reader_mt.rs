@@ -1,18 +1,17 @@
 use std::{
     io::{self, Cursor, Seek, SeekFrom},
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::SyncSender,
-        Arc, Mutex,
     },
 };
 
-use super::{scan_members, LzipMember};
+use super::{LzipMember, scan_members};
 use crate::{
-    set_error,
+    LzipReader, Read, set_error,
     work_pool::{WorkPool, WorkPoolConfig, WorkPoolState},
     work_queue::WorkerHandle,
-    LzipReader, Read,
 };
 
 /// A work unit for a worker thread.

@@ -1,9 +1,9 @@
 use super::{
+    LzmaOptions,
     encoder::{LzmaEncoder, LzmaEncoderModes},
     range_enc::RangeEncoder,
-    LzmaOptions,
 };
-use crate::{error_invalid_input, error_unsupported, AutoFinish, AutoFinisher, Write};
+use crate::{AutoFinish, AutoFinisher, Write, error_invalid_input, error_unsupported};
 
 /// A single-threaded LZMA compressor.
 pub struct LzmaWriter<W: Write> {

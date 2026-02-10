@@ -4,9 +4,8 @@ use super::{
     BlockHeader, ChecksumCalculator, FilterType, Index, StreamFooter, StreamHeader, XZ_MAGIC,
 };
 use crate::{
-    error_invalid_data,
+    CountingReader, Lzma2Reader, Read, Result, error_invalid_data,
     filter::{bcj::BcjReader, delta::DeltaReader},
-    CountingReader, Lzma2Reader, Read, Result,
 };
 
 #[allow(clippy::large_enum_variant)]

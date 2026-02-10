@@ -1,8 +1,8 @@
 use alloc::{vec, vec::Vec};
 
 use crate::{
-    error_eof, error_invalid_data, error_invalid_input, error_other, ByteReader, Read,
-    BIT_MODEL_TOTAL_BITS, MOVE_BITS, RC_BIT_MODEL_OFFSET, SHIFT_BITS,
+    BIT_MODEL_TOTAL_BITS, ByteReader, MOVE_BITS, RC_BIT_MODEL_OFFSET, Read, SHIFT_BITS, error_eof,
+    error_invalid_data, error_invalid_input, error_other,
 };
 
 pub(crate) struct RangeDecoder<R> {

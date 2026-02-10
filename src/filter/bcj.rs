@@ -323,7 +323,7 @@ impl<W: Write> Write for BcjWriter<W> {
 #[cfg(all(feature = "encoder", feature = "std"))]
 #[cfg(test)]
 mod tests {
-    use std::io::{copy, Cursor};
+    use std::io::{Cursor, copy};
 
     use super::*;
 

@@ -98,13 +98,13 @@ pub use lzip::LzipReaderMt;
 pub use lzip::LzipWriterMt;
 #[cfg(all(feature = "lzip", feature = "encoder"))]
 pub use lzip::{LzipOptions, LzipWriter};
-pub use lzma2_reader::{get_memory_usage as lzma2_get_memory_usage, Lzma2Reader};
+pub use lzma_reader::{
+    LzmaReader, get_memory_usage as lzma_get_memory_usage,
+    get_memory_usage_by_props as lzma_get_memory_usage_by_props,
+};
+pub use lzma2_reader::{Lzma2Reader, get_memory_usage as lzma2_get_memory_usage};
 #[cfg(feature = "std")]
 pub use lzma2_reader_mt::Lzma2ReaderMt;
-pub use lzma_reader::{
-    get_memory_usage as lzma_get_memory_usage,
-    get_memory_usage_by_props as lzma_get_memory_usage_by_props, LzmaReader,
-};
 #[cfg(not(feature = "std"))]
 pub use no_std::Error;
 #[cfg(not(feature = "std"))]

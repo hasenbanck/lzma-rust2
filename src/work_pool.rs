@@ -2,9 +2,9 @@ use std::{
     collections::BTreeMap,
     io,
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::{self, Receiver, SyncSender, TryRecvError},
-        Arc, Mutex,
     },
     thread,
     time::Duration,

@@ -1,10 +1,10 @@
 use alloc::{vec, vec::Vec};
 
 use super::{
+    MATCH_LEN_MAX, MATCH_LEN_MIN, REPS,
     encoder::{LzmaEncoder, LzmaEncoderTrait},
     lz::{LzEncoder, MfType},
     state::State,
-    MATCH_LEN_MAX, MATCH_LEN_MIN, REPS,
 };
 
 pub(crate) struct NormalEncoderMode {

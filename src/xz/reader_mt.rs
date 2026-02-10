@@ -2,9 +2,9 @@ use std::{
     collections::BTreeMap,
     io::{self, Cursor, Seek, SeekFrom},
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::{self, Receiver, SyncSender},
-        Arc, Mutex,
     },
     thread,
     time::Duration,
@@ -13,11 +13,10 @@ use std::{
 /// Interval for checking worker errors while waiting for results.
 const ERROR_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
-use super::{create_filter_chain, BlockHeader, CheckType, Index, StreamFooter, StreamHeader};
+use super::{BlockHeader, CheckType, Index, StreamFooter, StreamHeader, create_filter_chain};
 use crate::{
-    error_invalid_data, set_error,
+    ByteReader, Read, error_invalid_data, set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
-    ByteReader, Read,
 };
 
 #[derive(Debug, Clone)]

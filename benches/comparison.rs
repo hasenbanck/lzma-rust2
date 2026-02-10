@@ -4,7 +4,7 @@ use std::{
     num::NonZeroU64,
 };
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use liblzma::{bufread::*, stream};
 use lzma_rust2::{
     LzipOptions, LzipReaderMt, LzipWriter, LzipWriterMt, Lzma2Options, Lzma2Reader, Lzma2ReaderMt,

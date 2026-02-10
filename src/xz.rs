@@ -21,14 +21,14 @@ pub use writer::{XzOptions, XzWriter};
 #[cfg(all(feature = "encoder", feature = "std"))]
 pub use writer_mt::XzWriterMt;
 
-use crate::{error_invalid_data, error_invalid_input, ByteReader, Read};
-#[cfg(feature = "std")]
-use crate::{
-    filter::{bcj::BcjReader, delta::DeltaReader},
-    Lzma2Reader,
-};
+use crate::{ByteReader, Read, error_invalid_data, error_invalid_input};
 #[cfg(feature = "encoder")]
 use crate::{ByteWriter, Write};
+#[cfg(feature = "std")]
+use crate::{
+    Lzma2Reader,
+    filter::{bcj::BcjReader, delta::DeltaReader},
+};
 
 const CRC32: crc::Crc<u32, crc::Table<16>> =
     crc::Crc::<u32, crc::Table<16>>::new(&crc::CRC_32_ISO_HDLC);

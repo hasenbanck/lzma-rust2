@@ -1,6 +1,6 @@
 use alloc::{vec, vec::Vec};
 
-use crate::{error_invalid_data, error_other, Read};
+use crate::{Read, error_invalid_data, error_other};
 
 #[derive(Default)]
 pub(crate) struct LzDecoder {

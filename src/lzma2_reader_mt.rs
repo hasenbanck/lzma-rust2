@@ -3,9 +3,9 @@ use std::{
     io,
     io::{Cursor, Read},
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::{self, Receiver, SyncSender},
-        Arc, Mutex,
     },
     thread,
     time::Duration,
@@ -15,9 +15,8 @@ use std::{
 const ERROR_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
 use crate::{
-    set_error,
+    Lzma2Reader, set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
-    Lzma2Reader,
 };
 
 /// A work unit for a worker thread.

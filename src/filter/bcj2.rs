@@ -6,7 +6,7 @@ use alloc::{vec, vec::Vec};
 
 use decode::Bcj2Decoder;
 
-use crate::{error_invalid_data, Read};
+use crate::{Read, error_invalid_data};
 
 const BUF_SIZE: usize = 1 << 18;
 

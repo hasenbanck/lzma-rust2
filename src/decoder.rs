@@ -1,9 +1,9 @@
 use alloc::{vec, vec::Vec};
 
 use super::{
-    coder_get_dict_size, lz::LzDecoder, range_dec::RangeDecoder, LengthCoder, LiteralCoder,
-    LiteralSubCoder, LzmaCoder, ALIGN_BITS, DIST_MODEL_END, DIST_MODEL_START, LOW_SYMBOLS,
-    MATCH_LEN_MIN, MID_SYMBOLS,
+    ALIGN_BITS, DIST_MODEL_END, DIST_MODEL_START, LOW_SYMBOLS, LengthCoder, LiteralCoder,
+    LiteralSubCoder, LzmaCoder, MATCH_LEN_MIN, MID_SYMBOLS, coder_get_dict_size, lz::LzDecoder,
+    range_dec::RangeDecoder,
 };
 use crate::range_dec::RangeReader;
 

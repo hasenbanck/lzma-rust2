@@ -1,12 +1,13 @@
 use core::num::NonZeroU64;
 
 use super::{
-    encode_dict_size, CRC32, HEADER_SIZE, LZIP_MAGIC, LZIP_VERSION, MAX_DICT_SIZE, MIN_DICT_SIZE,
-    TRAILER_SIZE,
+    CRC32, HEADER_SIZE, LZIP_MAGIC, LZIP_VERSION, MAX_DICT_SIZE, MIN_DICT_SIZE, TRAILER_SIZE,
+    encode_dict_size,
 };
 use crate::{
+    AutoFinish, AutoFinisher, ByteWriter, CountingWriter, Result, Write,
     enc::{LzmaOptions, LzmaWriter},
-    error_invalid_data, AutoFinish, AutoFinisher, ByteWriter, CountingWriter, Result, Write,
+    error_invalid_data,
 };
 
 /// Options for LZIP compression.

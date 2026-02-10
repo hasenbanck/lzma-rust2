@@ -1,18 +1,17 @@
 use std::{
     io::{self, Write},
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::SyncSender,
-        Arc, Mutex,
     },
 };
 
 use super::Lzma2Writer;
 use crate::{
-    error_invalid_input, set_error,
+    AutoFinish, AutoFinisher, ByteWriter, Lzma2Options, error_invalid_input, set_error,
     work_pool::{WorkPool, WorkPoolConfig},
     work_queue::WorkerHandle,
-    AutoFinish, AutoFinisher, ByteWriter, Lzma2Options,
 };
 
 /// A work unit for a worker thread.

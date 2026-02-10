@@ -1,6 +1,6 @@
 use std::{
     collections::VecDeque,
-    sync::{atomic::AtomicBool, Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, atomic::AtomicBool},
 };
 
 /// A work-stealing queue that supports multiple workers taking work from a shared queue.

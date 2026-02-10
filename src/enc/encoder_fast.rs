@@ -1,7 +1,7 @@
 use super::{
+    MATCH_LEN_MAX, MATCH_LEN_MIN, REPS,
     encoder::LzmaEncoderTrait,
     lz::{LzEncoder, MfType},
-    MATCH_LEN_MAX, MATCH_LEN_MIN, REPS,
 };
 
 #[derive(Default)]

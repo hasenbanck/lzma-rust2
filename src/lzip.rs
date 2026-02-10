@@ -22,7 +22,7 @@ pub use writer::{LzipOptions, LzipWriter};
 #[cfg(all(feature = "encoder", feature = "std"))]
 pub use writer_mt::LzipWriterMt;
 
-use crate::{error_invalid_data, error_invalid_input, ByteReader, Read, Result};
+use crate::{ByteReader, Read, Result, error_invalid_data, error_invalid_input};
 
 const CRC32: crc::Crc<u32, crc::Table<16>> =
     crc::Crc::<u32, crc::Table<16>>::new(&crc::CRC_32_ISO_HDLC);

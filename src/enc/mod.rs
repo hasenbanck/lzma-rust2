@@ -8,9 +8,9 @@ mod lzma_writer;
 mod range_enc;
 
 pub use encoder::EncodeMode;
+pub use lzma_writer::*;
 pub use lzma2_writer::*;
 #[cfg(feature = "std")]
 pub use lzma2_writer_mt::*;
-pub use lzma_writer::*;
 
 use super::*;

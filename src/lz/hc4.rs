@@ -1,10 +1,9 @@
 use alloc::{vec, vec::Vec};
 
 use super::{
-    extend_match,
+    LzEncoderData, extend_match,
     hash234::Hash234,
     lz_encoder::{LzEncoder, MatchFind, Matches},
-    LzEncoderData,
 };
 
 /// Hash Chain with 4-byte matching
