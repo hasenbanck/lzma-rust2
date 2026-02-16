@@ -1,10 +1,11 @@
 use core::num::NonZeroU64;
 
 use super::{
-    encode_dict_size, CRC32, HEADER_SIZE, LZIP_MAGIC, LZIP_VERSION, MAX_DICT_SIZE, MIN_DICT_SIZE,
+    encode_dict_size, HEADER_SIZE, LZIP_MAGIC, LZIP_VERSION, MAX_DICT_SIZE, MIN_DICT_SIZE,
     TRAILER_SIZE,
 };
 use crate::{
+    crc::Crc32,
     enc::{LzmaOptions, LzmaWriter},
     error_invalid_data, AutoFinish, AutoFinisher, ByteWriter, CountingWriter, Result, Write,
 };
@@ -41,7 +42,7 @@ pub struct LzipWriter<W: Write> {
     options: LzipOptions,
     header_written: bool,
     finished: bool,
-    crc_digest: crc::Digest<'static, u32, crc::Table<16>>,
+    crc_digest: Crc32,
     uncompressed_size: u64,
     member_start_pos: u64,
     current_member_uncompressed_size: u64,
@@ -73,7 +74,7 @@ impl<W: Write> LzipWriter<W> {
             options,
             header_written: false,
             finished: false,
-            crc_digest: CRC32.digest(),
+            crc_digest: Crc32::new(),
             uncompressed_size: 0,
             member_start_pos: 0,
             current_member_uncompressed_size: 0,
@@ -139,7 +140,7 @@ impl<W: Write> LzipWriter<W> {
         self.lzma_writer = Some(lzma_writer);
         self.header_written = true;
         self.current_member_uncompressed_size = 0;
-        self.crc_digest = CRC32.digest();
+        self.crc_digest = Crc32::new();
         self.uncompressed_size = 0;
 
         Ok(())
@@ -164,7 +165,7 @@ impl<W: Write> LzipWriter<W> {
         // Calculate member size: header + compressed data + trailer.
         let member_size = HEADER_SIZE as u64 + compressed_size + TRAILER_SIZE as u64;
 
-        let crc_digest = core::mem::replace(&mut self.crc_digest, CRC32.digest());
+        let crc_digest = core::mem::replace(&mut self.crc_digest, Crc32::new());
         let computed_crc = crc_digest.finalize();
         writer.write_u32(computed_crc)?;
         writer.write_u64(self.uncompressed_size)?;
