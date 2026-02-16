@@ -21,7 +21,11 @@ pub use writer::{XzOptions, XzWriter};
 #[cfg(all(feature = "encoder", feature = "std"))]
 pub use writer_mt::XzWriterMt;
 
-use crate::{ByteReader, Read, error_invalid_data, error_invalid_input};
+use crate::{
+    ByteReader, Read,
+    crc::{Crc32, Crc64},
+    error_invalid_data, error_invalid_input,
+};
 #[cfg(feature = "encoder")]
 use crate::{ByteWriter, Write};
 #[cfg(feature = "std")]
@@ -29,10 +33,6 @@ use crate::{
     Lzma2Reader,
     filter::{bcj::BcjReader, delta::DeltaReader},
 };
-
-const CRC32: crc::Crc<u32, crc::Table<16>> =
-    crc::Crc::<u32, crc::Table<16>>::new(&crc::CRC_32_ISO_HDLC);
-const CRC64: crc::Crc<u64, crc::Table<16>> = crc::Crc::<u64, crc::Table<16>>::new(&crc::CRC_64_XZ);
 
 const XZ_MAGIC: [u8; 6] = [0xFD, b'7', b'z', b'X', b'Z', 0x00];
 
@@ -550,7 +550,7 @@ impl BlockHeader {
         ]);
 
         // Calculate CRC32 of header size byte + header data (excluding CRC32).
-        let mut crc = CRC32.digest();
+        let mut crc = Crc32::new();
         crc.update(&[header_size_encoded]);
         crc.update(&header_data[..offset]);
 
@@ -737,8 +737,8 @@ impl BlockHeader {
 /// Handles checksum calculation for different XZ check types.
 enum ChecksumCalculator {
     None,
-    Crc32(crc::Digest<'static, u32, crc::Table<16>>),
-    Crc64(crc::Digest<'static, u64, crc::Table<16>>),
+    Crc32(Crc32),
+    Crc64(Crc64),
     Sha256(sha2::Sha256),
 }
 
@@ -746,8 +746,8 @@ impl ChecksumCalculator {
     fn new(check_type: CheckType) -> Self {
         match check_type {
             CheckType::None => Self::None,
-            CheckType::Crc32 => Self::Crc32(CRC32.digest()),
-            CheckType::Crc64 => Self::Crc64(CRC64.digest()),
+            CheckType::Crc32 => Self::Crc32(Crc32::new()),
+            CheckType::Crc64 => Self::Crc64(Crc64::new()),
             CheckType::Sha256 => Self::Sha256(sha2::Sha256::new()),
         }
     }
@@ -850,7 +850,7 @@ impl StreamHeader {
 
         let expected_crc = reader.read_u32()?;
 
-        if expected_crc != CRC32.checksum(&flags) {
+        if expected_crc != Crc32::checksum(&flags) {
             return Err(error_invalid_data("XZ stream header CRC32 mismatch"));
         }
 
@@ -868,7 +868,7 @@ impl StreamFooter {
         reader.read_exact(&mut stream_flags)?;
 
         // Verify CRC32 of backward size + stream flags.
-        let mut crc = CRC32.digest();
+        let mut crc = Crc32::new();
         crc.update(&backward_size.to_le_bytes());
         crc.update(&stream_flags);
 
@@ -932,7 +932,7 @@ impl Index {
         let expected_crc = reader.read_u32()?;
 
         // Calculate CRC32 over index data (excluding CRC32 itself).
-        let mut crc = CRC32.digest();
+        let mut crc = Crc32::new();
         crc.update(&[0]);
 
         // Add number of records.
@@ -968,7 +968,7 @@ fn write_xz_stream_header<W: Write>(writer: &mut W, check_type: CheckType) -> cr
     let stream_flags = [0u8, check_type as u8];
     writer.write_all(&stream_flags)?;
 
-    let crc = CRC32.checksum(&stream_flags);
+    let crc = Crc32::checksum(&stream_flags);
     writer.write_u32(crc)?;
 
     Ok(())
@@ -997,7 +997,7 @@ fn encode_lzma2_dict_size(dict_size: u32) -> crate::Result<u8> {
     Err(error_invalid_input("LZMA2 dictionary size too large"))
 }
 
-fn update_crc_with_padding(crc: &mut crc::Digest<'_, u32, crc::Table<16>>, padding_needed: usize) {
+fn update_crc_with_padding(crc: &mut Crc32, padding_needed: usize) {
     match padding_needed {
         1 => crc.update(&[0]),
         2 => crc.update(&[0, 0]),
@@ -1242,7 +1242,7 @@ fn write_xz_block_header<W: Write>(
     let padding_needed = header_size - 1 - header_data.len() - 4;
 
     // Calculate and write CRC32 of header size byte + header data + padding
-    let mut crc = CRC32.digest();
+    let mut crc = Crc32::new();
     crc.update(&[header_size_encoded]);
     crc.update(&header_data);
     update_crc_with_padding(&mut crc, padding_needed);
@@ -1277,7 +1277,7 @@ fn write_xz_index<W: Write>(writer: &mut W, index_records: &[IndexRecord]) -> cr
     let bytes_written = 1 + index_data.len(); // indicator + index data
     let padding_needed = (4 - (bytes_written % 4)) % 4;
 
-    let mut crc = CRC32.digest();
+    let mut crc = Crc32::new();
     crc.update(&[0x00]);
     crc.update(&index_data);
     update_crc_with_padding(&mut crc, padding_needed);
@@ -1318,7 +1318,7 @@ fn write_xz_stream_footer<W: Write>(
     let stream_flags = [0u8, check_type as u8];
 
     // Calculate CRC32 of backward size + stream flags
-    let mut crc = CRC32.digest();
+    let mut crc = Crc32::new();
     crc.update(&backward_size.to_le_bytes());
     crc.update(&stream_flags);
 

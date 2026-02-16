@@ -1,7 +1,9 @@
 use alloc::vec::Vec;
 
-use super::{CRC32, HEADER_SIZE, LzipHeader, LzipTrailer, TRAILER_SIZE};
-use crate::{CountingReader, LzmaReader, Read, Result, error_invalid_data, error_invalid_input};
+use super::{HEADER_SIZE, LzipHeader, LzipTrailer, TRAILER_SIZE};
+use crate::{
+    CountingReader, LzmaReader, Read, Result, crc::Crc32, error_invalid_data, error_invalid_input,
+};
 
 /// A single-threaded LZIP decompressor.
 pub struct LzipReader<R> {
@@ -10,7 +12,7 @@ pub struct LzipReader<R> {
     current_header: Option<LzipHeader>,
     finished: bool,
     trailer_buf: Vec<u8>,
-    crc_digest: Option<crc::Digest<'static, u32, crc::Table<16>>>,
+    crc_digest: Option<Crc32>,
     data_size: u64,
 }
 
@@ -87,7 +89,7 @@ impl<R: Read> LzipReader<R> {
         self.current_header = Some(header);
         self.lzma_reader = Some(lzma_reader);
         self.trailer_buf.clear();
-        self.crc_digest = Some(CRC32.digest());
+        self.crc_digest = Some(Crc32::new());
         self.data_size = 0;
 
         Ok(true)

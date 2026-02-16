@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.16.2 - 2026-02-16
+
+### Fixed
+
+- We provide our own CRC implementation for lzip and xz, which removes the dependency to the crc crate. No functional
+  change to v0.16.0 or v0.16.1
+
 ## 0.16.1 - 2026-02-11
 
 ### Fixed

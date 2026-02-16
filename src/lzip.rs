@@ -24,9 +24,6 @@ pub use writer_mt::LzipWriterMt;
 
 use crate::{ByteReader, Read, Result, error_invalid_data, error_invalid_input};
 
-const CRC32: crc::Crc<u32, crc::Table<16>> =
-    crc::Crc::<u32, crc::Table<16>>::new(&crc::CRC_32_ISO_HDLC);
-
 const LZIP_MAGIC: [u8; 4] = [b'L', b'Z', b'I', b'P'];
 
 const LZIP_VERSION: u8 = 1;

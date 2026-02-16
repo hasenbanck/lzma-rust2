@@ -73,6 +73,8 @@ mod enc;
 
 pub mod filter;
 
+#[cfg(any(feature = "lzip", feature = "xz"))]
+mod crc;
 #[cfg(feature = "std")]
 mod lzma2_reader_mt;
 #[cfg(not(feature = "std"))]
