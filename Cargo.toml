@@ -20,7 +20,7 @@ xz = ["sha2"]
 lzip = []
 
 [dependencies]
-sha2 = { version = "0.10", optional = true }
+sha2 = { version = "0.11", optional = true }
 
 [dev-dependencies]
 criterion = { version = "=0.7", features = ["html_reports"] }
