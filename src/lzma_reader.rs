@@ -125,9 +125,16 @@ impl<R: Read> LzmaReader<R> {
             return Err(error_invalid_input("invalid lc or lp or pb"));
         }
         let mut dict_size = get_dict_size(dict_size)?;
-        if uncomp_size <= u64::MAX / 2 && dict_size as u64 > uncomp_size {
-            dict_size = get_dict_size(uncomp_size as u32)?;
+
+        let preset_size = preset_dict
+            .map(|dict| dict.len().min(dict_size as usize) as u64)
+            .unwrap_or(0);
+        let min_history_size = uncomp_size.saturating_add(preset_size);
+
+        if uncomp_size <= u64::MAX / 2 && dict_size as u64 > min_history_size {
+            dict_size = get_dict_size(min_history_size as u32)?;
         }
+
         let rc = RangeDecoder::new_stream(reader);
         let rc = match rc {
             Ok(r) => r,

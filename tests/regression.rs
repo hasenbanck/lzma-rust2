@@ -1,6 +1,8 @@
 use std::io::Read;
 
-use lzma_rust2::{Lzma2Options, Lzma2Reader, Lzma2ReaderMt, XzReader};
+use lzma_rust2::{
+    Lzma2Options, Lzma2Reader, Lzma2ReaderMt, LzmaOptions, LzmaReader, LzmaWriter, XzReader,
+};
 
 fn regression_lzma2_reader_mt(input_data: &[u8], expected_output: &[u8], dict_size: u32) {
     let mut uncompressed = Vec::new();
@@ -60,4 +62,41 @@ fn issue_64() {
 
     let mut reader = Lzma2Reader::new(input.as_slice(), dict_size, None);
     let _ = reader.read_to_end(&mut uncompressed);
+}
+
+/// Issue: LZMA roundtrip fails with "dist overflow" when using preset dictionary
+///
+/// https://github.com/hasenbanck/lzma-rust2/issues/94
+#[test]
+fn issue_94() {
+    let dict = b"section></summary><div class=</a></li".to_vec();
+    let data = std::fs::read("tests/data/input.html").unwrap();
+
+    let options = {
+        let mut options = LzmaOptions::with_preset(9);
+        options.preset_dict = Some(dict.clone());
+        options
+    };
+
+    let output = std::io::Cursor::new(Vec::new());
+    let mut encoder = LzmaWriter::new_no_header(output, &options, false).unwrap();
+    std::io::copy(&mut std::io::Cursor::new(data.clone()), &mut encoder).unwrap();
+    let compressed = encoder.finish().unwrap().into_inner();
+    println!("Encode OK");
+
+    let mut out = std::io::Cursor::new(Vec::new());
+    let mut decoder = LzmaReader::new_with_props(
+        compressed.as_slice(),
+        data.len() as u64,
+        options.get_props(),
+        options.dict_size,
+        options.preset_dict.as_deref(),
+    )
+    .unwrap();
+    std::io::copy(&mut decoder, &mut out).unwrap();
+    let decompressed = out.into_inner();
+    println!("Decode OK");
+
+    // We don't use assert_eq since the debug output would be too big.
+    assert!(decompressed.as_slice() == data);
 }
