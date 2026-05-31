@@ -69,6 +69,29 @@ fn empty_input_is_valid_empty_stream() {
 }
 
 #[test]
+fn small_writes_with_flush_round_trip() {
+    let mut encoder = XzWriter::new(Vec::new(), XzOptions::with_preset(6)).unwrap();
+    encoder.write_all(&[0]).unwrap();
+    encoder.flush().unwrap();
+    encoder.write_all(&[0]).unwrap();
+    encoder.flush().unwrap();
+    let compressed = encoder.finish().unwrap();
+
+    let mut uncompressed = Vec::new();
+    let mut reader = XzReader::new(compressed.as_slice(), false);
+    reader.read_to_end(&mut uncompressed).unwrap();
+    assert_eq!(uncompressed, [0, 0]);
+
+    let mut liblzma_uncompressed = Vec::new();
+    {
+        use liblzma::read::XzDecoder;
+        let mut decoder = XzDecoder::new(compressed.as_slice());
+        decoder.read_to_end(&mut liblzma_uncompressed).unwrap();
+    }
+    assert_eq!(liblzma_uncompressed, [0, 0]);
+}
+
+#[test]
 fn round_trip_executable_0() {
     test_round_trip(EXECUTABLE, 0);
 }

@@ -312,7 +312,7 @@ impl LzEncoderData {
             let old_pending = self.pending_size;
             self.pending_size = 0;
             match_finder.skip(self, old_pending as _);
-            debug_assert!(self.pending_size < old_pending)
+            debug_assert!(self.pending_size <= old_pending);
         }
     }
 
