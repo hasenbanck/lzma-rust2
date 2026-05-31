@@ -49,6 +49,39 @@ fn test_round_trip(path: &str, level: u32) {
 }
 
 #[test]
+fn empty_input_is_valid_empty_stream() {
+    let mut options = XzOptions::with_preset(6);
+    let dict_size = options.lzma_options.dict_size as u64;
+    options.set_block_size(NonZeroU64::new(dict_size));
+
+    let encoder = XzWriterMt::new(Vec::new(), options, 2).unwrap();
+    let compressed = encoder.finish().unwrap();
+
+    let reference = {
+        use liblzma::write::XzEncoder;
+
+        let encoder = XzEncoder::new(Vec::new(), 6);
+        encoder.finish().unwrap()
+    };
+
+    assert_eq!(compressed, reference);
+
+    let mut uncompressed = Vec::new();
+    let mut reader = XzReaderMt::new(Cursor::new(compressed.as_slice()), false, 2).unwrap();
+    reader.read_to_end(&mut uncompressed).unwrap();
+    assert_eq!(reader.block_count(), 0);
+    assert!(uncompressed.is_empty());
+
+    let mut liblzma_uncompressed = Vec::new();
+    {
+        use liblzma::read::XzDecoder;
+        let mut decoder = XzDecoder::new(compressed.as_slice());
+        decoder.read_to_end(&mut liblzma_uncompressed).unwrap();
+    }
+    assert!(liblzma_uncompressed.is_empty());
+}
+
+#[test]
 fn round_trip_executable_0() {
     test_round_trip(EXECUTABLE, 0);
 }
