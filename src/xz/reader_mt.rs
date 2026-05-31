@@ -170,10 +170,7 @@ impl<R: Read + Seek> XzReaderMt<R> {
         }
 
         if self.blocks.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "No valid XZ blocks found",
-            ));
+            self.state = State::Finished;
         }
 
         self.inner = Some(reader);
