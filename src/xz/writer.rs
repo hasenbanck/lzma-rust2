@@ -241,6 +241,7 @@ pub struct XzWriter<W: Write> {
     total_uncompressed_pos: u64,
     current_block_start_pos: u64,
     current_block_header_size: u64,
+    current_block_open: bool,
 }
 
 impl<W: Write> XzWriter<W> {
@@ -280,6 +281,7 @@ impl<W: Write> XzWriter<W> {
             total_uncompressed_pos: 0,
             current_block_start_pos: 0,
             current_block_header_size: 0,
+            current_block_open: false,
         })
     }
 
@@ -338,6 +340,7 @@ impl<W: Write> XzWriter<W> {
         )?;
 
         self.block_uncompressed_size = 0;
+        self.current_block_open = true;
 
         Ok(())
     }
@@ -351,6 +354,10 @@ impl<W: Write> XzWriter<W> {
     }
 
     fn finish_current_block(&mut self) -> Result<()> {
+        if !self.current_block_open {
+            return Ok(());
+        }
+
         // Finish the filter chain and get back to the counting writer.
         let writer = core::mem::replace(&mut self.writer, FilterWriter::Dummy);
         let counting_writer = writer.finish()?;
@@ -376,6 +383,9 @@ impl<W: Write> XzWriter<W> {
         });
 
         self.block_uncompressed_size = 0;
+        self.current_block_start_pos = 0;
+        self.current_block_header_size = 0;
+        self.current_block_open = false;
 
         Ok(())
     }
