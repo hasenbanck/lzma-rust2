@@ -1,6 +1,6 @@
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
-use crate::{Read, error_invalid_data, error_other};
+use crate::{Read, error_invalid_data, error_other, error_out_of_memory};
 
 #[derive(Default)]
 pub(crate) struct LzDecoder {
@@ -12,29 +12,50 @@ pub(crate) struct LzDecoder {
     limit: usize,
     pending_len: usize,
     pending_dist: usize,
+    pending_preset: Option<Vec<u8>>,
+    allocated: bool,
 }
 
 impl LzDecoder {
     pub(crate) fn new(dict_size: usize, preset_dict: Option<&[u8]>) -> Self {
-        let mut buf = vec![0; dict_size];
         let mut pos = 0;
         let mut full = 0;
         let mut start = 0;
+        let mut pending_preset = None;
         if let Some(preset) = preset_dict {
             pos = preset.len().min(dict_size);
             full = pos;
             start = pos;
             let ps = preset.len() - pos;
-            buf[0..pos].copy_from_slice(&preset[ps..]);
+            pending_preset = Some(preset[ps..].to_vec());
         }
         Self {
-            buf,
+            buf: Vec::new(),
             buf_size: dict_size,
             pos,
             full,
             start,
+            pending_preset,
+            allocated: false,
             ..Default::default()
         }
+    }
+
+    /// Allocates the dictionary window on first use, fallibly, so a malicious
+    /// `dict_size` returns an error instead of aborting the process.
+    pub(crate) fn ensure_capacity(&mut self) -> crate::Result<()> {
+        if self.allocated {
+            return Ok(());
+        }
+        self.buf
+            .try_reserve_exact(self.buf_size)
+            .map_err(|_| error_out_of_memory("dictionary allocation too large"))?;
+        self.buf.resize(self.buf_size, 0);
+        if let Some(preset) = self.pending_preset.take() {
+            self.buf[..preset.len()].copy_from_slice(&preset);
+        }
+        self.allocated = true;
+        Ok(())
     }
 
     pub(crate) fn reset(&mut self) {
@@ -180,5 +201,16 @@ impl LzDecoder {
         self.start = self.pos;
 
         Ok(copy_size)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_capacity_rejects_impossible_size() {
+        let mut lz = LzDecoder::new(usize::MAX, None);
+        assert!(lz.ensure_capacity().is_err());
     }
 }

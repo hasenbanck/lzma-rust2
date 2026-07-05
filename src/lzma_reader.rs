@@ -219,6 +219,9 @@ impl<R: Read> LzmaReader<R> {
         if self.end_reached {
             return Ok(0);
         }
+
+        self.lz.ensure_capacity()?;
+
         let mut size: u64 = 0;
         let mut len = buf.len() as u64;
         let mut off: u64 = 0;

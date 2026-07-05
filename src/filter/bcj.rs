@@ -328,6 +328,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn large_start_pos_does_not_panic() {
+        let data = [0u8; 64];
+        for make in [
+            BcjReader::new_x86,
+            BcjReader::new_arm,
+            BcjReader::new_arm_thumb,
+        ] {
+            let mut reader = make(Cursor::new(data), usize::MAX);
+            let mut out = Vec::new();
+            copy(&mut reader, &mut out).unwrap();
+        }
+    }
+
+    #[test]
     fn test_bcj_x86_roundtrip() {
         let test_data = std::fs::read("tests/data/wget-x86").unwrap();
 

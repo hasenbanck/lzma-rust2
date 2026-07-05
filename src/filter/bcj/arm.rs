@@ -4,7 +4,7 @@ impl BcjFilter {
     pub(crate) fn new_arm(start_pos: usize, encoder: bool) -> Self {
         Self {
             is_encoder: encoder,
-            pos: start_pos + 8,
+            pos: start_pos.wrapping_add(8),
             prev_mask: 0,
             filter: Self::arm_code,
         }
@@ -40,14 +40,14 @@ impl BcjFilter {
             i += 4;
         }
 
-        self.pos += i;
+        self.pos = self.pos.wrapping_add(i);
         i
     }
 
     pub(crate) fn new_arm_thumb(start_pos: usize, encoder: bool) -> Self {
         Self {
             is_encoder: encoder,
-            pos: start_pos + 4,
+            pos: start_pos.wrapping_add(4),
             prev_mask: 0,
             filter: Self::arm_thumb_code,
         }
@@ -88,7 +88,7 @@ impl BcjFilter {
             i += 2;
         }
 
-        self.pos += i;
+        self.pos = self.pos.wrapping_add(i);
         i
     }
 
@@ -160,7 +160,7 @@ impl BcjFilter {
 
             i += 4;
         }
-        self.pos += i;
+        self.pos = self.pos.wrapping_add(i);
         i
     }
 }

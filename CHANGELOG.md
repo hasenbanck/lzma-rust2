@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.16.5 - 2026-07-05
+
+### Fixed
+
+- Hardened the library against malicious or malformed archives.
+
 ## 0.16.4 - 2026-05-31
 
 ### Fixed

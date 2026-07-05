@@ -1,7 +1,8 @@
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom, Write};
 
 use lzma_rust2::{
-    Lzma2Options, Lzma2Reader, Lzma2ReaderMt, LzmaOptions, LzmaReader, LzmaWriter, XzReader,
+    LzipOptions, LzipReaderMt, LzipWriter, Lzma2Options, Lzma2Reader, Lzma2ReaderMt, LzmaOptions,
+    LzmaReader, LzmaWriter, XzReader, XzReaderMt,
 };
 
 fn regression_lzma2_reader_mt(input_data: &[u8], expected_output: &[u8], dict_size: u32) {
@@ -99,4 +100,115 @@ fn issue_94() {
 
     // We don't use assert_eq since the debug output would be too big.
     assert!(decompressed.as_slice() == data);
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn encode_multibyte(mut value: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    while value >= 0x80 {
+        out.push((value as u8) | 0x80);
+        value >>= 7;
+    }
+    out.push(value as u8);
+    out
+}
+
+/// A crafted single-block XZ stream whose index declares a `unpadded_size` far
+/// larger than the file. The multi-threaded reader must reject it instead of
+/// trying to allocate a buffer of that size.
+fn xz_with_huge_index_record(unpadded_size: u64) -> Vec<u8> {
+    let mut stream = Vec::new();
+
+    stream.extend_from_slice(&[0xFD, b'7', b'z', b'X', b'Z', 0x00]);
+    let stream_flags = [0u8, 0u8];
+    stream.extend_from_slice(&stream_flags);
+    stream.extend_from_slice(&crc32(&stream_flags).to_le_bytes());
+
+    let mut index_body = vec![0x00];
+    index_body.extend_from_slice(&encode_multibyte(1));
+    index_body.extend_from_slice(&encode_multibyte(unpadded_size));
+    index_body.extend_from_slice(&encode_multibyte(0));
+    while index_body.len() % 4 != 0 {
+        index_body.push(0);
+    }
+    let index_crc = crc32(&index_body);
+
+    let index_size = index_body.len() + 4;
+    let backward_size = (index_size / 4 - 1) as u32;
+
+    stream.extend_from_slice(&index_body);
+    stream.extend_from_slice(&index_crc.to_le_bytes());
+
+    let mut footer_crc_input = Vec::new();
+    footer_crc_input.extend_from_slice(&backward_size.to_le_bytes());
+    footer_crc_input.extend_from_slice(&stream_flags);
+    stream.extend_from_slice(&crc32(&footer_crc_input).to_le_bytes());
+    stream.extend_from_slice(&backward_size.to_le_bytes());
+    stream.extend_from_slice(&stream_flags);
+    stream.extend_from_slice(b"YZ");
+
+    stream
+}
+
+/// Malicious XZ where the index claims a 2^60-byte block. Previously the
+/// multi-threaded reader did `vec![0u8; unpadded_size]` and aborted with OOM.
+#[test]
+fn xz_mt_huge_index_record_does_not_oom() {
+    let input = xz_with_huge_index_record(1 << 60);
+
+    let mut reader = XzReaderMt::new(std::io::Cursor::new(input), false, 2).unwrap();
+    let mut output = Vec::new();
+    assert!(reader.read_to_end(&mut output).is_err());
+}
+
+struct FaultyReader {
+    inner: std::io::Cursor<Vec<u8>>,
+    armed: bool,
+}
+
+impl Read for FaultyReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.armed && buf.len() > 24 {
+            return Err(std::io::Error::other("injected read failure"));
+        }
+        self.inner.read(buf)
+    }
+}
+
+impl Seek for FaultyReader {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+/// An I/O error while the multi-threaded LZIP reader fetches a member must
+/// surface as an error instead of panicking a `.unwrap()`.
+#[test]
+fn lzip_mt_read_error_does_not_panic() {
+    let mut compressed = Vec::new();
+    {
+        let mut writer = LzipWriter::new(&mut compressed, LzipOptions::with_preset(6));
+        writer.write_all(b"hello lzip multithreaded world").unwrap();
+        writer.finish().unwrap();
+    }
+
+    let reader = FaultyReader {
+        inner: std::io::Cursor::new(compressed),
+        armed: true,
+    };
+
+    let mut reader = LzipReaderMt::new(reader, 2).unwrap();
+    let mut output = Vec::new();
+    assert!(reader.read_to_end(&mut output).is_err());
 }

@@ -181,6 +181,9 @@ impl<R: Read> Read for Lzma2Reader<R> {
         if self.end_reached {
             return Ok(0);
         }
+
+        self.lz.ensure_capacity()?;
+
         let mut size = 0;
         let mut len = buf.len();
         let mut off = 0;
