@@ -13,7 +13,7 @@ impl BcjFilter {
     pub(crate) fn new_x86(start_pos: usize, encoder: bool) -> Self {
         Self {
             is_encoder: encoder,
-            pos: start_pos + 5,
+            pos: start_pos.wrapping_add(5),
             prev_mask: 0,
             filter: Self::x86_code,
         }
@@ -97,7 +97,7 @@ impl BcjFilter {
         };
 
         self.prev_mask = prev_mask;
-        self.pos += i;
+        self.pos = self.pos.wrapping_add(i);
         i
     }
 }

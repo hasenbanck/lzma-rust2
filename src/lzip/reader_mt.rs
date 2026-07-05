@@ -61,9 +61,9 @@ impl<R: Read + Seek> LzipReaderMt<R> {
 
         self.work_pool.get_result(|index| {
             let member = &self.members[index as usize];
-            self.inner.seek(SeekFrom::Start(member.start_pos)).unwrap();
+            self.inner.seek(SeekFrom::Start(member.start_pos))?;
             let mut member_data = vec![0u8; member.compressed_size as usize];
-            self.inner.read_exact(&mut member_data).unwrap();
+            self.inner.read_exact(&mut member_data)?;
             Ok(WorkUnit { member_data })
         })
     }

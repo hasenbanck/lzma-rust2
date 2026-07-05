@@ -42,7 +42,7 @@ impl BcjFilter {
             i += 4;
         }
 
-        self.pos += i;
+        self.pos = self.pos.wrapping_add(i);
         i
     }
 }

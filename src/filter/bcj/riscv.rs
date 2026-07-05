@@ -172,7 +172,7 @@ impl BcjFilter {
             }
         }
 
-        self.pos += i;
+        self.pos = self.pos.wrapping_add(i);
 
         i
     }

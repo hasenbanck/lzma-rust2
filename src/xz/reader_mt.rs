@@ -15,7 +15,7 @@ const ERROR_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
 use super::{BlockHeader, CheckType, Index, StreamFooter, StreamHeader, create_filter_chain};
 use crate::{
-    ByteReader, Read, error_invalid_data, set_error,
+    ByteReader, Read, error_invalid_data, error_out_of_memory, set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
 };
 
@@ -139,9 +139,7 @@ impl<R: Read + Seek> XzReaderMt<R> {
             ));
         }
 
-        // Now read the index using backward size.
-        let index_size = (stream_footer.backward_size + 1) * 4;
-        let index_start_pos = file_size - 12 - index_size as u64;
+        let (index_start_pos, _) = index_location(file_size, stream_footer.backward_size)?;
 
         reader.seek(SeekFrom::Start(index_start_pos))?;
 
@@ -163,10 +161,7 @@ impl<R: Read + Seek> XzReaderMt<R> {
                 uncompressed_size: record.uncompressed_size,
             });
 
-            let padding_needed = (4 - (record.unpadded_size % 4)) % 4;
-            let actual_block_size = record.unpadded_size + padding_needed;
-
-            block_start_pos += actual_block_size;
+            block_start_pos = next_block_start(block_start_pos, record.unpadded_size)?;
         }
 
         if self.blocks.is_empty() {
@@ -218,9 +213,17 @@ impl<R: Read + Seek> XzReaderMt<R> {
         reader.seek(SeekFrom::Start(block.start_pos))?;
 
         let padding_needed = (4 - (block.unpadded_size % 4)) % 4;
-        let total_block_size = block.unpadded_size + padding_needed;
+        let total_block_size = block
+            .unpadded_size
+            .checked_add(padding_needed)
+            .and_then(|size| usize::try_from(size).ok())
+            .ok_or_else(|| error_invalid_data("XZ block size too large"))?;
 
-        let mut block_data = vec![0u8; total_block_size as usize];
+        let mut block_data = Vec::new();
+        block_data
+            .try_reserve_exact(total_block_size)
+            .map_err(|_| error_out_of_memory("XZ block allocation too large"))?;
+        block_data.resize(total_block_size, 0);
         reader.read_exact(&mut block_data)?;
 
         self.inner = Some(reader);
@@ -396,6 +399,28 @@ impl<R: Read + Seek> XzReaderMt<R> {
     }
 }
 
+fn index_location(file_size: u64, backward_size: u32) -> io::Result<(u64, u64)> {
+    let index_size = (backward_size as u64)
+        .checked_add(1)
+        .and_then(|value| value.checked_mul(4))
+        .ok_or_else(|| error_invalid_data("XZ index size overflow"))?;
+
+    let index_start_pos = file_size
+        .checked_sub(12)
+        .and_then(|value| value.checked_sub(index_size))
+        .ok_or_else(|| error_invalid_data("XZ index size larger than file"))?;
+
+    Ok((index_start_pos, index_size))
+}
+
+fn next_block_start(current: u64, unpadded_size: u64) -> io::Result<u64> {
+    let padding_needed = (4 - (unpadded_size % 4)) % 4;
+    unpadded_size
+        .checked_add(padding_needed)
+        .and_then(|padded| current.checked_add(padded))
+        .ok_or_else(|| error_invalid_data("XZ block position overflow"))
+}
+
 /// The logic for a single worker thread.
 fn worker_thread_logic(
     worker_handle: WorkerHandle<WorkUnit>,
@@ -443,8 +468,11 @@ fn decompress_xz_block(block_data: Vec<u8>, check_type: CheckType) -> io::Result
 
     let checksum_size = check_type.checksum_size() as usize;
     let padding_in_block_data = (4 - (block_data.len() % 4)) % 4;
-    let unpadded_size_in_data = block_data.len() - padding_in_block_data;
-    let compressed_data_end = unpadded_size_in_data - checksum_size;
+    let compressed_data_end = block_data
+        .len()
+        .checked_sub(padding_in_block_data)
+        .and_then(|size| size.checked_sub(checksum_size))
+        .ok_or_else(|| error_invalid_data("XZ block data too short"))?;
 
     if compressed_data_end <= header_size {
         return Err(error_invalid_data(
@@ -496,5 +524,31 @@ impl<R: Read + Seek> Drop for XzReaderMt<R> {
         self.work_queue.close();
         // Worker threads will exit when the work queue is closed.
         // JoinHandles will be dropped, which is fine since we set the shutdown flag,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decompress_block_shorter_than_checksum_errs() {
+        // Minimal valid 8-byte block header (single LZMA2 filter).
+        let block = [1u8, 0, 0x21, 0x01, 0, 0, 0, 0];
+        assert!(decompress_xz_block(block.to_vec(), CheckType::Sha256).is_err());
+        assert!(decompress_xz_block(block.to_vec(), CheckType::Crc64).is_err());
+    }
+
+    #[test]
+    fn index_location_rejects_out_of_range() {
+        assert!(index_location(64, u32::MAX).is_err());
+        assert!(index_location(8, 3).is_err());
+        assert!(index_location(1_000_000, 3).is_ok());
+    }
+
+    #[test]
+    fn next_block_start_rejects_overflow() {
+        assert!(next_block_start(u64::MAX - 1, u64::MAX - 1).is_err());
+        assert_eq!(next_block_start(12, 4).unwrap(), 16);
     }
 }
