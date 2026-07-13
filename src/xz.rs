@@ -12,7 +12,7 @@ use alloc::{boxed::Box, vec, vec::Vec};
 #[cfg(feature = "std")]
 use std::io::{self, Seek, SeekFrom};
 
-pub use reader::XzReader;
+pub use reader::{XzReader, XzStream};
 #[cfg(feature = "std")]
 pub use reader_mt::XzReaderMt;
 use sha2::Digest;

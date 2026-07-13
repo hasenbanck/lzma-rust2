@@ -122,7 +122,7 @@ pub use xz::XzReaderMt;
 #[cfg(all(feature = "xz", feature = "encoder", feature = "std"))]
 pub use xz::XzWriterMt;
 #[cfg(feature = "xz")]
-pub use xz::{CheckType, FilterConfig, FilterType, XzReader};
+pub use xz::{CheckType, FilterConfig, FilterType, XzReader, XzStream};
 #[cfg(all(feature = "xz", feature = "encoder"))]
 pub use xz::{XzOptions, XzWriter};
 

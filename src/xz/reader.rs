@@ -1,11 +1,16 @@
-use alloc::boxed::Box;
+use alloc::{boxed::Box, vec::Vec};
 
 use super::{
-    BlockHeader, ChecksumCalculator, FilterType, Index, StreamFooter, StreamHeader, XZ_MAGIC,
+    BlockHeader, CheckType, ChecksumCalculator, FilterType, Index, IndexRecord, StreamFooter,
+    StreamHeader, XZ_FOOTER_MAGIC, XZ_MAGIC, count_multibyte_integer_size,
+    parse_multibyte_integer,
 };
 use crate::{
     CountingReader, Lzma2Reader, Read, Result, error_invalid_data,
     filter::{bcj::BcjReader, delta::DeltaReader},
+    filter::{bcj::BcjFilter, delta::Delta},
+    lzma2_reader::{Action, Lzma2Stream, Status, StreamResult},
+    crc::Crc32,
 };
 
 #[allow(clippy::large_enum_variant)]
@@ -430,4 +435,813 @@ impl<R: Read> Read for XzReader<R> {
             }
         }
     }
+}
+
+// ── Sans-I/O XZ stream ─────────────────────────────────────────────────────
+
+enum StreamFilter {
+    Delta(Delta),
+    Bcj(BcjFilter),
+}
+
+impl StreamFilter {
+    fn from_filter_type(ft: FilterType, property: u32) -> Option<Self> {
+        match ft {
+            FilterType::Delta => Some(StreamFilter::Delta(Delta::new(property as usize))),
+            FilterType::BcjX86 => {
+                Some(StreamFilter::Bcj(BcjFilter::new_x86(property as usize, false)))
+            }
+            FilterType::BcjArm => {
+                Some(StreamFilter::Bcj(BcjFilter::new_arm(property as usize, false)))
+            }
+            FilterType::BcjArm64 => {
+                Some(StreamFilter::Bcj(BcjFilter::new_arm64(property as usize, false)))
+            }
+            FilterType::BcjArmThumb => {
+                Some(StreamFilter::Bcj(BcjFilter::new_arm_thumb(property as usize, false)))
+            }
+            FilterType::BcjPpc => {
+                Some(StreamFilter::Bcj(BcjFilter::new_power_pc(property as usize, false)))
+            }
+            FilterType::BcjSparc => {
+                Some(StreamFilter::Bcj(BcjFilter::new_sparc(property as usize, false)))
+            }
+            FilterType::BcjIa64 => {
+                Some(StreamFilter::Bcj(BcjFilter::new_ia64(property as usize, false)))
+            }
+            FilterType::BcjRiscv => {
+                Some(StreamFilter::Bcj(BcjFilter::new_riscv(property as usize, false)))
+            }
+            FilterType::Lzma2 => None,
+        }
+    }
+
+    fn apply_decode(&mut self, buf: &mut [u8]) -> usize {
+        match self {
+            StreamFilter::Delta(d) => {
+                d.decode(buf);
+                buf.len()
+            }
+            StreamFilter::Bcj(b) => b.code(buf),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum XzStreamState {
+    StreamHeader,
+    BlockHeaderSize,
+    BlockHeaderBody { header_size: usize },
+    Lzma2Data,
+    BlockPadding,
+    BlockChecksum { remaining: usize },
+    IndexCount,
+    IndexRecordUnpadded { remaining: u64 },
+    IndexRecordUncompressed { remaining: u64 },
+    IndexPaddingCrc,
+    StreamFooter,
+    InterStreamPadding,
+    Finished,
+}
+
+/// Sans-I/O XZ stream decoder.
+///
+/// Implements a buffer-pair API: call `process()` repeatedly with input/output
+/// buffers until `Status::StreamEnd` is returned.
+pub struct XzStream {
+    state: XzStreamState,
+    accum: Vec<u8>,
+    accum_needed: usize,
+    lzma2: Option<Lzma2Stream>,
+    checksum: Option<ChecksumCalculator>,
+    check_type: CheckType,
+    block_count: usize,
+    block_header_size: u64,
+    block_compressed_size: u64,
+    block_uncompressed_size: u64,
+    index_records: Vec<IndexRecord>,
+    index_crc: Crc32,
+    index_size: usize,
+    allow_multiple_streams: bool,
+    total_in: u64,
+    total_out: u64,
+    filter: Option<StreamFilter>,
+    filter_buf: Vec<u8>,
+    filter_pos: usize,
+    filter_unfiltered: usize,
+}
+
+impl XzStream {
+    /// Create a new XZ stream decoder.
+    ///
+    /// If `allow_multiple_streams` is true, concatenated XZ streams are decoded
+    /// sequentially until EOF.
+    pub fn new(allow_multiple_streams: bool) -> Self {
+        Self {
+            state: XzStreamState::StreamHeader,
+            accum: Vec::with_capacity(1024),
+            accum_needed: 12,
+            lzma2: None,
+            checksum: None,
+            check_type: CheckType::None,
+            block_count: 0,
+            block_header_size: 0,
+            block_compressed_size: 0,
+            block_uncompressed_size: 0,
+            index_records: Vec::new(),
+            index_crc: Crc32::new(),
+            index_size: 0,
+            allow_multiple_streams,
+            total_in: 0,
+            total_out: 0,
+            filter: None,
+            filter_buf: Vec::new(),
+            filter_pos: 0,
+            filter_unfiltered: 0,
+        }
+    }
+
+    /// Total bytes consumed from input across all `process()` calls.
+    pub fn total_in(&self) -> u64 {
+        self.total_in
+    }
+
+    /// Total bytes produced to output across all `process()` calls.
+    pub fn total_out(&self) -> u64 {
+        self.total_out
+    }
+
+    /// Process available data from `input` into `output`.
+    ///
+    /// Returns how many bytes were consumed/produced and the stream status.
+    /// Call repeatedly until `Status::StreamEnd` is returned.
+    pub fn process(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        action: Action,
+    ) -> Result<StreamResult> {
+        let mut in_pos = 0;
+        let mut out_pos = 0;
+
+        loop {
+            match &self.state {
+                XzStreamState::Finished => {
+                    return Ok(StreamResult {
+                        bytes_consumed: in_pos,
+                        bytes_produced: out_pos,
+                        status: Status::StreamEnd,
+                    });
+                }
+
+                XzStreamState::Lzma2Data => {
+                    if self.filter.is_some() {
+                        if self.process_lzma2_filtered(
+                            input, output, action, &mut in_pos, &mut out_pos,
+                        )? == 0
+                        {
+                            return Ok(StreamResult {
+                                bytes_consumed: in_pos,
+                                bytes_produced: out_pos,
+                                status: Status::Ok,
+                            });
+                        }
+                    } else if let Some(result) = self.process_lzma2_unfiltered(
+                        input, output, action, &mut in_pos, &mut out_pos,
+                    )? {
+                        return Ok(result);
+                    }
+                }
+
+                _ => {
+                    if self.accum.len() < self.accum_needed {
+                        if in_pos >= input.len() {
+                            if action == Action::Finish {
+                                if matches!(self.state, XzStreamState::InterStreamPadding)
+                                {
+                                    if !self.accum.is_empty() {
+                                        return Err(error_invalid_data(
+                                            "inter-stream padding not a multiple of 4 bytes",
+                                        ));
+                                    }
+                                    self.state = XzStreamState::Finished;
+                                    continue;
+                                }
+                                return Err(error_invalid_data(
+                                    "unexpected end of XZ stream",
+                                ));
+                            }
+                            return Ok(StreamResult {
+                                bytes_consumed: in_pos,
+                                bytes_produced: out_pos,
+                                status: Status::Ok,
+                            });
+                        }
+                        let available = &input[in_pos..];
+                        let need = self.accum_needed - self.accum.len();
+                        let to_copy = need.min(available.len());
+                        self.accum.extend_from_slice(&available[..to_copy]);
+                        in_pos += to_copy;
+                        self.total_in += to_copy as u64;
+                        if self.accum.len() < self.accum_needed {
+                            return Ok(StreamResult {
+                                bytes_consumed: in_pos,
+                                bytes_produced: out_pos,
+                                status: Status::Ok,
+                            });
+                        }
+                    }
+
+                    self.process_accumulated()?;
+                }
+            }
+        }
+    }
+
+    fn process_lzma2_unfiltered(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        action: Action,
+        in_pos: &mut usize,
+        out_pos: &mut usize,
+    ) -> Result<Option<StreamResult>> {
+        let lzma2 = self.lzma2.as_mut().unwrap();
+
+        if lzma2.is_draining() {
+            if *out_pos >= output.len() {
+                return Ok(Some(StreamResult {
+                    bytes_consumed: *in_pos,
+                    bytes_produced: *out_pos,
+                    status: Status::Ok,
+                }));
+            }
+            let prev_out = *out_pos;
+            lzma2.drain_with_filter(output, out_pos);
+            let drained = *out_pos - prev_out;
+            if drained > 0 {
+                self.total_out += drained as u64;
+                if let Some(cs) = self.checksum.as_mut() {
+                    cs.update(&output[prev_out..*out_pos]);
+                }
+            }
+            if lzma2.has_output() {
+                return Ok(Some(StreamResult {
+                    bytes_consumed: *in_pos,
+                    bytes_produced: *out_pos,
+                    status: Status::Ok,
+                }));
+            }
+            if lzma2.is_finished() {
+                self.finish_lzma2_block()?;
+            }
+            return Ok(None);
+        }
+
+        let result = lzma2.process(
+            &input[*in_pos..],
+            &mut output[*out_pos..],
+            action,
+        )?;
+        *in_pos += result.bytes_consumed;
+        self.total_in += result.bytes_consumed as u64;
+
+        if result.bytes_produced > 0 {
+            if let Some(cs) = self.checksum.as_mut() {
+                cs.update(
+                    &output[*out_pos..*out_pos + result.bytes_produced],
+                );
+            }
+            *out_pos += result.bytes_produced;
+            self.total_out += result.bytes_produced as u64;
+        }
+
+        if result.status == Status::StreamEnd {
+            self.finish_lzma2_block()?;
+        } else if *in_pos >= input.len() || *out_pos >= output.len() {
+            return Ok(Some(StreamResult {
+                bytes_consumed: *in_pos,
+                bytes_produced: *out_pos,
+                status: Status::Ok,
+            }));
+        }
+        Ok(None)
+    }
+
+    fn process_lzma2_filtered(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        action: Action,
+        in_pos: &mut usize,
+        out_pos: &mut usize,
+    ) -> Result<usize> {
+        if self.filter_pos < self.filter_buf.len() - self.filter_unfiltered {
+            return self.emit_filtered_output(input, output, action, in_pos, out_pos);
+        }
+
+        if self.lzma2.as_ref().unwrap().is_draining() {
+            self.drain_and_filter_lzma2();
+            let lzma2 = self.lzma2.as_ref().unwrap();
+            if !lzma2.has_output() && lzma2.is_finished() {
+                self.flush_filter_pending();
+            }
+            return Ok(1);
+        }
+
+        let result = self.lzma2.as_mut().unwrap()
+            .process(&input[*in_pos..], &mut [], action)?;
+        *in_pos += result.bytes_consumed;
+        self.total_in += result.bytes_consumed as u64;
+
+        if result.status == Status::StreamEnd {
+            return self.try_complete_filtered_block();
+        }
+
+        if *in_pos >= input.len() && !self.lzma2.as_ref().unwrap().is_draining() {
+            return Ok(0);
+        }
+        Ok(1)
+    }
+
+    fn emit_filtered_output(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        action: Action,
+        in_pos: &mut usize,
+        out_pos: &mut usize,
+    ) -> Result<usize> {
+        let ready_end = self.filter_buf.len() - self.filter_unfiltered;
+        let available = ready_end - self.filter_pos;
+        let space = output.len() - *out_pos;
+        let n = available.min(space);
+        output[*out_pos..*out_pos + n]
+            .copy_from_slice(&self.filter_buf[self.filter_pos..self.filter_pos + n]);
+        if let Some(cs) = self.checksum.as_mut() {
+            cs.update(&output[*out_pos..*out_pos + n]);
+        }
+        *out_pos += n;
+        self.total_out += n as u64;
+        self.filter_pos += n;
+
+        if self.filter_pos < ready_end {
+            while self.lzma2.as_ref().unwrap().is_draining() {
+                if self.drain_and_filter_lzma2() == 0 {
+                    break;
+                }
+            }
+            let should_consume = {
+                let lzma2 = self.lzma2.as_ref().unwrap();
+                *in_pos < input.len() && !lzma2.is_draining() && !lzma2.is_finished()
+            };
+            if should_consume {
+                let result = self.lzma2.as_mut().unwrap()
+                    .process(&input[*in_pos..], &mut [], action)?;
+                *in_pos += result.bytes_consumed;
+                self.total_in += result.bytes_consumed as u64;
+            }
+            return Ok(0);
+        }
+
+        self.compact_filter_buf();
+
+        let is_finished = {
+            let lzma2 = self.lzma2.as_ref().unwrap();
+            !lzma2.has_output() && lzma2.is_finished()
+        };
+        if is_finished {
+            return self.try_complete_filtered_block();
+        }
+        Ok(1)
+    }
+
+    fn drain_and_filter_lzma2(&mut self) -> usize {
+        let lzma2 = self.lzma2.as_mut().unwrap();
+        let prev_len = self.filter_buf.len();
+        lzma2.drain_to_buf(&mut self.filter_buf, 4096);
+        let new_bytes = self.filter_buf.len() - prev_len;
+        if new_bytes > 0 {
+            let filter_start = prev_len - self.filter_unfiltered;
+            let filter_slice = &mut self.filter_buf[filter_start..];
+            let filtered = self.filter.as_mut().unwrap().apply_decode(filter_slice);
+            self.filter_unfiltered = filter_slice.len() - filtered;
+        }
+        new_bytes
+    }
+
+    fn compact_filter_buf(&mut self) {
+        if self.filter_unfiltered > 0 {
+            let tail_start = self.filter_buf.len() - self.filter_unfiltered;
+            let pending: Vec<u8> = self.filter_buf[tail_start..].to_vec();
+            self.filter_buf.clear();
+            self.filter_buf.extend_from_slice(&pending);
+        } else {
+            self.filter_buf.clear();
+        }
+        self.filter_pos = 0;
+        self.filter_unfiltered = self.filter_buf.len();
+    }
+
+    fn try_complete_filtered_block(&mut self) -> Result<usize> {
+        self.flush_filter_pending();
+        if self.filter_pos < self.filter_buf.len() - self.filter_unfiltered {
+            return Ok(1);
+        }
+        self.filter.take();
+        self.finish_lzma2_block()?;
+        Ok(1)
+    }
+
+    fn flush_filter_pending(&mut self) {
+        self.filter_unfiltered = 0;
+    }
+
+    fn finish_lzma2_block(&mut self) -> Result<()> {
+        let lzma2 = self.lzma2.as_ref().unwrap();
+        self.block_compressed_size = lzma2.total_in();
+        self.block_uncompressed_size = lzma2.total_out();
+
+        let pad_needed =
+            ((4 - (self.block_compressed_size % 4)) % 4) as usize;
+        if pad_needed > 0 {
+            self.state = XzStreamState::BlockPadding;
+            self.accum.clear();
+            self.accum_needed = pad_needed;
+        } else {
+            let check_size = self.check_type.checksum_size() as usize;
+            if check_size > 0 {
+                self.state = XzStreamState::BlockChecksum {
+                    remaining: check_size,
+                };
+                self.accum.clear();
+                self.accum_needed = check_size;
+            } else {
+                self.push_index_record();
+                self.state = XzStreamState::BlockHeaderSize;
+                self.accum.clear();
+                self.accum_needed = 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn push_index_record(&mut self) {
+        let check_size = self.check_type.checksum_size();
+        self.checksum.take();
+        self.index_records.push(IndexRecord {
+            unpadded_size: self.block_header_size
+                + self.block_compressed_size
+                + check_size,
+            uncompressed_size: self.block_uncompressed_size,
+        });
+    }
+
+    fn process_accumulated(&mut self) -> Result<()> {
+        match self.state {
+            XzStreamState::StreamHeader => self.process_stream_header(),
+            XzStreamState::BlockHeaderSize => self.process_block_header_size(),
+            XzStreamState::BlockHeaderBody { header_size } => {
+                self.process_block_header_body(header_size)
+            }
+            XzStreamState::BlockPadding => self.process_block_padding(),
+            XzStreamState::BlockChecksum { remaining } => {
+                self.process_block_checksum(remaining)
+            }
+            XzStreamState::IndexCount => self.process_index_count(),
+            XzStreamState::IndexRecordUnpadded { remaining } => {
+                self.process_index_record_unpadded(remaining)
+            }
+            XzStreamState::IndexRecordUncompressed { remaining } => {
+                self.process_index_record_uncompressed(remaining)
+            }
+            XzStreamState::IndexPaddingCrc => self.process_index_padding_crc(),
+            XzStreamState::StreamFooter => self.process_stream_footer(),
+            XzStreamState::InterStreamPadding => self.process_inter_stream_padding(),
+            _ => Ok(()),
+        }
+    }
+
+    fn process_stream_header(&mut self) -> Result<()> {
+        let data = &self.accum;
+        if data[..6] != XZ_MAGIC {
+            return Err(error_invalid_data("invalid XZ magic bytes"));
+        }
+        if data[6] != 0 {
+            return Err(error_invalid_data("invalid XZ stream flags"));
+        }
+        let check_type = CheckType::from_byte(data[7])?;
+        let expected_crc =
+            u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+        if expected_crc != Crc32::checksum(&data[6..8]) {
+            return Err(error_invalid_data("XZ stream header CRC32 mismatch"));
+        }
+        self.check_type = check_type;
+        self.index_records.clear();
+        self.block_count = 0;
+        self.state = XzStreamState::BlockHeaderSize;
+        self.accum.clear();
+        self.accum_needed = 1;
+        Ok(())
+    }
+
+    fn process_block_header_size(&mut self) -> Result<()> {
+        let byte = self.accum[0];
+        if byte == 0x00 {
+            self.state = XzStreamState::IndexCount;
+            self.index_crc = Crc32::new();
+            self.index_crc.update(&[0x00]);
+            self.index_size = 0;
+            self.accum.clear();
+            self.accum_needed = 1;
+        } else {
+            let header_size = (byte as usize + 1) * 4;
+            self.state = XzStreamState::BlockHeaderBody { header_size };
+            self.accum_needed = header_size;
+        }
+        Ok(())
+    }
+
+    fn process_block_header_body(&mut self, header_size: usize) -> Result<()> {
+        let data = &self.accum[..header_size];
+
+        let crc_offset = header_size - 4;
+        let expected_crc = u32::from_le_bytes([
+            data[crc_offset],
+            data[crc_offset + 1],
+            data[crc_offset + 2],
+            data[crc_offset + 3],
+        ]);
+        let actual_crc = Crc32::checksum(&data[..crc_offset]);
+        if expected_crc != actual_crc {
+            return Err(error_invalid_data("block header CRC32 mismatch"));
+        }
+
+        let (filters, properties, _) = BlockHeader::parse_from_slice(data)?;
+
+        let mut lzma2_dict_size = 0u32;
+        let mut found_lzma2 = false;
+        let mut pre_filter: Option<StreamFilter> = None;
+        for i in 0..4 {
+            if let Some(ft) = filters[i] {
+                if ft == FilterType::Lzma2 {
+                    lzma2_dict_size = properties[i];
+                    found_lzma2 = true;
+                } else if let Some(f) =
+                    StreamFilter::from_filter_type(ft, properties[i])
+                {
+                    // TODO: Support multiple filters for sans-I/O API.
+                    if pre_filter.is_some() {
+                        return Err(error_invalid_data(
+                            "multiple non-LZMA2 filters not supported yet for stream API",
+                        ));
+                    }
+                    pre_filter = Some(f);
+                }
+            }
+        }
+        if !found_lzma2 {
+            return Err(error_invalid_data("no LZMA2 filter in block"));
+        }
+
+        self.lzma2 = Some(Lzma2Stream::new(lzma2_dict_size));
+        self.checksum = Some(ChecksumCalculator::new(self.check_type));
+        self.filter = pre_filter;
+        self.filter_buf.clear();
+        self.filter_pos = 0;
+        self.filter_unfiltered = 0;
+        self.block_count += 1;
+        self.block_header_size = header_size as u64;
+        self.block_compressed_size = 0;
+        self.block_uncompressed_size = 0;
+
+        self.state = XzStreamState::Lzma2Data;
+        self.accum.clear();
+        Ok(())
+    }
+
+    fn process_block_padding(&mut self) -> Result<()> {
+        for &b in self.accum.iter() {
+            if b != 0 {
+                return Err(error_invalid_data("non-zero block padding"));
+            }
+        }
+
+        let check_size = self.check_type.checksum_size() as usize;
+        if check_size > 0 {
+            self.state = XzStreamState::BlockChecksum {
+                remaining: check_size,
+            };
+            self.accum.clear();
+            self.accum_needed = check_size;
+        } else {
+            self.push_index_record();
+            self.state = XzStreamState::BlockHeaderSize;
+            self.accum.clear();
+            self.accum_needed = 1;
+        }
+        Ok(())
+    }
+
+    fn process_block_checksum(&mut self, remaining: usize) -> Result<()> {
+        if self.accum.len() < remaining {
+            self.accum_needed = remaining;
+            return Ok(());
+        }
+        if let Some(checksum) = self.checksum.take() {
+            if !checksum.verify(&self.accum[..remaining]) {
+                return Err(error_invalid_data("block checksum mismatch"));
+            }
+        }
+        self.push_index_record();
+        self.state = XzStreamState::BlockHeaderSize;
+        self.accum.clear();
+        self.accum_needed = 1;
+        Ok(())
+    }
+
+    fn process_index_count(&mut self) -> Result<()> {
+        if !has_complete_vli(&self.accum)? {
+            self.accum_needed = self.accum.len() + 1;
+            return Ok(());
+        }
+        let num_records = parse_multibyte_integer(&self.accum)?;
+        let vli_size = count_multibyte_integer_size(&self.accum);
+        self.index_crc.update(&self.accum[..vli_size]);
+        self.index_size += vli_size;
+
+        if num_records != self.block_count as u64 {
+            return Err(error_invalid_data(
+                "index record count does not match number of blocks",
+            ));
+        }
+
+        self.accum.clear();
+        if num_records > 0 {
+            self.state = XzStreamState::IndexRecordUnpadded { remaining: num_records };
+            self.accum_needed = 1;
+        } else {
+            self.state = XzStreamState::IndexPaddingCrc;
+            let pad_needed = (4 - ((1 + self.index_size) % 4)) % 4;
+            self.accum_needed = pad_needed + 4;
+        }
+        Ok(())
+    }
+
+    fn process_index_record_unpadded(&mut self, remaining: u64) -> Result<()> {
+        if !has_complete_vli(&self.accum)? {
+            self.accum_needed = self.accum.len() + 1;
+            return Ok(());
+        }
+        let unpadded = parse_multibyte_integer(&self.accum)?;
+        let vli_size = count_multibyte_integer_size(&self.accum);
+        self.index_crc.update(&self.accum[..vli_size]);
+        self.index_size += vli_size;
+
+        let idx = self.block_count - remaining as usize;
+        if self.index_records[idx].unpadded_size != unpadded {
+            return Err(error_invalid_data("index unpadded size mismatch"));
+        }
+
+        self.accum.clear();
+        self.state = XzStreamState::IndexRecordUncompressed { remaining };
+        self.accum_needed = 1;
+        Ok(())
+    }
+
+    fn process_index_record_uncompressed(&mut self, remaining: u64) -> Result<()> {
+        if !has_complete_vli(&self.accum)? {
+            self.accum_needed = self.accum.len() + 1;
+            return Ok(());
+        }
+        let uncompressed = parse_multibyte_integer(&self.accum)?;
+        let vli_size = count_multibyte_integer_size(&self.accum);
+        self.index_crc.update(&self.accum[..vli_size]);
+        self.index_size += vli_size;
+
+        let idx = self.block_count - remaining as usize;
+        if self.index_records[idx].uncompressed_size != uncompressed {
+            return Err(error_invalid_data("index uncompressed size mismatch"));
+        }
+
+        self.accum.clear();
+        let remaining = remaining - 1;
+        if remaining > 0 {
+            self.state = XzStreamState::IndexRecordUnpadded { remaining };
+            self.accum_needed = 1;
+        } else {
+            self.state = XzStreamState::IndexPaddingCrc;
+            let pad_needed = (4 - ((1 + self.index_size) % 4)) % 4;
+            self.accum_needed = pad_needed + 4;
+        }
+        Ok(())
+    }
+
+    fn process_index_padding_crc(&mut self) -> Result<()> {
+        let pad_needed = (4 - ((1 + self.index_size) % 4)) % 4;
+        let total_needed = pad_needed + 4;
+        if self.accum.len() < total_needed {
+            self.accum_needed = total_needed;
+            return Ok(());
+        }
+
+        for &b in &self.accum[..pad_needed] {
+            if b != 0 {
+                return Err(error_invalid_data("non-zero index padding"));
+            }
+        }
+        self.index_crc.update(&self.accum[..pad_needed]);
+
+        let expected_crc = u32::from_le_bytes([
+            self.accum[pad_needed],
+            self.accum[pad_needed + 1],
+            self.accum[pad_needed + 2],
+            self.accum[pad_needed + 3],
+        ]);
+
+        let actual_crc = core::mem::replace(&mut self.index_crc, Crc32::new()).finalize();
+        if actual_crc != expected_crc {
+            return Err(error_invalid_data("index CRC32 mismatch"));
+        }
+
+        self.accum.clear();
+        self.accum_needed = 12;
+        self.state = XzStreamState::StreamFooter;
+        Ok(())
+    }
+
+    fn process_stream_footer(&mut self) -> Result<()> {
+        let data = &self.accum;
+        if data.len() < 12 {
+            self.accum_needed = 12;
+            return Ok(());
+        }
+
+        let expected_crc =
+            u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let actual_crc = Crc32::checksum(&data[4..10]);
+        if expected_crc != actual_crc {
+            return Err(error_invalid_data("stream footer CRC32 mismatch"));
+        }
+        if data[10..12] != XZ_FOOTER_MAGIC {
+            return Err(error_invalid_data("invalid XZ footer magic"));
+        }
+        if data[8] != 0 {
+            return Err(error_invalid_data(
+                "reserved stream footer flags byte is non-zero",
+            ));
+        }
+        let footer_check_type = CheckType::from_byte(data[9])?;
+        if footer_check_type != self.check_type {
+            return Err(error_invalid_data(
+                "stream footer flags don't match header",
+            ));
+        }
+
+        if self.allow_multiple_streams {
+            self.state = XzStreamState::InterStreamPadding;
+            self.accum.clear();
+            self.accum_needed = 4;
+        } else {
+            self.state = XzStreamState::Finished;
+        }
+        Ok(())
+    }
+
+    fn process_inter_stream_padding(&mut self) -> Result<()> {
+        if self.accum.len() < 4 {
+            self.accum_needed = 4;
+            return Ok(());
+        }
+        if self.accum[..4] == [0, 0, 0, 0] {
+            self.accum.clear();
+            self.accum_needed = 4;
+        } else if self.accum[..6.min(self.accum.len())]
+            == XZ_MAGIC[..self.accum.len().min(6)]
+        {
+            if self.accum.len() >= 6 && self.accum[..6] == XZ_MAGIC {
+                self.state = XzStreamState::StreamHeader;
+                self.accum_needed = 12;
+            } else {
+                self.accum_needed = 12;
+            }
+        } else {
+            return Err(error_invalid_data("invalid inter-stream padding"));
+        }
+        Ok(())
+    }
+
+
+}
+
+fn has_complete_vli(data: &[u8]) -> Result<bool> {
+    if data.len() > 9 {
+        return Err(error_invalid_data("XZ multibyte integer too long"));
+    }
+    for &byte in data {
+        if (byte & 0x80) == 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
