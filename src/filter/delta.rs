@@ -11,14 +11,14 @@ const MAX_DISTANCE: usize = 256;
 const _MIN_DISTANCE: usize = 1;
 const DIS_MASK: usize = MAX_DISTANCE - 1;
 
-struct Delta {
+pub(crate) struct Delta {
     distance: usize,
     history: [u8; MAX_DISTANCE],
     pos: u8,
 }
 
 impl Delta {
-    fn new(distance: usize) -> Self {
+    pub(crate) fn new(distance: usize) -> Self {
         Self {
             distance,
             history: [0; MAX_DISTANCE],
@@ -26,7 +26,7 @@ impl Delta {
         }
     }
 
-    fn decode(&mut self, buf: &mut [u8]) {
+    pub(crate) fn decode(&mut self, buf: &mut [u8]) {
         for item in buf {
             let pos = self.pos as usize;
             let h = self.history[(self.distance.wrapping_add(pos)) & DIS_MASK];
