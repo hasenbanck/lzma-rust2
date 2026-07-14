@@ -730,6 +730,12 @@ impl BlockHeader {
             properties[i] = property;
         }
 
+        if filters.iter().filter_map(|x| *x).next_back() != Some(FilterType::Lzma2) {
+            return Err(error_invalid_data(
+                "XZ block's last filter must be a LZMA2 filter",
+            ));
+        }
+
         Ok((filters, properties, header_size))
     }
 }
