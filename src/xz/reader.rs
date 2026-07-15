@@ -437,8 +437,6 @@ impl<R: Read> Read for XzReader<R> {
     }
 }
 
-// ── Sans-I/O XZ stream ─────────────────────────────────────────────────────
-
 enum StreamFilter {
     Delta(Delta),
     Bcj(BcjFilter),
@@ -508,6 +506,13 @@ enum XzStreamState {
 ///
 /// Implements a buffer-pair API: call `process()` repeatedly with input/output
 /// buffers until `Status::StreamEnd` is returned.
+/// 
+/// # Limitations
+///
+/// A block may contain at most one non-LZMA2 filter (a single BCJ or Delta
+/// filter) preceding the terminating LZMA2 filter. Streams that chain multiple
+/// non-LZMA2 filters in a block are rejected with an error. Use the blocking
+/// [`XzReader`] to decode those.
 pub struct XzStream {
     state: XzStreamState,
     accum: Vec<u8>,
@@ -736,8 +741,12 @@ impl XzStream {
         in_pos: &mut usize,
         out_pos: &mut usize,
     ) -> Result<usize> {
+        if *out_pos >= output.len() {
+            return Ok(0);
+        }
+
         if self.filter_pos < self.filter_buf.len() - self.filter_unfiltered {
-            return self.emit_filtered_output(input, output, action, in_pos, out_pos);
+            return self.emit_filtered_output(output, out_pos);
         }
 
         if self.lzma2.as_ref().unwrap().is_draining() {
@@ -766,10 +775,7 @@ impl XzStream {
 
     fn emit_filtered_output(
         &mut self,
-        input: &[u8],
         output: &mut [u8],
-        action: Action,
-        in_pos: &mut usize,
         out_pos: &mut usize,
     ) -> Result<usize> {
         let ready_end = self.filter_buf.len() - self.filter_unfiltered;
@@ -786,21 +792,6 @@ impl XzStream {
         self.filter_pos += n;
 
         if self.filter_pos < ready_end {
-            while self.lzma2.as_ref().unwrap().is_draining() {
-                if self.drain_and_filter_lzma2() == 0 {
-                    break;
-                }
-            }
-            let should_consume = {
-                let lzma2 = self.lzma2.as_ref().unwrap();
-                *in_pos < input.len() && !lzma2.is_draining() && !lzma2.is_finished()
-            };
-            if should_consume {
-                let result = self.lzma2.as_mut().unwrap()
-                    .process(&input[*in_pos..], &mut [], action)?;
-                *in_pos += result.bytes_consumed;
-                self.total_in += result.bytes_consumed as u64;
-            }
             return Ok(0);
         }
 
