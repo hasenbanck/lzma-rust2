@@ -372,7 +372,11 @@ impl Lzma2Stream {
 
                 Lzma2State::CompressedData { remaining } => {
                     if let Some(result) = self.process_compressed_data(
-                        input, action, &mut in_pos, out_pos, remaining,
+                        input,
+                        action,
+                        &mut in_pos,
+                        out_pos,
+                        remaining,
                     )? {
                         return Ok(result);
                     }
@@ -380,16 +384,20 @@ impl Lzma2Stream {
 
                 Lzma2State::UncompressedData { remaining } => {
                     if let Some(result) = self.process_uncompressed_data(
-                        input, action, &mut in_pos, out_pos, remaining,
+                        input,
+                        action,
+                        &mut in_pos,
+                        out_pos,
+                        remaining,
                     )? {
                         return Ok(result);
                     }
                 }
 
                 Lzma2State::ChunkHeader => {
-                    if let Some(result) = self.accumulate_chunk_header(
-                        input, action, &mut in_pos, out_pos,
-                    )? {
+                    if let Some(result) =
+                        self.accumulate_chunk_header(input, action, &mut in_pos, out_pos)?
+                    {
                         return Ok(result);
                     }
                 }
@@ -420,9 +428,7 @@ impl Lzma2Stream {
         let decoded = self.lz.get_pos() - pos_before;
         self.uncompressed_size -= decoded;
 
-        if self.uncompressed_size == 0
-            && (!self.rc.is_finished() || self.lz.has_pending())
-        {
+        if self.uncompressed_size == 0 && (!self.rc.is_finished() || self.lz.has_pending()) {
             return Err(error_invalid_input("rc not finished or lz has pending"));
         }
 
@@ -440,9 +446,7 @@ impl Lzma2Stream {
     ) -> crate::Result<Option<StreamResult>> {
         if *in_pos >= input.len() {
             if action == Action::Finish {
-                return Err(error_invalid_data(
-                    "unexpected end of LZMA2 stream",
-                ));
+                return Err(error_invalid_data("unexpected end of LZMA2 stream"));
             }
             return Ok(Some(StreamResult {
                 bytes_consumed: *in_pos,
@@ -452,8 +456,7 @@ impl Lzma2Stream {
         }
         let available = &input[*in_pos..];
         let to_copy = remaining.min(available.len());
-        self.compressed_buf
-            .extend_from_slice(&available[..to_copy]);
+        self.compressed_buf.extend_from_slice(&available[..to_copy]);
         *in_pos += to_copy;
         self.total_in += to_copy as u64;
         let new_remaining = remaining - to_copy;
@@ -479,16 +482,12 @@ impl Lzma2Stream {
     ) -> crate::Result<Option<StreamResult>> {
         let lz_space = self.lz.available_space();
         if lz_space == 0 {
-            self.state = Lzma2State::DrainUncompressed {
-                remaining,
-            };
+            self.state = Lzma2State::DrainUncompressed { remaining };
             return Ok(None);
         }
         if *in_pos >= input.len() {
             if action == Action::Finish {
-                return Err(error_invalid_data(
-                    "unexpected end of LZMA2 stream",
-                ));
+                return Err(error_invalid_data("unexpected end of LZMA2 stream"));
             }
             return Ok(Some(StreamResult {
                 bytes_consumed: *in_pos,
@@ -528,9 +527,7 @@ impl Lzma2Stream {
         if self.accum.len() < self.accum_needed {
             if *in_pos >= input.len() {
                 if action == Action::Finish {
-                    return Err(error_invalid_data(
-                        "unexpected end of LZMA2 stream",
-                    ));
+                    return Err(error_invalid_data("unexpected end of LZMA2 stream"));
                 }
                 return Ok(Some(StreamResult {
                     bytes_consumed: *in_pos,
@@ -556,16 +553,14 @@ impl Lzma2Stream {
         Ok(None)
     }
 
-
     pub(crate) fn is_draining(&self) -> bool {
-        matches!(self.state, Lzma2State::DrainOutput | Lzma2State::DrainUncompressed { .. })
+        matches!(
+            self.state,
+            Lzma2State::DrainOutput | Lzma2State::DrainUncompressed { .. }
+        )
     }
 
-    pub(crate) fn drain_with_filter(
-        &mut self,
-        output: &mut [u8],
-        out_pos: &mut usize,
-    ) -> usize {
+    pub(crate) fn drain_with_filter(&mut self, output: &mut [u8], out_pos: &mut usize) -> usize {
         if *out_pos >= output.len() {
             return 0;
         }
@@ -642,8 +637,7 @@ impl Lzma2Stream {
         self.uncompressed_size = ((control & 0x1F) as usize) << 16;
         let uncompressed_hi = u16::from_be_bytes([self.accum[1], self.accum[2]]);
         self.uncompressed_size += uncompressed_hi as usize + 1;
-        let compressed_size =
-            u16::from_be_bytes([self.accum[3], self.accum[4]]) as usize + 1;
+        let compressed_size = u16::from_be_bytes([self.accum[3], self.accum[4]]) as usize + 1;
 
         if control >= 0xC0 {
             self.need_props = false;
@@ -679,8 +673,7 @@ impl Lzma2Stream {
             return Err(error_invalid_input("corrupted input data (LZMA2:0)"));
         }
 
-        self.uncompressed_size =
-            u16::from_be_bytes([self.accum[1], self.accum[2]]) as usize + 1;
+        self.uncompressed_size = u16::from_be_bytes([self.accum[1], self.accum[2]]) as usize + 1;
 
         self.state = Lzma2State::UncompressedData {
             remaining: self.uncompressed_size,

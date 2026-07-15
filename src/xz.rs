@@ -36,7 +36,7 @@ use crate::{
 
 const XZ_MAGIC: [u8; 6] = [0xFD, b'7', b'z', b'X', b'Z', 0x00];
 
-const XZ_FOOTER_MAGIC: [u8; 2] = [b'Y', b'Z'];
+const XZ_FOOTER_MAGIC: [u8; 2] = *b"YZ";
 
 #[derive(Debug, Clone)]
 struct IndexRecord {

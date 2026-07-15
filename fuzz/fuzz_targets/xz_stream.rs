@@ -1,7 +1,6 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-
 use lzma_rust2::{Action, Status, XzStream};
 
 fuzz_target!(|data: &[u8]| {

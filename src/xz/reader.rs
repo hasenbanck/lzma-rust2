@@ -2,15 +2,17 @@ use alloc::{boxed::Box, vec::Vec};
 
 use super::{
     BlockHeader, CheckType, ChecksumCalculator, FilterType, Index, IndexRecord, StreamFooter,
-    StreamHeader, XZ_FOOTER_MAGIC, XZ_MAGIC, count_multibyte_integer_size,
-    parse_multibyte_integer,
+    StreamHeader, XZ_FOOTER_MAGIC, XZ_MAGIC, count_multibyte_integer_size, parse_multibyte_integer,
 };
 use crate::{
-    CountingReader, Lzma2Reader, Read, Result, error_invalid_data,
-    filter::{bcj::BcjReader, delta::DeltaReader},
-    filter::{bcj::BcjFilter, delta::Delta},
-    lzma2_reader::{Action, Lzma2Stream, Status, StreamResult},
+    CountingReader, Lzma2Reader, Read, Result,
     crc::Crc32,
+    error_invalid_data,
+    filter::{
+        bcj::{BcjFilter, BcjReader},
+        delta::{Delta, DeltaReader},
+    },
+    lzma2_reader::{Action, Lzma2Stream, Status, StreamResult},
 };
 
 #[allow(clippy::large_enum_variant)]
@@ -446,30 +448,38 @@ impl StreamFilter {
     fn from_filter_type(ft: FilterType, property: u32) -> Option<Self> {
         match ft {
             FilterType::Delta => Some(StreamFilter::Delta(Box::new(Delta::new(property as usize)))),
-            FilterType::BcjX86 => {
-                Some(StreamFilter::Bcj(BcjFilter::new_x86(property as usize, false)))
-            }
-            FilterType::BcjArm => {
-                Some(StreamFilter::Bcj(BcjFilter::new_arm(property as usize, false)))
-            }
-            FilterType::BcjArm64 => {
-                Some(StreamFilter::Bcj(BcjFilter::new_arm64(property as usize, false)))
-            }
-            FilterType::BcjArmThumb => {
-                Some(StreamFilter::Bcj(BcjFilter::new_arm_thumb(property as usize, false)))
-            }
-            FilterType::BcjPpc => {
-                Some(StreamFilter::Bcj(BcjFilter::new_power_pc(property as usize, false)))
-            }
-            FilterType::BcjSparc => {
-                Some(StreamFilter::Bcj(BcjFilter::new_sparc(property as usize, false)))
-            }
-            FilterType::BcjIa64 => {
-                Some(StreamFilter::Bcj(BcjFilter::new_ia64(property as usize, false)))
-            }
-            FilterType::BcjRiscv => {
-                Some(StreamFilter::Bcj(BcjFilter::new_riscv(property as usize, false)))
-            }
+            FilterType::BcjX86 => Some(StreamFilter::Bcj(BcjFilter::new_x86(
+                property as usize,
+                false,
+            ))),
+            FilterType::BcjArm => Some(StreamFilter::Bcj(BcjFilter::new_arm(
+                property as usize,
+                false,
+            ))),
+            FilterType::BcjArm64 => Some(StreamFilter::Bcj(BcjFilter::new_arm64(
+                property as usize,
+                false,
+            ))),
+            FilterType::BcjArmThumb => Some(StreamFilter::Bcj(BcjFilter::new_arm_thumb(
+                property as usize,
+                false,
+            ))),
+            FilterType::BcjPpc => Some(StreamFilter::Bcj(BcjFilter::new_power_pc(
+                property as usize,
+                false,
+            ))),
+            FilterType::BcjSparc => Some(StreamFilter::Bcj(BcjFilter::new_sparc(
+                property as usize,
+                false,
+            ))),
+            FilterType::BcjIa64 => Some(StreamFilter::Bcj(BcjFilter::new_ia64(
+                property as usize,
+                false,
+            ))),
+            FilterType::BcjRiscv => Some(StreamFilter::Bcj(BcjFilter::new_riscv(
+                property as usize,
+                false,
+            ))),
             FilterType::Lzma2 => None,
         }
     }
@@ -506,7 +516,7 @@ enum XzStreamState {
 ///
 /// Implements a buffer-pair API: call `process()` repeatedly with input/output
 /// buffers until `Status::StreamEnd` is returned.
-/// 
+///
 /// # Limitations
 ///
 /// A block may contain at most one non-LZMA2 filter (a single BCJ or Delta
@@ -602,7 +612,11 @@ impl XzStream {
                 XzStreamState::Lzma2Data => {
                     if self.filter.is_some() {
                         if self.process_lzma2_filtered(
-                            input, output, action, &mut in_pos, &mut out_pos,
+                            input,
+                            output,
+                            action,
+                            &mut in_pos,
+                            &mut out_pos,
                         )? == 0
                         {
                             return Ok(StreamResult {
@@ -612,7 +626,11 @@ impl XzStream {
                             });
                         }
                     } else if let Some(result) = self.process_lzma2_unfiltered(
-                        input, output, action, &mut in_pos, &mut out_pos,
+                        input,
+                        output,
+                        action,
+                        &mut in_pos,
+                        &mut out_pos,
                     )? {
                         return Ok(result);
                     }
@@ -622,8 +640,7 @@ impl XzStream {
                     if self.accum.len() < self.accum_needed {
                         if in_pos >= input.len() {
                             if action == Action::Finish {
-                                if matches!(self.state, XzStreamState::InterStreamPadding)
-                                {
+                                if matches!(self.state, XzStreamState::InterStreamPadding) {
                                     if !self.accum.is_empty() {
                                         return Err(error_invalid_data(
                                             "inter-stream padding not a multiple of 4 bytes",
@@ -632,9 +649,7 @@ impl XzStream {
                                     self.state = XzStreamState::Finished;
                                     continue;
                                 }
-                                return Err(error_invalid_data(
-                                    "unexpected end of XZ stream",
-                                ));
+                                return Err(error_invalid_data("unexpected end of XZ stream"));
                             }
                             return Ok(StreamResult {
                                 bytes_consumed: in_pos,
@@ -703,19 +718,13 @@ impl XzStream {
             return Ok(None);
         }
 
-        let result = lzma2.process(
-            &input[*in_pos..],
-            &mut output[*out_pos..],
-            action,
-        )?;
+        let result = lzma2.process(&input[*in_pos..], &mut output[*out_pos..], action)?;
         *in_pos += result.bytes_consumed;
         self.total_in += result.bytes_consumed as u64;
 
         if result.bytes_produced > 0 {
             if let Some(cs) = self.checksum.as_mut() {
-                cs.update(
-                    &output[*out_pos..*out_pos + result.bytes_produced],
-                );
+                cs.update(&output[*out_pos..*out_pos + result.bytes_produced]);
             }
             *out_pos += result.bytes_produced;
             self.total_out += result.bytes_produced as u64;
@@ -758,7 +767,10 @@ impl XzStream {
             return Ok(1);
         }
 
-        let result = self.lzma2.as_mut().unwrap()
+        let result = self
+            .lzma2
+            .as_mut()
+            .unwrap()
             .process(&input[*in_pos..], &mut [], action)?;
         *in_pos += result.bytes_consumed;
         self.total_in += result.bytes_consumed as u64;
@@ -773,11 +785,7 @@ impl XzStream {
         Ok(1)
     }
 
-    fn emit_filtered_output(
-        &mut self,
-        output: &mut [u8],
-        out_pos: &mut usize,
-    ) -> Result<usize> {
+    fn emit_filtered_output(&mut self, output: &mut [u8], out_pos: &mut usize) -> Result<usize> {
         let ready_end = self.filter_buf.len() - self.filter_unfiltered;
         let available = ready_end - self.filter_pos;
         let space = output.len() - *out_pos;
@@ -853,8 +861,7 @@ impl XzStream {
         self.block_compressed_size = lzma2.total_in();
         self.block_uncompressed_size = lzma2.total_out();
 
-        let pad_needed =
-            ((4 - (self.block_compressed_size % 4)) % 4) as usize;
+        let pad_needed = ((4 - (self.block_compressed_size % 4)) % 4) as usize;
         if pad_needed > 0 {
             self.state = XzStreamState::BlockPadding;
             self.accum.clear();
@@ -881,9 +888,7 @@ impl XzStream {
         let check_size = self.check_type.checksum_size();
         self.checksum.take();
         self.index_records.push(IndexRecord {
-            unpadded_size: self.block_header_size
-                + self.block_compressed_size
-                + check_size,
+            unpadded_size: self.block_header_size + self.block_compressed_size + check_size,
             uncompressed_size: self.block_uncompressed_size,
         });
     }
@@ -896,9 +901,7 @@ impl XzStream {
                 self.process_block_header_body(header_size)
             }
             XzStreamState::BlockPadding => self.process_block_padding(),
-            XzStreamState::BlockChecksum { remaining } => {
-                self.process_block_checksum(remaining)
-            }
+            XzStreamState::BlockChecksum { remaining } => self.process_block_checksum(remaining),
             XzStreamState::IndexCount => self.process_index_count(),
             XzStreamState::IndexRecordUnpadded { remaining } => {
                 self.process_index_record_unpadded(remaining)
@@ -922,8 +925,7 @@ impl XzStream {
             return Err(error_invalid_data("invalid XZ stream flags"));
         }
         let check_type = CheckType::from_byte(data[7])?;
-        let expected_crc =
-            u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+        let expected_crc = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
         if expected_crc != Crc32::checksum(&data[6..8]) {
             return Err(error_invalid_data("XZ stream header CRC32 mismatch"));
         }
@@ -978,9 +980,7 @@ impl XzStream {
                 if ft == FilterType::Lzma2 {
                     lzma2_dict_size = properties[i];
                     found_lzma2 = true;
-                } else if let Some(f) =
-                    StreamFilter::from_filter_type(ft, properties[i])
-                {
+                } else if let Some(f) = StreamFilter::from_filter_type(ft, properties[i]) {
                     // TODO: Support multiple filters for sans-I/O API.
                     if pre_filter.is_some() {
                         return Err(error_invalid_data(
@@ -1069,7 +1069,9 @@ impl XzStream {
 
         self.accum.clear();
         if num_records > 0 {
-            self.state = XzStreamState::IndexRecordUnpadded { remaining: num_records };
+            self.state = XzStreamState::IndexRecordUnpadded {
+                remaining: num_records,
+            };
             self.accum_needed = 1;
         } else {
             self.state = XzStreamState::IndexPaddingCrc;
@@ -1168,8 +1170,7 @@ impl XzStream {
             return Ok(());
         }
 
-        let expected_crc =
-            u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let expected_crc = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
         let actual_crc = Crc32::checksum(&data[4..10]);
         if expected_crc != actual_crc {
             return Err(error_invalid_data("stream footer CRC32 mismatch"));
@@ -1184,9 +1185,7 @@ impl XzStream {
         }
         let footer_check_type = CheckType::from_byte(data[9])?;
         if footer_check_type != self.check_type {
-            return Err(error_invalid_data(
-                "stream footer flags don't match header",
-            ));
+            return Err(error_invalid_data("stream footer flags don't match header"));
         }
 
         if self.allow_multiple_streams {
@@ -1207,9 +1206,7 @@ impl XzStream {
         if self.accum[..4] == [0, 0, 0, 0] {
             self.accum.clear();
             self.accum_needed = 4;
-        } else if self.accum[..6.min(self.accum.len())]
-            == XZ_MAGIC[..self.accum.len().min(6)]
-        {
+        } else if self.accum[..6.min(self.accum.len())] == XZ_MAGIC[..self.accum.len().min(6)] {
             if self.accum.len() >= 6 && self.accum[..6] == XZ_MAGIC {
                 self.state = XzStreamState::StreamHeader;
                 self.accum_needed = 12;
@@ -1221,8 +1218,6 @@ impl XzStream {
         }
         Ok(())
     }
-
-
 }
 
 fn has_complete_vli(data: &[u8]) -> Result<bool> {
