@@ -3,7 +3,6 @@
 use std::io;
 
 use libfuzzer_sys::fuzz_target;
-
 use lzma_rust2::LzipReader;
 
 fuzz_target!(|data: &[u8]| {

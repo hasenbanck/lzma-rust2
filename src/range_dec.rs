@@ -369,6 +369,25 @@ impl RangeDecoder<RangeDecoderBuffer> {
         reader.read_exact(&mut self.inner.buf[pos..end])
     }
 
+    pub(crate) fn prepare_from_slice(&mut self, data: &[u8]) -> crate::Result<()> {
+        if data.len() < 5 {
+            return Err(error_invalid_input("buffer len must >= 5"));
+        }
+
+        if data[0] != 0x00 {
+            return Err(error_invalid_input("first byte is 0"));
+        }
+        self.code = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
+
+        self.range = 0xFFFFFFFFu32;
+        let payload = &data[5..];
+        let len = payload.len();
+        let pos = self.inner.buf.len() - len;
+        self.inner.pos = pos;
+        self.inner.buf[pos..pos + len].copy_from_slice(payload);
+        Ok(())
+    }
+
     #[inline]
     pub(crate) fn is_finished(&self) -> bool {
         self.inner.pos == self.inner.buf.len() && self.code == 0

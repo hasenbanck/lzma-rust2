@@ -180,6 +180,38 @@ impl LzDecoder {
         Ok(())
     }
 
+    pub(crate) fn copy_uncompressed_from_slice(&mut self, data: &[u8]) -> crate::Result<()> {
+        let copy_size = (self.buf_size - self.pos).min(data.len());
+        self.buf[self.pos..self.pos + copy_size].copy_from_slice(&data[..copy_size]);
+        self.pos += copy_size;
+        if self.full < self.pos {
+            self.full = self.pos;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn available_space(&self) -> usize {
+        self.buf_size - self.pos
+    }
+
+    pub(crate) fn has_output(&self) -> bool {
+        self.pos > self.start
+    }
+
+    pub(crate) fn flush_partial(&mut self, out: &mut [u8]) -> usize {
+        let available = self.pos.saturating_sub(self.start);
+        let copy_size = available.min(out.len());
+        if copy_size > 0 {
+            out[..copy_size].copy_from_slice(&self.buf[self.start..self.start + copy_size]);
+            self.start += copy_size;
+        }
+        if self.start == self.pos && self.pos == self.buf_size {
+            self.pos = 0;
+            self.start = 0;
+        }
+        copy_size
+    }
+
     pub(crate) fn flush(&mut self, out: &mut [u8], out_off: usize) -> crate::Result<usize> {
         let copy_size = self.pos.saturating_sub(self.start);
 

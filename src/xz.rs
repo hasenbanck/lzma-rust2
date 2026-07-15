@@ -12,7 +12,7 @@ use alloc::{boxed::Box, vec, vec::Vec};
 #[cfg(feature = "std")]
 use std::io::{self, Seek, SeekFrom};
 
-pub use reader::XzReader;
+pub use reader::{XzReader, XzStream};
 #[cfg(feature = "std")]
 pub use reader_mt::XzReaderMt;
 use sha2::Digest;
@@ -36,7 +36,7 @@ use crate::{
 
 const XZ_MAGIC: [u8; 6] = [0xFD, b'7', b'z', b'X', b'Z', 0x00];
 
-const XZ_FOOTER_MAGIC: [u8; 2] = [b'Y', b'Z'];
+const XZ_FOOTER_MAGIC: [u8; 2] = *b"YZ";
 
 #[derive(Debug, Clone)]
 struct IndexRecord {
@@ -728,6 +728,12 @@ impl BlockHeader {
 
             filters[i] = Some(filter_type);
             properties[i] = property;
+        }
+
+        if filters.iter().filter_map(|x| *x).next_back() != Some(FilterType::Lzma2) {
+            return Err(error_invalid_data(
+                "XZ block's last filter must be a LZMA2 filter",
+            ));
         }
 
         Ok((filters, properties, header_size))

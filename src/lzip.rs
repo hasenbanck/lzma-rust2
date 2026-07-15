@@ -24,7 +24,7 @@ pub use writer_mt::LzipWriterMt;
 
 use crate::{ByteReader, Read, Result, error_invalid_data, error_invalid_input};
 
-const LZIP_MAGIC: [u8; 4] = [b'L', b'Z', b'I', b'P'];
+const LZIP_MAGIC: [u8; 4] = *b"LZIP";
 
 const LZIP_VERSION: u8 = 1;
 
@@ -227,7 +227,7 @@ fn scan_members<R: Read + Seek>(mut reader: R) -> Result<(R, Vec<LzipMember>)> {
         let mut header_buf = [0u8; 4];
         reader.read_exact(&mut header_buf)?;
 
-        if header_buf != [b'L', b'Z', b'I', b'P'] {
+        if header_buf != *b"LZIP" {
             return Err(error_invalid_data("invalid LZIP magic bytes"));
         }
 

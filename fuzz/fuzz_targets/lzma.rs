@@ -3,7 +3,6 @@
 use std::io;
 
 use libfuzzer_sys::{arbitrary, fuzz_target};
-
 use lzma_rust2::{LzmaOptions, LzmaReader};
 
 #[derive(Debug)]
