@@ -18,7 +18,9 @@ jobs:
           - lzip
           - lzma
           - lzma2
+          - lzma2_stream
           - xz
+          - xz_stream
     steps:
       - uses: actions/checkout@v7
       - name: Install rust version

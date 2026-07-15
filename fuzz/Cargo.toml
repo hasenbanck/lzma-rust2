@@ -34,3 +34,15 @@ name = "xz"
 path = "fuzz_targets/xz.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "xz_stream"
+path = "fuzz_targets/xz_stream.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "lzma2_stream"
+path = "fuzz_targets/lzma2_stream.rs"
+test = false
+doc = false
