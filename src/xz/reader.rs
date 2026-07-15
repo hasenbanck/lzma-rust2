@@ -438,14 +438,14 @@ impl<R: Read> Read for XzReader<R> {
 }
 
 enum StreamFilter {
-    Delta(Delta),
+    Delta(Box<Delta>),
     Bcj(BcjFilter),
 }
 
 impl StreamFilter {
     fn from_filter_type(ft: FilterType, property: u32) -> Option<Self> {
         match ft {
-            FilterType::Delta => Some(StreamFilter::Delta(Delta::new(property as usize))),
+            FilterType::Delta => Some(StreamFilter::Delta(Box::new(Delta::new(property as usize)))),
             FilterType::BcjX86 => {
                 Some(StreamFilter::Bcj(BcjFilter::new_x86(property as usize, false)))
             }
