@@ -529,7 +529,7 @@ pub struct XzStream {
     accum_needed: usize,
     lzma2: Option<Lzma2Stream>,
     checksum: Option<ChecksumCalculator>,
-    check_type: CheckType,
+    check_type: Option<CheckType>,
     block_count: usize,
     block_header_size: u64,
     block_compressed_size: u64,
@@ -558,7 +558,7 @@ impl XzStream {
             accum_needed: 12,
             lzma2: None,
             checksum: None,
-            check_type: CheckType::None,
+            check_type: None,
             block_count: 0,
             block_header_size: 0,
             block_compressed_size: 0,
@@ -584,6 +584,14 @@ impl XzStream {
     /// Total bytes produced to output across all `process()` calls.
     pub fn total_out(&self) -> u64 {
         self.total_out
+    }
+
+    /// The integrity check type used by the current stream.
+    ///
+    /// This is read from the stream header during decoding.
+    /// Before the header has been parsed, returns [`CheckType::None`].
+    pub fn check_type(&self) -> Option<CheckType> {
+        self.check_type
     }
 
     /// Process available data from `input` into `output`.
@@ -867,7 +875,7 @@ impl XzStream {
             self.accum.clear();
             self.accum_needed = pad_needed;
         } else {
-            let check_size = self.check_type.checksum_size() as usize;
+            let check_size = self.check_type.map(|c| c.checksum_size()).unwrap_or(0) as usize;
             if check_size > 0 {
                 self.state = XzStreamState::BlockChecksum {
                     remaining: check_size,
@@ -885,7 +893,7 @@ impl XzStream {
     }
 
     fn push_index_record(&mut self) {
-        let check_size = self.check_type.checksum_size();
+        let check_size = self.check_type.map(|c| c.checksum_size()).unwrap_or(0);
         self.checksum.take();
         self.index_records.push(IndexRecord {
             unpadded_size: self.block_header_size + self.block_compressed_size + check_size,
@@ -929,7 +937,7 @@ impl XzStream {
         if expected_crc != Crc32::checksum(&data[6..8]) {
             return Err(error_invalid_data("XZ stream header CRC32 mismatch"));
         }
-        self.check_type = check_type;
+        self.check_type = Some(check_type);
         self.index_records.clear();
         self.block_count = 0;
         self.state = XzStreamState::BlockHeaderSize;
@@ -996,7 +1004,9 @@ impl XzStream {
         }
 
         self.lzma2 = Some(Lzma2Stream::new(lzma2_dict_size));
-        self.checksum = Some(ChecksumCalculator::new(self.check_type));
+        if let Some(ct) = self.check_type {
+            self.checksum = Some(ChecksumCalculator::new(ct));
+        }
         self.filter = pre_filter;
         self.filter_buf.clear();
         self.filter_pos = 0;
@@ -1018,7 +1028,7 @@ impl XzStream {
             }
         }
 
-        let check_size = self.check_type.checksum_size() as usize;
+        let check_size = self.check_type.map(|c| c.checksum_size()).unwrap_or(0) as usize;
         if check_size > 0 {
             self.state = XzStreamState::BlockChecksum {
                 remaining: check_size,
@@ -1184,7 +1194,7 @@ impl XzStream {
             ));
         }
         let footer_check_type = CheckType::from_byte(data[9])?;
-        if footer_check_type != self.check_type {
+        if Some(footer_check_type) != self.check_type {
             return Err(error_invalid_data("stream footer flags don't match header"));
         }
 
