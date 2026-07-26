@@ -5,12 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.18.0 - 2026-07-26
+
+### Added
+
+- Add check_type () getter to XzStream. Thanks @Black-Frost (#106)
+
 ## 0.17.0 - 2026-07-15
 
 ### Added
 
-- Add sans-I/O decoders for LZMA2 and XZ, which allows to better implement
-  async and also multithreaded abstractions. Thanks @Black-Frost (#105)
+- Add sans-I/O decoders for LZMA2 and XZ, which allows to better implement async and also multithreaded abstractions.
+  Thanks @Black-Frost (#105)
 
 ## 0.16.5 - 2026-07-05
 
@@ -140,9 +146,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Breaking change: Rename identifiers to follow Rust API Guidelines @sorairolake (#35)
-- Breaking change: All single threaded reader / writer are now implementing UnwindSafe and RefUnwindSafe.
-  Before they saved the last std::io:error and kept returning it for all following red/writes. Now they only
-  return that particular error once.
+- Breaking change: All single threaded reader / writer are now implementing UnwindSafe and RefUnwindSafe. Before they
+  saved the last std::io:error and kept returning it for all following red/writes. Now they only return that particular
+  error once.
 
 ## 0.12.0 - 2025-09-02
 
@@ -164,26 +170,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fixed missing call to .finish() when creating files with BCJ filter with XZ.
+- Fixed missing call to .finish () when creating files with BCJ filter with XZ.
 
 ## 0.10.1 - 2025-08-25
 
 ### Fixed
 
-- Fix broken BCJWriter that couldn't properly finish it's encoding process. Now has a proper finish() function.
+- Fix broken BCJWriter that couldn't properly finish it's encoding process. Now has a proper finish () function.
 
 ## 0.10.0 - 2025-08-22
 
 ### Fixed
 
-- Add missing "inner()" and "inner_mut()" function to the XZ and LZIP reader and writer.
+- Add missing "inner ()" and "inner_mut ()" function to the XZ and LZIP reader and writer.
 
 ## 0.9.0 - 2025-08-15
 
 ### Changed
 
 - `XZReader` and `XZWriter` are now Send.
-- Most reader and writer now have "inner()" and "inner_mut()" functions.
+- Most reader and writer now have "inner ()" and "inner_mut ()" functions.
 
 ### Updated
 
@@ -193,19 +199,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Make sure that LZMA reader errors when going out of bound. This could happen if no EOS was found.
-  This was not a memory a safety issue, but instead a problem in how we propagated a fail state in light
-  of certain optimizations.
+- Make sure that LZMA reader errors when going out of bound. This could happen if no EOS was found. This was not a
+  memory a safety issue, but instead a problem in how we propagated a fail state in light of certain optimizations.
 - Bound the multithreaded reader as to not use too much memory.
 
 ## 0.8.1 - 2025-08-13
 
 ### Fixed
 
-- Internally we updated the hash function for the match finders to use a golden ratio based hash instead of the old
-  CRC table based hash. In our test data this was a net win, but it turned out, once tested with bigger datasets,
-  this is a net loss. So we returned back to the CRC table approach (we speak here about a change below 0.01%, but
-  measurable).
+- Internally we updated the hash function for the match finders to use a golden ratio based hash instead of the old CRC
+  table based hash. In our test data this was a net win, but it turned out, once tested with bigger datasets, this is a
+  net loss. So we returned back to the CRC table approach (we speak here about a change below 0.01%, but measurable).
 
 ## 0.8.0 - 2025-08-10
 
@@ -276,13 +280,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Updated
 
-- Increased the encoding performance. For level 0-3 this crate now is faster than lzma.
-  For 4-9 this crate is on same level with liblzma.
+- Increased the encoding performance. For level 0-3 this crate now is faster than lzma. For 4-9 this crate is on same
+  level with liblzma.
 
 ### Changed
 
-- Feature "asm" changed to "optimization" and is also enabled by default.
-  Have a look at the "Safety" section of the README.md for more details.
+- Feature "asm" changed to "optimization" and is also enabled by default. Have a look at the "Safety" section of the
+  README.md for more details.
 
 ## 0.3.1 - 2025-07-12
 
@@ -296,12 +300,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Updated
 
 - Increased MSRV to v1.85
-- Increased the decoding performance while using only safe Rust. On x86-64 the speed-up
-  was quite large when compared to the v0.2 branch (+50% throughput).
-  Have a look at the "Performance" section of the README.md for more details.
-- Added feature flag "asm" which is activated at default which increases the
-  decoding speed when using LZMA2.
-  Have a look at the "Safety" section of the README.md for more details.
+- Increased the decoding performance while using only safe Rust. On x86-64 the speed-up was quite large when compared to
+  the v0.2 branch (+50% throughput). Have a look at the "Performance" section of the README.md for more details.
+- Added feature flag "asm" which is activated at default which increases the decoding speed when using LZMA2. Have a
+  look at the "Safety" section of the README.md for more details.
 - Add EncodeMode and MFType enums to public interface (used for the encoder options).
 
 ### Removed
