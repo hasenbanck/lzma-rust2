@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.18.1 - 2026-08-05
+
+### Fixed
+
+- Fixed an out-of-bounds panic when encoding more than ~2 GiB through a single stream (#107)
+
 ## 0.18.0 - 2026-07-26
 
 ### Added
