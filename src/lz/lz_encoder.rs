@@ -468,11 +468,15 @@ fn get_buf_size(
     keep_size_before + keep_size_after + reserve_size
 }
 
+/// Positions not newer than `norm_offset` must clamp to `0` (the "no position"
+/// marker). `saturating_sub` would saturate at [`i32::MIN`] instead, and the
+/// distance calculations in the match finders would then overflow into
+/// out-of-bounds buffer indices.
 #[inline(always)]
 fn normalize_scalar(positions: &mut [i32], norm_offset: i32) {
     positions
         .iter_mut()
-        .for_each(|p| *p = p.saturating_sub(norm_offset));
+        .for_each(|p| *p = (*p).max(norm_offset) - norm_offset);
 }
 
 /// Normalization implementation using ARM NEON for 128-bit SIMD processing.
