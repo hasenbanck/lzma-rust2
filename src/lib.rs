@@ -101,7 +101,7 @@ pub use lzip::LzipWriterMt;
 #[cfg(all(feature = "lzip", feature = "encoder"))]
 pub use lzip::{LzipOptions, LzipWriter};
 pub use lzma_reader::{
-    LzmaReader, get_memory_usage as lzma_get_memory_usage,
+    LzmaReader, LzmaStream, get_memory_usage as lzma_get_memory_usage,
     get_memory_usage_by_props as lzma_get_memory_usage_by_props,
 };
 pub use lzma2_reader::{
