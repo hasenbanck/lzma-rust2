@@ -24,6 +24,12 @@ test = false
 doc = false
 
 [[bin]]
+name = "lzma_stream"
+path = "fuzz_targets/lzma_stream.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "lzma2"
 path = "fuzz_targets/lzma2.rs"
 test = false

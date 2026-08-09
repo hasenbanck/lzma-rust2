@@ -17,6 +17,7 @@ jobs:
         target:
           - lzip
           - lzma
+          - lzma_stream
           - lzma2
           - lzma2_stream
           - xz
