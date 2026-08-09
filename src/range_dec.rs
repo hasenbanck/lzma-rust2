@@ -52,6 +52,18 @@ impl<R: RangeReader> RangeDecoder<R> {
     pub(crate) fn is_stream_finished(&self) -> bool {
         self.code == 0
     }
+
+    /// See [`RangeReader::can_start_symbol`].
+    #[inline(always)]
+    pub(crate) fn can_start_symbol(&self) -> bool {
+        self.inner.can_start_symbol()
+    }
+
+    /// See [`RangeReader::can_normalize`].
+    #[inline(always)]
+    pub(crate) fn can_normalize(&self) -> bool {
+        self.inner.can_normalize()
+    }
 }
 
 impl<R: RangeReader> RangeDecoder<R> {
@@ -409,6 +421,25 @@ pub(crate) trait RangeReader {
     fn try_read_u8(&mut self) -> crate::Result<u8>;
 
     fn read_u32_be(&mut self) -> crate::Result<u32>;
+
+    /// True when there is enough input left to decode a whole symbol.
+    ///
+    /// Only a reader over a borrowed slice can run out in the middle of one.
+    /// Every other reader can always get another byte, so it returns a constant
+    /// `true` and the check disappears from the hot loop.
+    #[inline(always)]
+    fn can_start_symbol(&self) -> bool {
+        true
+    }
+
+    /// True when the lookahead read after the last symbol may take a byte.
+    ///
+    /// A reader over a borrowed slice says no once it has used up its input.
+    /// Every other reader always has another byte to give.
+    #[inline(always)]
+    fn can_normalize(&self) -> bool {
+        true
+    }
 
     #[inline(always)]
     fn is_buffer(&self) -> bool {
