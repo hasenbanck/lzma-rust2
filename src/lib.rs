@@ -93,14 +93,14 @@ pub(crate) use std::io::Write;
 #[cfg(feature = "encoder")]
 pub use enc::*;
 pub use lz::MfType;
-#[cfg(feature = "lzip")]
-pub use lzip::LzipReader;
 #[cfg(all(feature = "lzip", feature = "std"))]
 pub use lzip::LzipReaderMt;
 #[cfg(all(feature = "lzip", feature = "encoder", feature = "std"))]
 pub use lzip::LzipWriterMt;
 #[cfg(all(feature = "lzip", feature = "encoder"))]
 pub use lzip::{LzipOptions, LzipWriter};
+#[cfg(feature = "lzip")]
+pub use lzip::{LzipReader, LzipStream};
 pub use lzma_reader::{
     LzmaReader, LzmaStream, get_memory_usage as lzma_get_memory_usage,
     get_memory_usage_by_props as lzma_get_memory_usage_by_props,

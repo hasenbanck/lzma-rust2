@@ -1,6 +1,7 @@
 //! LZIP format implementation.
 
 mod reader;
+mod stream;
 
 #[cfg(feature = "std")]
 mod reader_mt;
@@ -17,6 +18,7 @@ use std::io::{Seek, SeekFrom};
 pub use reader::LzipReader;
 #[cfg(feature = "std")]
 pub use reader_mt::LzipReaderMt;
+pub use stream::LzipStream;
 #[cfg(feature = "encoder")]
 pub use writer::{LzipOptions, LzipWriter};
 #[cfg(all(feature = "encoder", feature = "std"))]
