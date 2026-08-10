@@ -7,7 +7,10 @@ use super::{
     lz::LzDecoder,
     range_dec::{RangeDecoder, RangeDecoderBuffer},
 };
-use crate::{ByteReader, DICT_SIZE_MIN};
+use crate::{
+    ByteReader, DICT_SIZE_MIN,
+    stream::{Action, Status, StreamResult},
+};
 
 pub const COMPRESSED_SIZE_MAX: u32 = 1 << 16;
 
@@ -224,37 +227,6 @@ impl<R: Read> Read for Lzma2Reader<R> {
 
         Ok(size)
     }
-}
-
-// ── Sans-I/O stream types ───────────────────────────────────────────────────
-
-/// Action to perform during stream processing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Action {
-    /// Process available data without flushing.
-    Run,
-    /// Signal that no more input will be provided.
-    Finish,
-}
-
-/// Status returned by stream processing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Status {
-    /// More input or output space needed to continue.
-    Ok,
-    /// The stream has been fully processed.
-    StreamEnd,
-}
-
-/// Result of a single `process()` call.
-#[derive(Debug, Clone, Copy)]
-pub struct StreamResult {
-    /// Number of bytes consumed from the input buffer.
-    pub bytes_consumed: usize,
-    /// Number of bytes written to the output buffer.
-    pub bytes_produced: usize,
-    /// Current stream status.
-    pub status: Status,
 }
 
 #[derive(Clone, Copy)]

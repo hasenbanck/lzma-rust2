@@ -5,8 +5,8 @@ use crate::{
     decoder::LzmaDecoder,
     error_invalid_data, error_invalid_input, error_out_of_memory,
     lz::LzDecoder,
-    lzma2_reader::{Action, Status, StreamResult},
     range_dec::{RangeCoderState, RangeDecoder, SliceRangeReader},
+    stream::{Action, Status, StreamResult},
 };
 
 /// Calculates the memory usage in KiB required for LZMA decompression from properties byte.
