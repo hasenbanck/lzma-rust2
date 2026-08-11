@@ -11,7 +11,33 @@ pub(crate) struct RangeDecoder<R> {
     code: u32,
 }
 
+/// The persistent part of a range decoder: everything except the byte source.
+///
+/// A sans-I/O decoder cannot own its byte source: the input is a slice borrowed
+/// from the caller, and only for one `process()` call. Keeping `{range, code}`
+/// apart from it lets such a decoder build a fresh [`RangeDecoder`] each call.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct RangeCoderState {
+    pub(crate) range: u32,
+    pub(crate) code: u32,
+}
+
 impl<R> RangeDecoder<R> {
+    pub(crate) fn from_parts(inner: R, state: RangeCoderState) -> Self {
+        Self {
+            inner,
+            range: state.range,
+            code: state.code,
+        }
+    }
+
+    pub(crate) fn state(&self) -> RangeCoderState {
+        RangeCoderState {
+            range: self.range,
+            code: self.code,
+        }
+    }
+
     pub(crate) fn into_inner(self) -> R {
         self.inner
     }
@@ -51,6 +77,18 @@ impl<R: RangeReader> RangeDecoder<R> {
 
     pub(crate) fn is_stream_finished(&self) -> bool {
         self.code == 0
+    }
+
+    /// See [`RangeReader::can_start_symbol`].
+    #[inline(always)]
+    pub(crate) fn can_start_symbol(&self) -> bool {
+        self.inner.can_start_symbol()
+    }
+
+    /// See [`RangeReader::can_normalize`].
+    #[inline(always)]
+    pub(crate) fn can_normalize(&self) -> bool {
+        self.inner.can_normalize()
     }
 }
 
@@ -403,12 +441,135 @@ impl RangeDecoderBuffer {
     }
 }
 
+/// A [`RangeReader`] over a borrowed input slice that knows where it must stop.
+///
+/// A symbol can be up to 20 bytes long, and we can't stop decoding a symbol
+/// halfway, so we may only start while 20 bytes are left. A symbol may start
+/// only while `pos < symbol_limit`.
+///
+/// When a stream has less than 20 bytes at the end, the caller passes the last
+/// real bytes followed by padding bytes. `real_len` stores the size of actual
+/// data. If the reader reads those padding bytes, we know that the stream is
+/// truncated.
+pub(crate) struct SliceRangeReader<'a> {
+    buf: &'a [u8],
+    pos: usize,
+    real_len: usize,
+    symbol_limit: usize,
+}
+
+impl<'a> SliceRangeReader<'a> {
+    /// `real_len` must not exceed `buf.len()`, and `symbol_limit` must leave
+    /// room for a whole symbol: the last position one may start at is
+    /// `symbol_limit - 1`, and a symbol reads up to 20 bytes, so
+    /// `symbol_limit + 19 <= buf.len()`. A `symbol_limit` of 0 is fine too and
+    /// means no symbol may start at all.
+    pub(crate) fn new(buf: &'a [u8], real_len: usize, symbol_limit: usize) -> Self {
+        debug_assert!(!buf.is_empty());
+        debug_assert!(real_len <= buf.len());
+        Self {
+            buf,
+            pos: 0,
+            real_len,
+            symbol_limit,
+        }
+    }
+
+    pub(crate) fn pos(&self) -> usize {
+        self.pos
+    }
+}
+
+impl RangeReader for SliceRangeReader<'_> {
+    #[inline(always)]
+    fn read_u8(&mut self) -> u8 {
+        // Out of bound reads return an 1, which is fine, since the
+        // LZMA reader will then throw a "dist overflow" error. With a correct
+        // `symbol_limit` this can't be reached from inside a symbol anyway.
+        let byte = *self.buf.get(self.pos).unwrap_or(&1);
+        self.pos += 1;
+        byte
+    }
+
+    fn try_read_u8(&mut self) -> crate::Result<u8> {
+        let byte = self.buf.get(self.pos).copied().ok_or_else(error_eof)?;
+        self.pos += 1;
+        Ok(byte)
+    }
+
+    #[inline(always)]
+    fn read_u32_be(&mut self) -> crate::Result<u32> {
+        let array: [u8; 4] = self
+            .buf
+            .get(self.pos..self.pos + 4)
+            .ok_or_else(|| error_invalid_data("not enough data for reading u32 BE bytes"))?
+            .try_into()
+            .map_err(|_| error_other("slice doesn't match array size for u32 BE bytes"))?;
+        self.pos += 4;
+        Ok(u32::from_be_bytes(array))
+    }
+
+    #[inline(always)]
+    fn can_start_symbol(&self) -> bool {
+        self.pos < self.symbol_limit
+    }
+
+    #[inline(always)]
+    fn can_normalize(&self) -> bool {
+        self.pos < self.real_len
+    }
+
+    #[inline(always)]
+    fn is_buffer(&self) -> bool {
+        // This check is what keeps the assembly paths safe. They compute
+        // `buf.len() - 1`, which would wrap around on an empty slice, so an
+        // empty buffer has to go down the plain Rust path instead. Do not
+        // replace this with a plain `true`: `new()` only checks for an empty
+        // buffer in debug builds.
+        !self.buf.is_empty()
+    }
+
+    #[inline(always)]
+    fn pos(&self) -> usize {
+        self.pos
+    }
+
+    #[inline(always)]
+    fn set_pos(&mut self, pos: usize) {
+        self.pos = pos;
+    }
+
+    #[inline(always)]
+    fn buf(&self) -> &[u8] {
+        self.buf
+    }
+}
+
 pub(crate) trait RangeReader {
     fn read_u8(&mut self) -> u8;
 
     fn try_read_u8(&mut self) -> crate::Result<u8>;
 
     fn read_u32_be(&mut self) -> crate::Result<u32>;
+
+    /// True when there is enough input left to decode a whole symbol.
+    ///
+    /// Only a reader over a borrowed slice can run out in the middle of one.
+    /// Every other reader can always get another byte, so it returns a constant
+    /// `true` and the check disappears from the hot loop.
+    #[inline(always)]
+    fn can_start_symbol(&self) -> bool {
+        true
+    }
+
+    /// True when the lookahead read after the last symbol may take a byte.
+    ///
+    /// A reader over a borrowed slice says no once it has used up its input.
+    /// Every other reader always has another byte to give.
+    #[inline(always)]
+    fn can_normalize(&self) -> bool {
+        true
+    }
 
     #[inline(always)]
     fn is_buffer(&self) -> bool {

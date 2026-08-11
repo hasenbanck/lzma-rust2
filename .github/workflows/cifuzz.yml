@@ -16,7 +16,9 @@ jobs:
       matrix:
         target:
           - lzip
+          - lzip_stream
           - lzma
+          - lzma_stream
           - lzma2
           - lzma2_stream
           - xz

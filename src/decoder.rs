@@ -53,7 +53,7 @@ impl LzmaDecoder {
         rc: &mut RangeDecoder<R>,
     ) -> crate::Result<()> {
         lz.repeat_pending()?;
-        while lz.has_space() {
+        while lz.has_space() && rc.can_start_symbol() {
             let pos_state = lz.get_pos() as u32 & self.coder.pos_mask;
             let i = self.coder.state.get() as usize;
             let probs = &mut self.coder.is_match[i];
@@ -70,7 +70,14 @@ impl LzmaDecoder {
                 lz.repeat(self.coder.reps[0] as _, len as _)?;
             }
         }
-        rc.normalize();
+        // Normalise only if we stopped because the output is full. If we
+        // stopped because the input ran out, `rc` has to stay as it is, so that
+        // the next call can pick up where this one left off. A reader that
+        // never runs out of input, like `RangeDecoderBuffer`, always takes this
+        // branch, just like before.
+        if !lz.has_space() && rc.can_normalize() {
+            rc.normalize();
+        }
         Ok(())
     }
 

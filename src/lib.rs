@@ -63,6 +63,7 @@ mod lzma2_reader;
 mod lzma_reader;
 mod range_dec;
 mod state;
+mod stream;
 #[cfg(feature = "std")]
 mod work_queue;
 #[cfg(feature = "xz")]
@@ -92,22 +93,19 @@ pub(crate) use std::io::Write;
 #[cfg(feature = "encoder")]
 pub use enc::*;
 pub use lz::MfType;
-#[cfg(feature = "lzip")]
-pub use lzip::LzipReader;
 #[cfg(all(feature = "lzip", feature = "std"))]
 pub use lzip::LzipReaderMt;
 #[cfg(all(feature = "lzip", feature = "encoder", feature = "std"))]
 pub use lzip::LzipWriterMt;
 #[cfg(all(feature = "lzip", feature = "encoder"))]
 pub use lzip::{LzipOptions, LzipWriter};
+#[cfg(feature = "lzip")]
+pub use lzip::{LzipReader, LzipStream};
 pub use lzma_reader::{
-    LzmaReader, get_memory_usage as lzma_get_memory_usage,
+    LzmaReader, LzmaStream, get_memory_usage as lzma_get_memory_usage,
     get_memory_usage_by_props as lzma_get_memory_usage_by_props,
 };
-pub use lzma2_reader::{
-    Action, Lzma2Reader, Lzma2Stream, Status, StreamResult,
-    get_memory_usage as lzma2_get_memory_usage,
-};
+pub use lzma2_reader::{Lzma2Reader, Lzma2Stream, get_memory_usage as lzma2_get_memory_usage};
 #[cfg(feature = "std")]
 pub use lzma2_reader_mt::Lzma2ReaderMt;
 #[cfg(not(feature = "std"))]
@@ -117,6 +115,7 @@ pub use no_std::Read;
 #[cfg(not(feature = "std"))]
 pub use no_std::Write;
 use state::*;
+pub use stream::{Action, Status, StreamResult};
 #[cfg(all(feature = "xz", feature = "std"))]
 pub use xz::XzReaderMt;
 #[cfg(all(feature = "xz", feature = "encoder", feature = "std"))]

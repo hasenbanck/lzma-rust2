@@ -18,8 +18,20 @@ test = false
 doc = false
 
 [[bin]]
+name = "lzip_stream"
+path = "fuzz_targets/lzip_stream.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "lzma"
 path = "fuzz_targets/lzma.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "lzma_stream"
+path = "fuzz_targets/lzma_stream.rs"
 test = false
 doc = false
 

@@ -12,7 +12,8 @@ use crate::{
         bcj::{BcjFilter, BcjReader},
         delta::{Delta, DeltaReader},
     },
-    lzma2_reader::{Action, Lzma2Stream, Status, StreamResult},
+    lzma2_reader::Lzma2Stream,
+    stream::{Action, Status, StreamResult},
 };
 
 #[allow(clippy::large_enum_variant)]
