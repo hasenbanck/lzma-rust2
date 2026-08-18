@@ -319,6 +319,10 @@ fn room_for(lz: &LzDecoder, remaining_size: u64) -> usize {
 pub(crate) struct Limits {
     /// Uncompressed bytes still to produce. `u64::MAX` means unknown.
     pub(crate) remaining_size: u64,
+    /// Compressed bytes still allowed. `None` means unbounded, which is what
+    /// LZMA1 wants: it is the declared uncompressed size or the end of payload
+    /// marker that ends such a stream, not a byte count.
+    pub(crate) compressed_left: Option<u64>,
     /// Whether the stream may end with an end of payload marker rather than by
     /// running out of declared size.
     pub(crate) allow_end_marker: bool,
@@ -391,6 +395,15 @@ impl LzmaCore {
         limits: &mut Limits,
         action: Action,
     ) -> crate::Result<(usize, usize)> {
+        // Clamp before anything decides where a symbol may start, so no symbol
+        // can reach a byte the budget does not cover. An LZMA2 chunk is
+        // followed by the next chunk's header, and `SliceRangeReader` cannot
+        // un-consume read-ahead the way a buffered reader can.
+        let input = match limits.compressed_left {
+            Some(left) => &input[..input.len().min(left.min(usize::MAX as u64) as usize)],
+            None => input,
+        };
+
         let mut in_pos = 0;
         let mut produced = 0;
 
@@ -458,6 +471,12 @@ impl LzmaCore {
                 self.carry_len = rest;
                 in_pos = input.len();
             }
+        }
+
+        // Bytes taken into the carry count against the budget too: they were
+        // read out of the caller's slice and belong to this decode unit.
+        if let Some(left) = limits.compressed_left.as_mut() {
+            *left -= in_pos as u64;
         }
 
         // Decode the carry against zero padding and require the stream to end
@@ -661,6 +680,8 @@ impl LzmaStream {
             core: LzmaCore::new(),
             limits: Limits {
                 remaining_size,
+                // LZMA1 has no compressed size to go by.
+                compressed_left: None,
                 // A stream of unknown size is the only one that may end with an
                 // end of payload marker.
                 allow_end_marker: remaining_size == u64::MAX,
@@ -1077,4 +1098,74 @@ fn build_decoders(
     let lz = LzDecoder::new(get_dict_size(dict_size)? as _, preset_dict);
     let lzma = LzmaDecoder::new(lc, lp, pb);
     Ok((lz, lzma))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// "Hello, world!" as a raw LZMA stream: five range coder init bytes and
+    /// then nineteen bytes of payload, ended by an end of payload marker. The
+    /// properties are `lc = 3`, `lp = 0`, `pb = 2`.
+    const RAW: [u8; 24] = [
+        0, 36, 25, 73, 152, 111, 22, 2, 140, 232, 230, 91, 177, 71, 198, 206, 183, 99, 255, 255,
+        60, 172, 0, 0,
+    ];
+
+    fn parts() -> (LzDecoder, LzmaDecoder, LzmaCore) {
+        let (mut lz, lzma) = build_decoders(u64::MAX, 3, 0, 2, 0x0080_0000, None).unwrap();
+        lz.ensure_capacity().unwrap();
+        let mut core = LzmaCore::new();
+        core.init_rc(&[RAW[0], RAW[1], RAW[2], RAW[3], RAW[4]])
+            .unwrap();
+        (lz, lzma, core)
+    }
+
+    fn limits(compressed_left: Option<u64>) -> Limits {
+        Limits {
+            remaining_size: u64::MAX,
+            compressed_left,
+            allow_end_marker: true,
+            end_reached: false,
+        }
+    }
+
+    #[test]
+    fn compressed_budget_stops_the_core() {
+        let (mut lz, mut lzma, mut core) = parts();
+        let mut limits = limits(Some(4));
+
+        // Four bytes of a nineteen byte payload on offer: only four may be
+        // taken, and they are too few to start a symbol from.
+        let (consumed, produced) = core
+            .feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, Action::Run)
+            .unwrap();
+        assert_eq!(consumed, 4);
+        assert_eq!(produced, 0);
+        assert_eq!(limits.compressed_left, Some(0));
+
+        // A used up budget stops the core dead, however much input is left.
+        let (consumed, produced) = core
+            .feed(&mut lz, &mut lzma, &RAW[9..], &mut limits, Action::Run)
+            .unwrap();
+        assert_eq!(consumed, 0);
+        assert_eq!(produced, 0);
+    }
+
+    #[test]
+    fn no_budget_decodes_the_whole_payload() {
+        let (mut lz, mut lzma, mut core) = parts();
+        let mut limits = limits(None);
+
+        let (consumed, produced) = core
+            .feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, Action::Finish)
+            .unwrap();
+        assert_eq!(consumed, RAW.len() - 5);
+        assert_eq!(produced, 13);
+        assert!(limits.end_reached);
+
+        let mut out = [0u8; 13];
+        assert_eq!(lz.flush_partial(&mut out), 13);
+        assert_eq!(&out, b"Hello, world!");
+    }
 }
