@@ -293,6 +293,10 @@ const IN_REQUIRED: usize = 20;
 /// straight out of the caller's buffer.
 const CARRY_CAP: usize = 2 * IN_REQUIRED;
 
+/// Bytes the range coder needs to initialise: one zero byte and `code` as four
+/// big endian bytes. An LZMA2 chunk spends these out of its compressed size.
+pub(crate) const RC_INIT_SIZE: usize = 5;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LzmaState {
     Header,
