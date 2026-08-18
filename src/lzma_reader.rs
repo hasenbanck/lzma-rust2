@@ -387,13 +387,18 @@ impl LzmaCore {
 
     /// Runs one decode pass over `input`, returning `(bytes consumed from
     /// input, bytes decoded into the dictionary)`.
+    ///
+    /// `input_ends_here` says that nothing follows this slice, so the last
+    /// bytes of it may be decoded against zero padding. LZMA1 knows that from
+    /// the action the caller gave it; an LZMA2 chunk knows it from the
+    /// compressed size in its own header.
     pub(crate) fn feed(
         &mut self,
         lz: &mut LzDecoder,
         lzma: &mut LzmaDecoder,
         input: &[u8],
         limits: &mut Limits,
-        action: Action,
+        input_ends_here: bool,
     ) -> crate::Result<(usize, usize)> {
         // Clamp before anything decides where a symbol may start, so no symbol
         // can reach a byte the budget does not cover. An LZMA2 chunk is
@@ -409,7 +414,7 @@ impl LzmaCore {
 
         // No more input will ever arrive, so go straight to the finish tail
         // rather than pointlessly re-running the carry.
-        let finish_now = action == Action::Finish && input.is_empty();
+        let finish_now = input_ends_here && input.is_empty();
 
         // Set when the carry could not be drained. The caller's remaining input
         // cannot be decoded in place until it has been.
@@ -481,7 +486,7 @@ impl LzmaCore {
 
         // Decode the carry against zero padding and require the stream to end
         // inside the real bytes.
-        if action == Action::Finish && !limits.end_reached && in_pos >= input.len() {
+        if input_ends_here && !limits.end_reached && in_pos >= input.len() {
             produced += self.decode_finish_tail(lz, lzma, limits)?;
         }
 
@@ -1063,7 +1068,12 @@ impl LzmaStream {
             _ => return Err(error_invalid_data("LZMA decoder not initialized")),
         };
 
-        let (consumed, produced) = core.feed(lz, lzma, &input[*in_pos..], limits, action)?;
+        // For LZMA1 the caller is the only one who knows whether more input is
+        // coming, and `Action::Finish` is how it says so.
+        let input_ends_here = action == Action::Finish;
+
+        let (consumed, produced) =
+            core.feed(lz, lzma, &input[*in_pos..], limits, input_ends_here)?;
         *in_pos += consumed;
         self.total_in += consumed as u64;
 
@@ -1138,7 +1148,7 @@ mod tests {
         // Four bytes of a nineteen byte payload on offer: only four may be
         // taken, and they are too few to start a symbol from.
         let (consumed, produced) = core
-            .feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, Action::Run)
+            .feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, false)
             .unwrap();
         assert_eq!(consumed, 4);
         assert_eq!(produced, 0);
@@ -1146,7 +1156,7 @@ mod tests {
 
         // A used up budget stops the core dead, however much input is left.
         let (consumed, produced) = core
-            .feed(&mut lz, &mut lzma, &RAW[9..], &mut limits, Action::Run)
+            .feed(&mut lz, &mut lzma, &RAW[9..], &mut limits, false)
             .unwrap();
         assert_eq!(consumed, 0);
         assert_eq!(produced, 0);
@@ -1158,7 +1168,7 @@ mod tests {
         let mut limits = limits(None);
 
         let (consumed, produced) = core
-            .feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, Action::Finish)
+            .feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, true)
             .unwrap();
         assert_eq!(consumed, RAW.len() - 5);
         assert_eq!(produced, 13);
