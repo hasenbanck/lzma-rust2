@@ -539,6 +539,8 @@ pub struct XzStream {
     index_crc: Crc32,
     index_size: usize,
     allow_multiple_streams: bool,
+    /// Set once `process()` has returned an error. A failed stream stays failed.
+    failed: bool,
     total_in: u64,
     total_out: u64,
     filter: Option<StreamFilter>,
@@ -568,6 +570,7 @@ impl XzStream {
             index_crc: Crc32::new(),
             index_size: 0,
             allow_multiple_streams,
+            failed: false,
             total_in: 0,
             total_out: 0,
             filter: None,
@@ -600,6 +603,23 @@ impl XzStream {
     /// Returns how many bytes were consumed/produced and the stream status.
     /// Call repeatedly until `Status::StreamEnd` is returned.
     pub fn process(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        action: Action,
+    ) -> Result<StreamResult> {
+        if self.failed {
+            return Err(error_invalid_data("XZ stream already failed"));
+        }
+
+        let result = self.process_inner(input, output, action);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
+    fn process_inner(
         &mut self,
         input: &[u8],
         output: &mut [u8],

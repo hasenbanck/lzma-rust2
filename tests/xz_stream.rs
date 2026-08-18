@@ -528,3 +528,27 @@ fn decode_bcj_x86_byte_at_a_time() {
     assert_eq!(decompressed.len(), original.len());
     assert!(decompressed == original);
 }
+
+#[test]
+fn failed_stream_stays_failed() {
+    let compressed = encode_xz(b"Hello, world!", 6);
+    let mut broken = compressed.clone();
+    broken[0] ^= 0xFF;
+
+    let mut decoder = XzStream::new(false);
+    let mut output_buf = [0u8; 4096];
+
+    let error = decoder
+        .process(&broken, &mut output_buf, Action::Finish)
+        .unwrap_err();
+    assert!(!error.to_string().contains("already failed"));
+
+    // The same decoder gets nowhere now, even on bytes that decode fine on
+    // their own.
+    let error = decoder
+        .process(&compressed, &mut output_buf, Action::Finish)
+        .unwrap_err();
+    assert!(error.to_string().contains("already failed"));
+
+    assert!(decode_with_stream(&compressed) == b"Hello, world!");
+}
