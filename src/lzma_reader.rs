@@ -303,15 +303,291 @@ enum LzmaState {
 }
 
 /// Output space the decoder may fill before it has to stop.
-fn room_for(lz: Option<&LzDecoder>, remaining_size: u64) -> usize {
-    let Some(lz) = lz else {
-        return 0;
-    };
+fn room_for(lz: &LzDecoder, remaining_size: u64) -> usize {
     let mut room = lz.available_space();
     if remaining_size <= u64::MAX / 2 {
         room = room.min(remaining_size.min(usize::MAX as u64) as usize);
     }
     room
+}
+
+/// What a decode pass is allowed to do, and what it has already done.
+///
+/// This is the caller's, not the core's: an LZMA2 chunk restarts the range
+/// coder but goes on counting against the dictionary it shares with every other
+/// chunk.
+pub(crate) struct Limits {
+    /// Uncompressed bytes still to produce. `u64::MAX` means unknown.
+    pub(crate) remaining_size: u64,
+    /// Whether the stream may end with an end of payload marker rather than by
+    /// running out of declared size.
+    pub(crate) allow_end_marker: bool,
+    /// Set once the end of the stream has been seen.
+    pub(crate) end_reached: bool,
+}
+
+/// The part of an LZMA1 decode that has to survive between `process()` calls,
+/// minus the dictionary and the probability model it works on.
+///
+/// Decoding straight out of the caller's slice means stopping before a symbol
+/// could run off the end of it, so whatever is left over has to be carried into
+/// the next call and stitched to the bytes that arrive then. That, plus the
+/// range coder state, is all this holds; the decoders are passed in, because
+/// LZMA2 needs the same machinery over a dictionary that outlives any single
+/// chunk.
+pub(crate) struct LzmaCore {
+    rc: RangeCoderState,
+    /// Bytes taken from the caller that were too few to start a symbol from.
+    carry: [u8; CARRY_CAP],
+    carry_len: usize,
+}
+
+impl LzmaCore {
+    pub(crate) fn new() -> Self {
+        Self {
+            rc: RangeCoderState::default(),
+            carry: [0; CARRY_CAP],
+            carry_len: 0,
+        }
+    }
+
+    /// Forgets the current range coder run. An LZMA2 chunk starts a new one over
+    /// the dictionary the previous chunk left behind.
+    pub(crate) fn reset(&mut self) {
+        self.rc = RangeCoderState::default();
+        self.carry_len = 0;
+    }
+
+    /// Incremental equivalent of [`RangeDecoder::new_stream`]: the first byte
+    /// must be zero, the next four are `code` in big endian order.
+    pub(crate) fn init_rc(&mut self, bytes: &[u8; 5]) -> crate::Result<()> {
+        if bytes[0] != 0x00 {
+            return Err(error_invalid_input("range decoder first byte is not zero"));
+        }
+        self.rc = RangeCoderState {
+            range: 0xFFFF_FFFF,
+            code: u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]),
+        };
+        Ok(())
+    }
+
+    /// True when the range coder ended on zero, as a well formed stream does.
+    pub(crate) fn rc_finished(&self) -> bool {
+        self.rc.code == 0
+    }
+
+    /// Bytes that were taken in but never decoded. Never more than 40.
+    pub(crate) fn unused_input(&self) -> &[u8] {
+        &self.carry[..self.carry_len]
+    }
+
+    /// Runs one decode pass over `input`, returning `(bytes consumed from
+    /// input, bytes decoded into the dictionary)`.
+    pub(crate) fn feed(
+        &mut self,
+        lz: &mut LzDecoder,
+        lzma: &mut LzmaDecoder,
+        input: &[u8],
+        limits: &mut Limits,
+        action: Action,
+    ) -> crate::Result<(usize, usize)> {
+        let mut in_pos = 0;
+        let mut produced = 0;
+
+        // No more input will ever arrive, so go straight to the finish tail
+        // rather than pointlessly re-running the carry.
+        let finish_now = action == Action::Finish && input.is_empty();
+
+        // Set when the carry could not be drained. The caller's remaining input
+        // cannot be decoded in place until it has been.
+        let mut carry_blocked = false;
+
+        // Decode across the boundary between the bytes carried over from an
+        // earlier call and the fresh input.
+        if self.carry_len > 0 && !finish_now {
+            let carry_len = self.carry_len;
+            let m = (input.len() - in_pos).min(CARRY_CAP - carry_len);
+            let filled = carry_len + m;
+
+            let mut scratch = self.carry;
+            scratch[carry_len..filled].copy_from_slice(&input[in_pos..in_pos + m]);
+
+            let symbol_limit = filled.saturating_sub(IN_REQUIRED - 1);
+            let (pos, decoded) =
+                self.run(lz, lzma, limits, &scratch[..filled], filled, symbol_limit)?;
+            produced += decoded;
+
+            if pos >= carry_len {
+                // The carry is drained. Un-consume the scratch residue so the
+                // direct path below can pick it up in place.
+                in_pos += pos - carry_len;
+                self.carry_len = 0;
+            } else {
+                // Only reachable when `m < IN_REQUIRED`, i.e. the caller did
+                // not hand us enough to complete even one symbol. The residue
+                // can be as large as `CARRY_CAP - 1`.
+                let residue = filled - pos;
+                self.carry[..residue].copy_from_slice(&scratch[pos..filled]);
+                self.carry_len = residue;
+                in_pos += m;
+                carry_blocked = true;
+            }
+        }
+
+        // Decode in place over the caller's buffer, zero copy.
+        if !carry_blocked && !limits.end_reached {
+            let avail = input.len() - in_pos;
+            if avail >= IN_REQUIRED {
+                // A symbol may start only while `pos + IN_REQUIRED <= avail`,
+                // that is while `pos < avail - (IN_REQUIRED - 1)`.
+                let symbol_limit = avail - (IN_REQUIRED - 1);
+                let (pos, decoded) =
+                    self.run(lz, lzma, limits, &input[in_pos..], avail, symbol_limit)?;
+                produced += decoded;
+                in_pos += pos;
+            }
+        }
+
+        // What is left is too short to start a symbol from, so take it into the
+        // carry.
+        if !carry_blocked && !limits.end_reached {
+            let rest = input.len() - in_pos;
+            if rest > 0 && rest < IN_REQUIRED {
+                debug_assert_eq!(self.carry_len, 0);
+                self.carry[..rest].copy_from_slice(&input[in_pos..]);
+                self.carry_len = rest;
+                in_pos = input.len();
+            }
+        }
+
+        // Decode the carry against zero padding and require the stream to end
+        // inside the real bytes.
+        if action == Action::Finish && !limits.end_reached && in_pos >= input.len() {
+            produced += self.decode_finish_tail(lz, lzma, limits)?;
+        }
+
+        Ok((in_pos, produced))
+    }
+
+    /// Decodes what is left of the carry with padding zeros behind it, so the
+    /// decoder still sees the 20 bytes it needs to start one more symbol.
+    ///
+    /// The carry bytes were counted as consumed when they were taken in, so this
+    /// adds nothing to `bytes_consumed`.
+    fn decode_finish_tail(
+        &mut self,
+        lz: &mut LzDecoder,
+        lzma: &mut LzmaDecoder,
+        limits: &mut Limits,
+    ) -> crate::Result<usize> {
+        if room_for(lz, limits.remaining_size) == 0 {
+            // No output space, so we cannot yet tell whether the stream really
+            // ends here. The caller has to drain first.
+            return Ok(0);
+        }
+
+        let carry_len = self.carry_len;
+
+        // One symbol may start at `pos == carry_len` and read up to
+        // `IN_REQUIRED` bytes from there, so at least that many zeros follow.
+        let mut scratch = [0u8; CARRY_CAP + IN_REQUIRED + 1];
+        scratch[..carry_len].copy_from_slice(&self.carry[..carry_len]);
+        let padded_len = carry_len + IN_REQUIRED + 1;
+        let (pos, produced) = self.run(
+            lz,
+            lzma,
+            limits,
+            &scratch[..padded_len],
+            carry_len,
+            carry_len + 1,
+        )?;
+
+        if pos > carry_len {
+            // The decoder had to read padding to get here, so the input is
+            // really truncated.
+            return Err(error_invalid_data("truncated LZMA stream"));
+        }
+
+        // Padding bytes must never be written back into the carry.
+        self.carry.copy_within(pos..carry_len, 0);
+        self.carry_len = carry_len - pos;
+
+        Ok(produced)
+    }
+
+    /// Decodes as much as fits from `buf`, returning `(read position, bytes
+    /// decoded into the dictionary)`.
+    fn run(
+        &mut self,
+        lz: &mut LzDecoder,
+        lzma: &mut LzmaDecoder,
+        limits: &mut Limits,
+        buf: &[u8],
+        real_len: usize,
+        symbol_limit: usize,
+    ) -> crate::Result<(usize, usize)> {
+        let room = room_for(lz, limits.remaining_size);
+        if room == 0 {
+            return Ok((0, 0));
+        }
+
+        let pos_before = lz.get_pos();
+        lz.set_limit(room);
+
+        let mut rc =
+            RangeDecoder::from_parts(SliceRangeReader::new(buf, real_len, symbol_limit), self.rc);
+        let decode_result = lzma.decode(lz, &mut rc);
+
+        // Must be read before anything can flush: `flush_partial` wraps `pos`
+        // back to zero once the dictionary is full and fully drained.
+        let produced = lz.get_pos() - pos_before;
+
+        let mut error = None;
+        if let Err(decode_error) = decode_result {
+            // An end of payload marker surfaces as an error, because the decoder
+            // calls `lz.repeat(0xFFFF_FFFF, len)`, which fails with "dist
+            // overflow". Anything else is genuine corruption. Check the order:
+            // `end_marker_detected()` is only meaningful right after a failed
+            // `repeat`.
+            if !limits.allow_end_marker || !lzma.end_marker_detected() {
+                error = Some(decode_error);
+            } else {
+                if rc.can_normalize() {
+                    rc.normalize();
+                }
+                // Only once the stream is known to end cleanly, or a caller that
+                // calls again after the error is told it did.
+                if rc.is_stream_finished() {
+                    limits.end_reached = true;
+                } else {
+                    error = Some(error_invalid_data("LZMA stream not properly terminated"));
+                }
+            }
+        }
+
+        // The reported position is only ever compared against buffer bounds:
+        // the assembly `decode_direct_bits` advances `pos` past what a symbol
+        // logically needed and clamps its reads instead of signalling.
+        let pos = rc.inner().pos().min(buf.len());
+        self.rc = rc.state();
+
+        if let Some(error) = error {
+            return Err(error);
+        }
+
+        if limits.remaining_size <= u64::MAX / 2 {
+            limits.remaining_size -= produced as u64;
+            if limits.remaining_size == 0 {
+                limits.end_reached = true;
+            }
+        }
+
+        if limits.end_reached && lz.has_pending() {
+            return Err(error_invalid_data("end reached but not decoder finished"));
+        }
+
+        Ok((pos, produced))
+    }
 }
 
 /// A sans-I/O LZMA1 stream decoder.
@@ -355,19 +631,13 @@ pub struct LzmaStream {
     lz: Option<LzDecoder>,
     /// `None` until the properties byte is known (header mode).
     lzma: Option<LzmaDecoder>,
-    rc: RangeCoderState,
-    /// Bytes taken from the caller that were too few to start a symbol from.
-    carry: [u8; CARRY_CAP],
-    carry_len: usize,
+    core: LzmaCore,
+    limits: Limits,
     /// Header and range-coder-init bytes.
     accum: Vec<u8>,
     accum_needed: usize,
-    /// `u64::MAX` means unknown; such a stream is terminated by an end of
-    /// payload marker.
-    remaining_size: u64,
     mem_limit_kb: u32,
     preset_dict: Option<Vec<u8>>,
-    end_reached: bool,
     /// Set once `process()` has returned an error. A failed stream stays failed.
     failed: bool,
     total_in: u64,
@@ -388,15 +658,18 @@ impl LzmaStream {
             state,
             lz,
             lzma,
-            rc: RangeCoderState::default(),
-            carry: [0; CARRY_CAP],
-            carry_len: 0,
+            core: LzmaCore::new(),
+            limits: Limits {
+                remaining_size,
+                // A stream of unknown size is the only one that may end with an
+                // end of payload marker.
+                allow_end_marker: remaining_size == u64::MAX,
+                end_reached: false,
+            },
             accum: Vec::new(),
             accum_needed,
-            remaining_size,
             mem_limit_kb,
             preset_dict: preset_dict.map(|dict| dict.to_vec()),
-            end_reached: false,
             failed: false,
             total_in: 0,
             total_out: 0,
@@ -519,7 +792,7 @@ impl LzmaStream {
     /// as [`LzmaReader`] does.
     pub fn unused_input(&self) -> &[u8] {
         if self.state == LzmaState::Finished {
-            &self.carry[..self.carry_len]
+            self.core.unused_input()
         } else {
             &[]
         }
@@ -590,8 +863,8 @@ impl LzmaStream {
 
                     // A stream whose declared size is zero is already over; no
                     // decode pass will ever set this for us.
-                    if self.remaining_size == 0 {
-                        self.end_reached = true;
+                    if self.limits.remaining_size == 0 {
+                        self.limits.end_reached = true;
                     }
 
                     let space = {
@@ -600,13 +873,13 @@ impl LzmaStream {
                         lz.available_space()
                     };
 
-                    if self.end_reached || space == 0 {
+                    if self.limits.end_reached || space == 0 {
                         self.state = LzmaState::DrainOutput;
                         continue;
                     }
 
                     let (consumed, produced) = self.decode_pass(input, &mut in_pos, action)?;
-                    if consumed == 0 && produced == 0 && !self.end_reached {
+                    if consumed == 0 && produced == 0 && !self.limits.end_reached {
                         stalled = true;
                     }
                     self.state = LzmaState::DrainOutput;
@@ -637,7 +910,7 @@ impl LzmaStream {
                         });
                     }
 
-                    self.state = if self.end_reached {
+                    self.state = if self.limits.end_reached {
                         LzmaState::Finished
                     } else {
                         LzmaState::Decode
@@ -728,7 +1001,8 @@ impl LzmaStream {
         )?;
         self.lz = Some(lz);
         self.lzma = Some(lzma);
-        self.remaining_size = uncomp_size;
+        self.limits.remaining_size = uncomp_size;
+        self.limits.allow_end_marker = uncomp_size == u64::MAX;
 
         self.accum.clear();
         self.accum_needed = 5;
@@ -736,16 +1010,11 @@ impl LzmaStream {
         Ok(())
     }
 
-    /// Incremental equivalent of [`RangeDecoder::new_stream`]: the first byte
-    /// must be zero, the next four are `code` in big endian order.
     fn init_range_coder(&mut self) -> crate::Result<()> {
-        if self.accum[0] != 0x00 {
-            return Err(error_invalid_input("range decoder first byte is not zero"));
-        }
-        self.rc = RangeCoderState {
-            range: 0xFFFF_FFFF,
-            code: u32::from_be_bytes([self.accum[1], self.accum[2], self.accum[3], self.accum[4]]),
-        };
+        let bytes: [u8; 5] = self.accum[..]
+            .try_into()
+            .map_err(|_| error_invalid_input("range coder init needs five bytes"))?;
+        self.core.init_rc(&bytes)?;
         self.accum.clear();
         self.accum_needed = 0;
         self.state = LzmaState::Decode;
@@ -760,213 +1029,24 @@ impl LzmaStream {
         in_pos: &mut usize,
         action: Action,
     ) -> crate::Result<(usize, usize)> {
-        let mut consumed = 0;
-        let mut produced = 0;
-
-        // No more input will ever arrive, so go straight to the finish tail
-        // rather than pointlessly re-running the carry.
-        let finish_now = action == Action::Finish && *in_pos >= input.len();
-
-        // Set when the carry could not be drained. The caller's remaining input
-        // cannot be decoded in place until it has been.
-        let mut carry_blocked = false;
-
-        // Decode across the boundary between the bytes carried over from an
-        // earlier call and the fresh input.
-        if self.carry_len > 0 && !finish_now {
-            let carry_len = self.carry_len;
-            let m = (input.len() - *in_pos).min(CARRY_CAP - carry_len);
-            let filled = carry_len + m;
-
-            let mut scratch = self.carry;
-            scratch[carry_len..filled].copy_from_slice(&input[*in_pos..*in_pos + m]);
-
-            let symbol_limit = filled.saturating_sub(IN_REQUIRED - 1);
-            let (pos, decoded) = self.run(&scratch[..filled], filled, symbol_limit)?;
-            produced += decoded;
-
-            if pos >= carry_len {
-                // The carry is drained. Un-consume the scratch residue so the
-                // direct path below can pick it up in place.
-                let extra = pos - carry_len;
-                *in_pos += extra;
-                self.total_in += extra as u64;
-                consumed += extra;
-                self.carry_len = 0;
-            } else {
-                // Only reachable when `m < IN_REQUIRED`, i.e. the caller did
-                // not hand us enough to complete even one symbol. The residue
-                // can be as large as `CARRY_CAP - 1`.
-                let residue = filled - pos;
-                self.carry[..residue].copy_from_slice(&scratch[pos..filled]);
-                self.carry_len = residue;
-                *in_pos += m;
-                self.total_in += m as u64;
-                consumed += m;
-                carry_blocked = true;
-            }
-        }
-
-        // Decode in place over the caller's buffer, zero copy.
-        if !carry_blocked && !self.end_reached {
-            let avail = input.len() - *in_pos;
-            if avail >= IN_REQUIRED {
-                // A symbol may start only while `pos + IN_REQUIRED <= avail`,
-                // that is while `pos < avail - (IN_REQUIRED - 1)`.
-                let symbol_limit = avail - (IN_REQUIRED - 1);
-                let (pos, decoded) = self.run(&input[*in_pos..], avail, symbol_limit)?;
-                produced += decoded;
-                *in_pos += pos;
-                self.total_in += pos as u64;
-                consumed += pos;
-            }
-        }
-
-        // What is left is too short to start a symbol from, so take it into the
-        // carry.
-        if !carry_blocked && !self.end_reached {
-            let rest = input.len() - *in_pos;
-            if rest > 0 && rest < IN_REQUIRED {
-                debug_assert_eq!(self.carry_len, 0);
-                self.carry[..rest].copy_from_slice(&input[*in_pos..]);
-                self.carry_len = rest;
-                *in_pos = input.len();
-                self.total_in += rest as u64;
-                consumed += rest;
-            }
-        }
-
-        // Decode the carry against zero padding and require the stream to end
-        // inside the real bytes.
-        if action == Action::Finish && !self.end_reached && *in_pos >= input.len() {
-            produced += self.decode_finish_tail()?;
-        }
-
-        Ok((consumed, produced))
-    }
-
-    /// Decodes what is left of the carry with padding zeros behind it, so the
-    /// decoder still sees the 20 bytes it needs to start one more symbol.
-    ///
-    /// The carry bytes were counted as consumed when they were taken in, so this
-    /// adds nothing to `bytes_consumed`.
-    fn decode_finish_tail(&mut self) -> crate::Result<usize> {
-        if room_for(self.lz.as_ref(), self.remaining_size) == 0 {
-            // No output space, so we cannot yet tell whether the stream really
-            // ends here. The caller has to drain first.
-            return Ok(0);
-        }
-
-        let carry_len = self.carry_len;
-
-        // One symbol may start at `pos == carry_len` and read up to
-        // `IN_REQUIRED` bytes from there, so at least that many zeros follow.
-        let mut scratch = [0u8; CARRY_CAP + IN_REQUIRED + 1];
-        scratch[..carry_len].copy_from_slice(&self.carry[..carry_len]);
-        let padded_len = carry_len + IN_REQUIRED + 1;
-        let (pos, produced) = self.run(&scratch[..padded_len], carry_len, carry_len + 1)?;
-
-        if pos > carry_len {
-            // The decoder had to read padding to get here, so the input is
-            // really truncated.
-            return Err(error_invalid_data("truncated LZMA stream"));
-        }
-
-        // Padding bytes must never be written back into the carry.
-        self.carry.copy_within(pos..carry_len, 0);
-        self.carry_len = carry_len - pos;
-
-        Ok(produced)
-    }
-
-    /// Decodes as much as fits from `buf`, returning `(read position, bytes
-    /// decoded into the dictionary)`.
-    fn run(
-        &mut self,
-        buf: &[u8],
-        real_len: usize,
-        symbol_limit: usize,
-    ) -> crate::Result<(usize, usize)> {
-        // `lz` and `lzma` stay borrowed while `rc` lives, so the fields are
-        // destructured up front and the range coder state is written back in
-        // exactly one place below, error paths included.
         let Self {
             lz,
             lzma,
-            rc: rc_state,
-            remaining_size,
-            end_reached,
+            core,
+            limits,
             ..
         } = self;
-
-        let room = room_for(lz.as_ref(), *remaining_size);
-        if room == 0 {
-            return Ok((0, 0));
-        }
 
         let (lz, lzma) = match (lz.as_mut(), lzma.as_mut()) {
             (Some(lz), Some(lzma)) => (lz, lzma),
             _ => return Err(error_invalid_data("LZMA decoder not initialized")),
         };
 
-        let pos_before = lz.get_pos();
-        lz.set_limit(room);
+        let (consumed, produced) = core.feed(lz, lzma, &input[*in_pos..], limits, action)?;
+        *in_pos += consumed;
+        self.total_in += consumed as u64;
 
-        let mut rc = RangeDecoder::from_parts(
-            SliceRangeReader::new(buf, real_len, symbol_limit),
-            *rc_state,
-        );
-        let decode_result = lzma.decode(lz, &mut rc);
-
-        // Must be read before anything can flush: `flush_partial` wraps `pos`
-        // back to zero once the dictionary is full and fully drained.
-        let produced = lz.get_pos() - pos_before;
-
-        let mut error = None;
-        if let Err(decode_error) = decode_result {
-            // An end of payload marker surfaces as an error, because the decoder
-            // calls `lz.repeat(0xFFFF_FFFF, len)`, which fails with "dist
-            // overflow". Anything else is genuine corruption. Check the order:
-            // `end_marker_detected()` is only meaningful right after a failed
-            // `repeat`.
-            if *remaining_size != u64::MAX || !lzma.end_marker_detected() {
-                error = Some(decode_error);
-            } else {
-                if rc.can_normalize() {
-                    rc.normalize();
-                }
-                // Only once the stream is known to end cleanly, or a caller that
-                // calls again after the error is told it did.
-                if rc.is_stream_finished() {
-                    *end_reached = true;
-                } else {
-                    error = Some(error_invalid_data("LZMA stream not properly terminated"));
-                }
-            }
-        }
-
-        // The reported position is only ever compared against buffer bounds:
-        // the assembly `decode_direct_bits` advances `pos` past what a symbol
-        // logically needed and clamps its reads instead of signalling.
-        let pos = rc.inner().pos().min(buf.len());
-        *rc_state = rc.state();
-
-        if let Some(error) = error {
-            return Err(error);
-        }
-
-        if *remaining_size <= u64::MAX / 2 {
-            *remaining_size -= produced as u64;
-            if *remaining_size == 0 {
-                *end_reached = true;
-            }
-        }
-
-        if *end_reached && lz.has_pending() {
-            return Err(error_invalid_data("end reached but not decoder finished"));
-        }
-
-        Ok((pos, produced))
+        Ok((consumed, produced))
     }
 }
 
