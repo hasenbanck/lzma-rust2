@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use super::{
     Read,
     decoder::LzmaDecoder,
-    error_invalid_data, error_invalid_input,
+    error_invalid_data, error_invalid_input, error_out_of_memory,
     lz::LzDecoder,
     range_dec::{RangeDecoder, RangeDecoderBuffer},
 };
@@ -47,6 +47,16 @@ pub struct Lzma2Reader<R> {
 #[inline]
 pub fn get_memory_usage(dict_size: u32) -> u32 {
     40 + COMPRESSED_SIZE_MAX / 1024 + get_dict_size(dict_size) / 1024
+}
+
+/// Calculates the memory usage in KiB required by [`Lzma2Stream`].
+///
+/// Unlike [`get_memory_usage`] this leaves out the range decoder buffer, which
+/// the sans-I/O decoder does not have: it decodes straight out of the caller's
+/// input.
+#[inline]
+pub(crate) fn get_stream_memory_usage(dict_size: u32) -> u32 {
+    40 + get_dict_size(dict_size.max(DICT_SIZE_MIN)) / 1024
 }
 
 #[inline]
@@ -258,6 +268,10 @@ pub struct Lzma2Stream {
     limits: Limits,
     need_dict_reset: bool,
     need_props: bool,
+    /// Memory usage limit in KiB. `u32::MAX` means no limit.
+    mem_limit_kb: u32,
+    /// What the dictionary this stream was built for needs, in KiB.
+    mem_need_kb: u32,
     /// Set once `process()` has returned an error. A failed stream stays failed.
     failed: bool,
     total_in: u64,
@@ -267,6 +281,7 @@ pub struct Lzma2Stream {
 impl Lzma2Stream {
     /// Create a new LZMA2 stream decoder with the given dictionary size.
     pub fn new(dict_size: u32) -> Self {
+        let mem_need_kb = get_stream_memory_usage(dict_size);
         let dict_size = get_dict_size(dict_size.max(DICT_SIZE_MIN)) as usize;
         Self {
             state: Lzma2State::ChunkHeader,
@@ -285,9 +300,26 @@ impl Lzma2Stream {
             },
             need_dict_reset: true,
             need_props: true,
+            mem_limit_kb: u32::MAX,
+            mem_need_kb,
             failed: false,
             total_in: 0,
             total_out: 0,
+        }
+    }
+
+    /// Create a new LZMA2 stream decoder with the given dictionary size and a
+    /// memory usage limit.
+    /// - `mem_limit_kb` - memory usage limit in kibibytes (KiB). `u32::MAX` means no limit.
+    ///
+    /// The dictionary is allocated on the first [`process()`] call, so a limit
+    /// violation surfaces from there rather than here.
+    ///
+    /// [`process()`]: Lzma2Stream::process
+    pub fn new_mem_limit(dict_size: u32, mem_limit_kb: u32) -> Self {
+        Self {
+            mem_limit_kb,
+            ..Self::new(dict_size)
         }
     }
 
@@ -335,6 +367,14 @@ impl Lzma2Stream {
         output: &mut [u8],
         action: Action,
     ) -> crate::Result<StreamResult> {
+        // The dictionary is allocated here rather than in the constructor, so
+        // this is where a limit violation surfaces.
+        if self.mem_limit_kb < self.mem_need_kb {
+            return Err(error_out_of_memory(
+                "needed memory too big for mem_limit_kb",
+            ));
+        }
+
         self.lz.ensure_capacity()?;
 
         let mut in_pos = 0;

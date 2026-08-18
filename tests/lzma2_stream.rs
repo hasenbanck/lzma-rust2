@@ -773,3 +773,61 @@ fn failed_stream_stays_failed() {
 
     assert!(!stream.is_finished());
 }
+
+/// What a stream with the given dictionary size needs, in KiB: the decoder
+/// state plus the dictionary, and no range decoder buffer.
+fn stream_memory(dict_size: u32) -> u32 {
+    40 + dict_size / 1024
+}
+
+#[test]
+fn memory_limit_is_enforced_from_process() {
+    let mut output = [0u8; 64];
+
+    // The constructor cannot fail; the limit is checked once the dictionary is
+    // about to be allocated.
+    let mut stream = Lzma2Stream::new_mem_limit(4096, 1);
+    let error = stream
+        .process(HELLO, &mut output, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+
+    // A generous limit works on the same bytes.
+    let stream = Lzma2Stream::new_mem_limit(4096, u32::MAX);
+    assert!(decode(stream, HELLO, ENTIRE, 4096).unwrap() == b"Hello, world!");
+}
+
+#[test]
+fn memory_limit_does_not_count_a_range_decoder_buffer() {
+    let mut output = [0u8; 64];
+    let needed = stream_memory(4096);
+
+    // What the blocking reader needs is larger, because it buffers a whole
+    // compressed chunk before decoding it.
+    assert!(lzma_rust2::lzma2_get_memory_usage(4096) > needed);
+
+    let stream = Lzma2Stream::new_mem_limit(4096, needed);
+    assert!(decode(stream, HELLO, ENTIRE, 4096).unwrap() == b"Hello, world!");
+
+    let mut stream = Lzma2Stream::new_mem_limit(4096, needed - 1);
+    let error = stream
+        .process(HELLO, &mut output, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+}
+
+#[test]
+fn a_stream_that_broke_the_limit_stays_broken() {
+    let mut output = [0u8; 64];
+    let mut stream = Lzma2Stream::new_mem_limit(4096, 1);
+
+    let error = stream
+        .process(HELLO, &mut output, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+
+    let error = stream
+        .process(HELLO, &mut output, Action::Finish)
+        .unwrap_err();
+    assert!(error.to_string().contains("already failed"));
+}
