@@ -552,3 +552,56 @@ fn failed_stream_stays_failed() {
 
     assert!(decode_with_stream(&compressed) == b"Hello, world!");
 }
+
+/// What a block with the given dictionary size needs, in KiB: the decoder state
+/// plus the dictionary, and no range decoder buffer.
+fn block_memory(dict_size: u32) -> u32 {
+    40 + dict_size / 1024
+}
+
+#[test]
+fn memory_limit_is_enforced_from_process() {
+    let compressed = encode_xz(b"Hello, world!", 6);
+    let mut output_buf = [0u8; 4096];
+
+    // The constructor cannot fail; the limit is checked once a block header has
+    // been parsed.
+    let mut decoder = XzStream::new_mem_limit(false, 1);
+    let error = decoder
+        .process(&compressed, &mut output_buf, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+
+    // A generous limit works on the same bytes.
+    assert!(decode_with_stream(&compressed) == b"Hello, world!");
+}
+
+#[test]
+fn memory_limit_matches_the_dictionary_in_the_block_header() {
+    let dict_size = XzOptions::with_preset(6).lzma_options.dict_size;
+    let compressed = encode_xz(b"Hello, world!", 6);
+    let needed = block_memory(dict_size);
+    let mut output_buf = [0u8; 4096];
+
+    let mut decoder = XzStream::new_mem_limit(false, needed);
+    let mut decompressed = Vec::new();
+    let mut pos = 0;
+    loop {
+        let result = decoder
+            .process(&compressed[pos..], &mut output_buf, Action::Finish)
+            .unwrap();
+        pos += result.bytes_consumed;
+        decompressed.extend_from_slice(&output_buf[..result.bytes_produced]);
+        if result.status == Status::StreamEnd {
+            break;
+        }
+        assert!(result.bytes_consumed != 0 || result.bytes_produced != 0);
+    }
+    assert!(decompressed == b"Hello, world!");
+
+    let mut decoder = XzStream::new_mem_limit(false, needed - 1);
+    let error = decoder
+        .process(&compressed, &mut output_buf, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+}

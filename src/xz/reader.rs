@@ -7,12 +7,12 @@ use super::{
 use crate::{
     CountingReader, Lzma2Reader, Read, Result,
     crc::Crc32,
-    error_invalid_data,
+    error_invalid_data, error_out_of_memory,
     filter::{
         bcj::{BcjFilter, BcjReader},
         delta::{Delta, DeltaReader},
     },
-    lzma2_reader::Lzma2Stream,
+    lzma2_reader::{Lzma2Stream, get_stream_memory_usage},
     stream::{Action, Status, StreamResult},
 };
 
@@ -539,6 +539,8 @@ pub struct XzStream {
     index_crc: Crc32,
     index_size: usize,
     allow_multiple_streams: bool,
+    /// Memory usage limit in KiB. `u32::MAX` means no limit.
+    mem_limit_kb: u32,
     /// Set once `process()` has returned an error. A failed stream stays failed.
     failed: bool,
     total_in: u64,
@@ -570,6 +572,7 @@ impl XzStream {
             index_crc: Crc32::new(),
             index_size: 0,
             allow_multiple_streams,
+            mem_limit_kb: u32::MAX,
             failed: false,
             total_in: 0,
             total_out: 0,
@@ -577,6 +580,23 @@ impl XzStream {
             filter_buf: Vec::new(),
             filter_pos: 0,
             filter_unfiltered: 0,
+        }
+    }
+
+    /// Create a new XZ stream decoder with a memory usage limit.
+    ///
+    /// If `allow_multiple_streams` is true, concatenated XZ streams are decoded
+    /// sequentially until EOF.
+    /// - `mem_limit_kb` - memory usage limit in kibibytes (KiB). `u32::MAX` means no limit.
+    ///
+    /// Each block header is checked against the limit as it is parsed, so
+    /// violations surface from [`process()`] rather than from here.
+    ///
+    /// [`process()`]: XzStream::process
+    pub fn new_mem_limit(allow_multiple_streams: bool, mem_limit_kb: u32) -> Self {
+        Self {
+            mem_limit_kb,
+            ..Self::new(allow_multiple_streams)
         }
     }
 
@@ -1024,7 +1044,18 @@ impl XzStream {
             return Err(error_invalid_data("no LZMA2 filter in block"));
         }
 
-        self.lzma2 = Some(Lzma2Stream::new(lzma2_dict_size));
+        // Check the memory limit before allocating anything.
+        let need_mem = get_stream_memory_usage(lzma2_dict_size);
+        if self.mem_limit_kb < need_mem {
+            return Err(error_out_of_memory(
+                "needed memory too big for mem_limit_kb",
+            ));
+        }
+
+        self.lzma2 = Some(Lzma2Stream::new_mem_limit(
+            lzma2_dict_size,
+            self.mem_limit_kb,
+        ));
         if let Some(ct) = self.check_type {
             self.checksum = Some(ChecksumCalculator::new(ct));
         }
