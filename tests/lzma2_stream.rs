@@ -742,3 +742,34 @@ fn chunk_declaring_unread_bytes_is_rejected() {
         }
     }
 }
+
+/// "Hello, world!" as one uncompressed LZMA2 chunk that resets the dictionary,
+/// followed by the end of stream control byte.
+static HELLO: &[u8] = &[
+    1, 0, 12, 72, 101, 108, 108, 111, 44, 32, 119, 111, 114, 108, 100, 33, 0,
+];
+
+/// A control byte in the reserved 0x03 to 0x7F range.
+static RESERVED_CONTROL: &[u8] = &[0x03];
+
+/// Once `process()` has returned an error the stream is done, however good the
+/// bytes handed to it after that are.
+#[test]
+fn failed_stream_stays_failed() {
+    let mut stream = Lzma2Stream::new(4096);
+    let mut output = [0u8; 64];
+
+    let error = stream
+        .process(RESERVED_CONTROL, &mut output, Action::Run)
+        .unwrap_err();
+    assert!(!error.to_string().contains("already failed"));
+
+    // The same stream gets nowhere now, even on bytes that decode fine on their
+    // own.
+    let error = stream
+        .process(HELLO, &mut output, Action::Finish)
+        .unwrap_err();
+    assert!(error.to_string().contains("already failed"));
+
+    assert!(!stream.is_finished());
+}

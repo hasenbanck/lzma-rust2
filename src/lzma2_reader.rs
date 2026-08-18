@@ -258,6 +258,8 @@ pub struct Lzma2Stream {
     limits: Limits,
     need_dict_reset: bool,
     need_props: bool,
+    /// Set once `process()` has returned an error. A failed stream stays failed.
+    failed: bool,
     total_in: u64,
     total_out: u64,
 }
@@ -283,6 +285,7 @@ impl Lzma2Stream {
             },
             need_dict_reset: true,
             need_props: true,
+            failed: false,
             total_in: 0,
             total_out: 0,
         }
@@ -310,6 +313,23 @@ impl Lzma2Stream {
 
     /// Process available LZMA2 data from `input` into `output`.
     pub fn process(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        action: Action,
+    ) -> crate::Result<StreamResult> {
+        if self.failed {
+            return Err(error_invalid_data("LZMA2 stream already failed"));
+        }
+
+        let result = self.process_inner(input, output, action);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
+    fn process_inner(
         &mut self,
         input: &[u8],
         output: &mut [u8],
