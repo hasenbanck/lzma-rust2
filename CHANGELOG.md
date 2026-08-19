@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- Add `new_mem_limit()` to `Lzma2Stream` and `XzStream`.
+
+### Changed
+
+- Decode LZMA2 chunks as they arrive instead of buffering each one, so `Lzma2Stream` and `XzStream` produce output sooner and use less memory.
+
+### Fixed
+
+- `Lzma2Stream` and `XzStream` now fail every later `process()` call once one has returned an error, like `LzmaStream` already did.
+
 ## 0.19.0 - 2026-08-16
 
 - Add sans-I/O decoders for LZMA1 and LZIP. Thanks @Black-Frost (#109)
