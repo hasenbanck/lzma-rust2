@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use super::{HEADER_SIZE, LZIP_MAGIC, LZIP_VERSION, TRAILER_SIZE, decode_dict_size};
 use crate::{
-    Action, LzmaStream, Result, Status, StreamResult, crc::Crc32, error_invalid_data,
+    Action, LzmaStream, Result, Status, StreamResult, crc::Crc32, error_eof, error_invalid_data,
     error_out_of_memory, lzma_reader::get_memory_usage,
 };
 
@@ -277,7 +277,7 @@ impl LzipStream {
                 // long as a member has already been decoded. Anything else is a
                 // truncated stream.
                 if self.state != LzipState::Header || self.members == 0 {
-                    return Err(error_invalid_data("unexpected end of LZIP stream"));
+                    return Err(error_eof("unexpected end of LZIP stream"));
                 }
 
                 self.finish();

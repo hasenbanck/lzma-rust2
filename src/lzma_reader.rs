@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use crate::{
     ByteReader, DICT_SIZE_MAX, Read,
     decoder::LzmaDecoder,
-    error_invalid_data, error_invalid_input, error_out_of_memory,
+    error_eof, error_invalid_data, error_invalid_input, error_out_of_memory,
     lz::LzDecoder,
     range_dec::{RangeCoderState, RangeDecoder, SliceRangeReader},
     stream::{Action, Status, StreamResult},
@@ -533,7 +533,7 @@ impl LzmaCore {
         if pos > carry_len {
             // The decoder had to read padding to get here, so the input is
             // really truncated.
-            return Err(error_invalid_data("truncated LZMA stream"));
+            return Err(error_eof("truncated LZMA stream"));
         }
 
         // Padding bytes must never be written back into the carry.
@@ -968,7 +968,7 @@ impl LzmaStream {
         while self.accum.len() < self.accum_needed {
             if *in_pos >= input.len() {
                 if action == Action::Finish {
-                    return Err(error_invalid_data("unexpected end of LZMA stream"));
+                    return Err(error_eof("unexpected end of LZMA stream"));
                 }
                 return Ok(Some(StreamResult {
                     bytes_consumed: *in_pos,
