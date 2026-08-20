@@ -492,7 +492,11 @@ impl RangeReader for SliceRangeReader<'_> {
     }
 
     fn try_read_u8(&mut self) -> crate::Result<u8> {
-        let byte = self.buf.get(self.pos).copied().ok_or_else(error_eof)?;
+        let byte = self
+            .buf
+            .get(self.pos)
+            .copied()
+            .ok_or_else(|| error_eof("unexpected end of range coder input"))?;
         self.pos += 1;
         Ok(byte)
     }
@@ -635,7 +639,10 @@ impl RangeReader for RangeDecoderBuffer {
     }
 
     fn try_read_u8(&mut self) -> crate::Result<u8> {
-        self.buf.get(self.pos).copied().ok_or_else(error_eof)
+        self.buf
+            .get(self.pos)
+            .copied()
+            .ok_or_else(|| error_eof("unexpected end of range coder input"))
     }
 
     #[inline(always)]

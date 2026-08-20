@@ -426,8 +426,8 @@ impl<T: Write> ByteWriter for T {
 
 #[cfg(feature = "std")]
 #[inline(always)]
-fn error_eof() -> Error {
-    Error::new(std::io::ErrorKind::UnexpectedEof, "unexpected EOF")
+fn error_eof(msg: &'static str) -> Error {
+    Error::new(std::io::ErrorKind::UnexpectedEof, msg)
 }
 
 #[cfg(feature = "std")]
@@ -468,7 +468,7 @@ fn copy_error(error: &Error) -> Error {
 
 #[cfg(not(feature = "std"))]
 #[inline(always)]
-fn error_eof() -> Error {
+fn error_eof(_msg: &'static str) -> Error {
     Error::Eof
 }
 

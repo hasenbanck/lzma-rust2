@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use super::{
     Read,
     decoder::LzmaDecoder,
-    error_invalid_data, error_invalid_input, error_out_of_memory,
+    error_eof, error_invalid_data, error_invalid_input, error_out_of_memory,
     lz::LzDecoder,
     range_dec::{RangeDecoder, RangeDecoderBuffer},
 };
@@ -482,7 +482,7 @@ impl Lzma2Stream {
         // takes no input at all.
         if *in_pos >= input.len() && compressed_left > 0 {
             if action == Action::Finish {
-                return Err(error_invalid_data("unexpected end of LZMA2 stream"));
+                return Err(error_eof("unexpected end of LZMA2 stream"));
             }
             return Ok(Some(StreamResult {
                 bytes_consumed: *in_pos,
@@ -570,7 +570,7 @@ impl Lzma2Stream {
         }
         if *in_pos >= input.len() {
             if action == Action::Finish {
-                return Err(error_invalid_data("unexpected end of LZMA2 stream"));
+                return Err(error_eof("unexpected end of LZMA2 stream"));
             }
             return Ok(Some(StreamResult {
                 bytes_consumed: *in_pos,
@@ -611,7 +611,7 @@ impl Lzma2Stream {
         while self.accum.len() < self.accum_needed {
             if *in_pos >= input.len() {
                 if action == Action::Finish {
-                    return Err(error_invalid_data("unexpected end of LZMA2 stream"));
+                    return Err(error_eof("unexpected end of LZMA2 stream"));
                 }
                 return Ok(Some(StreamResult {
                     bytes_consumed: *in_pos,

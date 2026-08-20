@@ -572,7 +572,9 @@ fn empty_input_errors() {
     let error = stream
         .process(&[], &mut output, Action::Finish)
         .unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::InvalidData);
+    // The member header never arrived, so the input ended early rather than
+    // being wrong.
+    assert_eq!(error.kind(), ErrorKind::UnexpectedEof);
 }
 
 #[test]

@@ -831,3 +831,33 @@ fn a_stream_that_broke_the_limit_stays_broken() {
         .unwrap_err();
     assert!(error.to_string().contains("already failed"));
 }
+
+/// A truncated stream is the end of the input, not bad data. The blocking
+/// reader has always said so; the sans-I/O decoder has to agree, or the same
+/// file gets two different answers depending on which one you reached for.
+#[test]
+fn truncation_reports_unexpected_eof() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let (compressed, dict_size) = compress(&data, 6);
+
+    for cut in [1usize, 7, 64, compressed.len() / 2, compressed.len() - 1] {
+        let truncated = &compressed[..cut];
+
+        let mut from_reader = Vec::new();
+        let reader_kind = lzma_rust2::Lzma2Reader::new(truncated, dict_size, None)
+            .read_to_end(&mut from_reader)
+            .map(|_| None)
+            .unwrap_or_else(|error| Some(error.kind()));
+
+        let stream_kind = decode(Lzma2Stream::new(dict_size), truncated, ENTIRE, 4096)
+            .map(|_| None)
+            .unwrap_or_else(|error| Some(error.kind()));
+
+        assert_eq!(
+            stream_kind,
+            Some(std::io::ErrorKind::UnexpectedEof),
+            "cut {cut}: expected UnexpectedEof from Lzma2Stream"
+        );
+        assert_eq!(stream_kind, reader_kind, "cut {cut}: decoders disagree");
+    }
+}

@@ -7,7 +7,7 @@ use super::{
 use crate::{
     CountingReader, Lzma2Reader, Read, Result,
     crc::Crc32,
-    error_invalid_data, error_out_of_memory,
+    error_eof, error_invalid_data, error_out_of_memory,
     filter::{
         bcj::{BcjFilter, BcjReader},
         delta::{Delta, DeltaReader},
@@ -698,7 +698,7 @@ impl XzStream {
                                     self.state = XzStreamState::Finished;
                                     continue;
                                 }
-                                return Err(error_invalid_data("unexpected end of XZ stream"));
+                                return Err(error_eof("unexpected end of XZ stream"));
                             }
                             return Ok(StreamResult {
                                 bytes_consumed: in_pos,

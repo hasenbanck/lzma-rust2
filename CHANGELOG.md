@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Decode LZMA2 chunks as they arrive instead of buffering each one, so `Lzma2Stream` and `XzStream` produce output sooner and use less memory.
+- A truncated stream now comes back as `UnexpectedEof` from the sans-I/O decoders instead of `InvalidData`.
 
 ### Fixed
 
