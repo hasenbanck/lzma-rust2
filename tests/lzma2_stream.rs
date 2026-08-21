@@ -4,7 +4,13 @@ use std::{
     io::{Read, Write},
 };
 
-use lzma_rust2::{Action, Lzma2Options, Lzma2Stream, Lzma2Writer, Status};
+use lzma_rust2::{
+    Action, FilterConfig, FilterType, Lzma2Options, Lzma2Reader, Lzma2Stream, Lzma2Writer, Status,
+    filter::{
+        bcj::{BcjReader, BcjWriter},
+        delta::{DeltaReader, DeltaWriter},
+    },
+};
 
 static APACHE2: &str = "tests/data/apache2.txt";
 static EXECUTABLE: &str = "tests/data/executable.exe";
@@ -860,4 +866,240 @@ fn truncation_reports_unexpected_eof() {
         );
         assert_eq!(stream_kind, reader_kind, "cut {cut}: decoders disagree");
     }
+}
+
+/// The filters worth trying: delta, which holds nothing back, and BCJ variants
+/// that hold back a different number of bytes each.
+fn filters() -> Vec<FilterConfig> {
+    vec![
+        FilterConfig::new_delta(1),
+        FilterConfig::new_delta(4),
+        FilterConfig::new_bcj_x86(0),
+        FilterConfig::new_bcj_arm64(0),
+        FilterConfig::new_bcj_ia64(0),
+    ]
+}
+
+/// Encodes `data` through the filter and then LZMA2, the way an XZ block with
+/// that filter chain would.
+fn compress_filtered(data: &[u8], filter: &FilterConfig, preset: u32) -> (Vec<u8>, u32) {
+    let opts = Lzma2Options::with_preset(preset);
+    let dict_size = opts.lzma_options.dict_size;
+    let lzma2 = Lzma2Writer::new(Vec::new(), opts);
+    let property = filter.property as usize;
+
+    let compressed = if filter.filter_type == FilterType::Delta {
+        let mut writer = DeltaWriter::new(lzma2, property);
+        writer.write_all(data).unwrap();
+        // The delta writer holds nothing back, so there is nothing to finish.
+        writer.into_inner().finish().unwrap()
+    } else {
+        let mut writer = match filter.filter_type {
+            FilterType::BcjX86 => BcjWriter::new_x86(lzma2, property),
+            FilterType::BcjArm64 => BcjWriter::new_arm64(lzma2, property),
+            FilterType::BcjIa64 => BcjWriter::new_ia64(lzma2, property),
+            other => panic!("no writer for {other:?}"),
+        };
+        writer.write_all(data).unwrap();
+        // Only `finish()` writes out the tail the filter held back.
+        writer.finish().unwrap().finish().unwrap()
+    };
+
+    (compressed, dict_size)
+}
+
+/// Decodes with the blocking reader chain, which this has to agree with.
+fn decompress_filtered(compressed: &[u8], filter: &FilterConfig, dict_size: u32) -> Vec<u8> {
+    let lzma2 = Lzma2Reader::new(compressed, dict_size, None);
+    let property = filter.property as usize;
+    let mut decompressed = Vec::new();
+
+    if filter.filter_type == FilterType::Delta {
+        DeltaReader::new(lzma2, property)
+            .read_to_end(&mut decompressed)
+            .unwrap();
+    } else {
+        let mut reader = match filter.filter_type {
+            FilterType::BcjX86 => BcjReader::new_x86(lzma2, property),
+            FilterType::BcjArm64 => BcjReader::new_arm64(lzma2, property),
+            FilterType::BcjIa64 => BcjReader::new_ia64(lzma2, property),
+            other => panic!("no reader for {other:?}"),
+        };
+        reader.read_to_end(&mut decompressed).unwrap();
+    }
+
+    decompressed
+}
+
+fn filtered_stream(dict_size: u32, filter: &FilterConfig) -> Lzma2Stream {
+    let mut stream = Lzma2Stream::new(dict_size);
+    stream.set_filters(std::slice::from_ref(filter)).unwrap();
+    stream
+}
+
+/// Real machine code, so the BCJ filters have something to convert.
+fn executable(len: usize) -> Vec<u8> {
+    std::fs::read(EXECUTABLE).unwrap()[..len].to_vec()
+}
+
+/// The sans-I/O decoder and the blocking reader chain have to give the same
+/// bytes for the same filtered stream.
+#[test]
+fn filtered_round_trip_matches_the_reader_chain() {
+    let data = executable(2 * 1024 * 1024);
+
+    for filter in filters() {
+        let kind = filter.filter_type;
+        let (compressed, dict_size) = compress_filtered(&data, &filter, 1);
+
+        let from_stream = decode(
+            filtered_stream(dict_size, &filter),
+            &compressed,
+            ENTIRE,
+            4096,
+        )
+        .unwrap_or_else(|error| panic!("{kind:?}: {error}"));
+        let from_reader = decompress_filtered(&compressed, &filter, dict_size);
+
+        assert!(from_stream == from_reader, "{kind:?}: decoders disagree");
+        assert!(from_stream == data, "{kind:?}");
+    }
+}
+
+/// A filter that holds a tail back only gets it wrong where a buffer boundary
+/// splits an instruction, so both sides have to be varied.
+#[test]
+fn filtered_chunk_matrix() {
+    let data = executable(32 * 1024);
+
+    for filter in filters() {
+        let kind = filter.filter_type;
+        let (compressed, dict_size) = compress_filtered(&data, &filter, 1);
+
+        for &chunk in CHUNK_SIZES {
+            for &out_size in OUTPUT_SIZES {
+                let decompressed = decode(
+                    filtered_stream(dict_size, &filter),
+                    &compressed,
+                    chunk,
+                    out_size,
+                )
+                .unwrap_or_else(|error| panic!("{kind:?} chunk {chunk} out {out_size}: {error}"));
+                assert!(
+                    decompressed == data,
+                    "{kind:?} chunk {chunk} out {out_size}"
+                );
+            }
+        }
+    }
+}
+
+/// The same, over an input long enough for several LZMA2 chunks. The filter
+/// runs on for the whole stream, while every chunk restarts the range coder.
+#[test]
+fn filtered_chunk_matrix_across_chunk_boundaries() {
+    let data = executable(300 * 1024);
+
+    for filter in [FilterConfig::new_delta(4), FilterConfig::new_bcj_x86(0)] {
+        let kind = filter.filter_type;
+        let (compressed, dict_size) = compress_filtered(&data, &filter, 1);
+        assert!(
+            chunk_ends(&compressed).len() > 2,
+            "expected more than one compressed chunk"
+        );
+
+        for &chunk in &[1usize, 5, 19, 20, 21, 39, 40, 41, 4096, ENTIRE] {
+            for &out_size in &[7usize, 4096] {
+                let decompressed = decode(
+                    filtered_stream(dict_size, &filter),
+                    &compressed,
+                    chunk,
+                    out_size,
+                )
+                .unwrap_or_else(|error| panic!("{kind:?} chunk {chunk} out {out_size}: {error}"));
+                assert!(
+                    decompressed == data,
+                    "{kind:?} chunk {chunk} out {out_size}"
+                );
+            }
+        }
+    }
+}
+
+/// `total_out()` counts what the caller was handed. A filtered stream decodes
+/// into a staging buffer on the way, and those bytes must not count twice, nor
+/// count before they arrive.
+#[test]
+fn filtered_total_out_counts_delivered_bytes() {
+    let data = executable(64 * 1024);
+    let filter = FilterConfig::new_bcj_x86(0);
+    let (compressed, dict_size) = compress_filtered(&data, &filter, 1);
+
+    let mut stream = filtered_stream(dict_size, &filter);
+    let mut output = [0u8; 100];
+    let mut decompressed = Vec::new();
+    let mut in_pos = 0;
+
+    loop {
+        let action = if in_pos >= compressed.len() {
+            Action::Finish
+        } else {
+            Action::Run
+        };
+        let result = stream
+            .process(&compressed[in_pos..], &mut output, action)
+            .unwrap();
+        in_pos += result.bytes_consumed;
+        decompressed.extend_from_slice(&output[..result.bytes_produced]);
+
+        // Checked after every call, not just at the end: at this point the
+        // staging buffer holds decoded bytes the caller has not seen yet.
+        assert_eq!(stream.total_out(), decompressed.len() as u64);
+
+        if result.status == Status::StreamEnd {
+            break;
+        }
+    }
+
+    assert!(decompressed == data);
+    assert_eq!(stream.total_out(), data.len() as u64);
+}
+
+/// The three ways of asking for something `set_filters` will not do.
+#[test]
+fn set_filters_rejects_what_it_can_not_do() {
+    // LZMA2 is the stage this type already is, not a pre-filter.
+    let mut stream = Lzma2Stream::new(4096);
+    let error = stream
+        .set_filters(&[FilterConfig {
+            filter_type: FilterType::Lzma2,
+            property: 4096,
+        }])
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+
+    // One pre-filter only, so a chain is refused rather than half applied.
+    let mut stream = Lzma2Stream::new(4096);
+    let error = stream
+        .set_filters(&[FilterConfig::new_delta(1), FilterConfig::new_bcj_x86(0)])
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+
+    // Too late: what came out until now came out unfiltered.
+    let mut stream = Lzma2Stream::new(4096);
+    let mut output = [0u8; 64];
+    stream.process(HELLO, &mut output, Action::Finish).unwrap();
+    let error = stream
+        .set_filters(&[FilterConfig::new_bcj_x86(0)])
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+/// An empty chain is not one of them: it leaves the stream unfiltered, so a
+/// caller can pass on whatever it was given.
+#[test]
+fn set_filters_accepts_an_empty_chain() {
+    let mut stream = Lzma2Stream::new(4096);
+    stream.set_filters(&[]).unwrap();
+    assert!(decode(stream, HELLO, ENTIRE, 4096).unwrap() == b"Hello, world!");
 }

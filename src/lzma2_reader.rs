@@ -3,17 +3,21 @@ use alloc::vec::Vec;
 use super::{
     Read,
     decoder::LzmaDecoder,
-    error_eof, error_invalid_data, error_invalid_input, error_out_of_memory,
+    error_eof, error_invalid_data, error_invalid_input, error_out_of_memory, error_unsupported,
     lz::LzDecoder,
     range_dec::{RangeDecoder, RangeDecoderBuffer},
 };
 use crate::{
     ByteReader, DICT_SIZE_MIN,
+    filter::{FilterConfig, StreamFilter},
     lzma_reader::{Limits, LzmaCore, RC_INIT_SIZE},
     stream::{Action, Status, StreamResult},
 };
 
 pub const COMPRESSED_SIZE_MAX: u32 = 1 << 16;
+
+/// How much one drain out of the dictionary moves at most.
+const DRAIN_SIZE_MAX: usize = 4096;
 
 /// A single-threaded LZMA2 decompressor.
 ///
@@ -268,6 +272,13 @@ pub struct Lzma2Stream {
     limits: Limits,
     need_dict_reset: bool,
     need_props: bool,
+    /// The pre-filter the decoded output runs through, if one was set.
+    filter: Option<StreamFilter>,
+    /// Decoded bytes waiting for the filter and the caller. Stays empty, and so
+    /// unallocated, as long as no filter is set.
+    filter_buf: Vec<u8>,
+    /// How much of `filter_buf` the caller has been handed already.
+    filter_pos: usize,
     /// Memory usage limit in KiB. `u32::MAX` means no limit.
     mem_limit_kb: u32,
     /// What the dictionary this stream was built for needs, in KiB.
@@ -300,6 +311,9 @@ impl Lzma2Stream {
             },
             need_dict_reset: true,
             need_props: true,
+            filter: None,
+            filter_buf: Vec::new(),
+            filter_pos: 0,
             mem_limit_kb: u32::MAX,
             mem_need_kb,
             failed: false,
@@ -323,6 +337,29 @@ impl Lzma2Stream {
         }
     }
 
+    /// Decode through a pre-filter, such as a BCJ or delta filter.
+    ///
+    /// At most one filter is supported. [`FilterType::Lzma2`] is not a
+    /// pre-filter and is rejected, as this type is itself the LZMA2 stage. An
+    /// empty slice leaves the stream unfiltered.
+    ///
+    /// Must be called before decoding starts.
+    ///
+    /// [`FilterType::Lzma2`]: crate::FilterType::Lzma2
+    pub fn set_filters(&mut self, filters: &[FilterConfig]) -> crate::Result<()> {
+        if self.total_in != 0 {
+            return Err(error_invalid_input("filters set after decoding started"));
+        }
+        if filters.len() > 1 {
+            return Err(error_unsupported("only one filter is supported"));
+        }
+        let Some(config) = filters.first() else {
+            return Ok(());
+        };
+        self.filter = Some(StreamFilter::new(config)?);
+        Ok(())
+    }
+
     /// Total bytes consumed from input across all `process()` calls.
     pub fn total_in(&self) -> u64 {
         self.total_in
@@ -340,7 +377,7 @@ impl Lzma2Stream {
 
     /// Returns true if there is decoded output waiting to be flushed.
     pub fn has_output(&self) -> bool {
-        self.lz.has_output()
+        self.lz.has_output() || self.filter_pos < self.filter_buf.len()
     }
 
     /// Process available LZMA2 data from `input` into `output`.
@@ -384,8 +421,29 @@ impl Lzma2Stream {
         let mut stalled = false;
 
         loop {
+            // Whatever the state, settled bytes in the staging buffer go out
+            // first. They are already decoded and filtered, so holding them
+            // back would look like a stall to the caller.
+            if self.filter_pos < self.settled_end() && out_pos < output.len() {
+                self.emit_filtered(output, &mut out_pos);
+                continue;
+            }
+
             match self.state {
                 Lzma2State::Finished => {
+                    // Nothing follows the last chunk, so the tail the filter
+                    // held back is settled now and still has to be handed over.
+                    self.finish_filter();
+                    if self.filter_pos < self.settled_end() {
+                        if out_pos >= output.len() {
+                            return Ok(StreamResult {
+                                bytes_consumed: in_pos,
+                                bytes_produced: out_pos,
+                                status: Status::Ok,
+                            });
+                        }
+                        continue;
+                    }
                     return Ok(StreamResult {
                         bytes_consumed: in_pos,
                         bytes_produced: out_pos,
@@ -403,7 +461,9 @@ impl Lzma2Stream {
                             status: Status::Ok,
                         });
                     }
-                    if !self.flush_output(output, &mut out_pos) {
+                    if self.filter.is_some() {
+                        self.drain_and_filter();
+                    } else if !self.flush_output(output, &mut out_pos) {
                         return Ok(StreamResult {
                             bytes_consumed: in_pos,
                             bytes_produced: out_pos,
@@ -464,6 +524,83 @@ impl Lzma2Stream {
         }
         self.finish_drain();
         true
+    }
+
+    /// Where the settled bytes of the staging buffer end.
+    ///
+    /// A BCJ filter can not classify the last bytes of what it was given before
+    /// it knows what follows them, so those stay behind until the next drain or
+    /// the end of the stream.
+    fn settled_end(&self) -> usize {
+        self.filter_buf.len() - self.filter_held_back()
+    }
+
+    fn filter_held_back(&self) -> usize {
+        self.filter.as_ref().map_or(0, |filter| filter.held_back())
+    }
+
+    fn finish_filter(&mut self) {
+        if let Some(filter) = self.filter.as_mut() {
+            filter.finish();
+        }
+    }
+
+    /// Decodes into the staging buffer and runs the filter over what arrived.
+    ///
+    /// The bytes are counted as produced once they reach the caller in
+    /// [`Self::emit_filtered`], not here.
+    fn drain_and_filter(&mut self) {
+        let filter_start = self.settled_end();
+        let drained = Self::flush_to_buf(&mut self.lz, &mut self.filter_buf, DRAIN_SIZE_MAX);
+        if drained > 0 {
+            // The held back tail was never filtered, so it goes through again
+            // together with what now follows it.
+            let unfiltered = &mut self.filter_buf[filter_start..];
+            if let Some(filter) = self.filter.as_mut() {
+                filter.decode(unfiltered);
+            }
+        }
+        if !self.lz.has_output() {
+            self.finish_drain();
+        }
+    }
+
+    /// Hands the settled bytes of the staging buffer to the caller.
+    fn emit_filtered(&mut self, output: &mut [u8], out_pos: &mut usize) {
+        let settled_end = self.settled_end();
+        let n = (settled_end - self.filter_pos).min(output.len() - *out_pos);
+        output[*out_pos..*out_pos + n]
+            .copy_from_slice(&self.filter_buf[self.filter_pos..self.filter_pos + n]);
+        *out_pos += n;
+        self.total_out += n as u64;
+        self.filter_pos += n;
+
+        if self.filter_pos == settled_end {
+            self.compact_filter_buf();
+        }
+    }
+
+    /// Drops what the caller has taken, keeping the held back tail.
+    fn compact_filter_buf(&mut self) {
+        let held_back = self.filter_held_back();
+        let tail_start = self.filter_buf.len() - held_back;
+        if tail_start > 0 {
+            self.filter_buf.copy_within(tail_start.., 0);
+            self.filter_buf.truncate(held_back);
+        }
+        self.filter_pos = 0;
+    }
+
+    /// Moves decoded bytes into `buf`, up to `limit` of them. The caller decides
+    /// whether they count towards `total_out`.
+    fn flush_to_buf(lz: &mut LzDecoder, buf: &mut Vec<u8>, limit: usize) -> usize {
+        let mut tmp = [0u8; DRAIN_SIZE_MAX];
+        let cap = limit.min(tmp.len());
+        let n = lz.flush_partial(&mut tmp[..cap]);
+        if n > 0 {
+            buf.extend_from_slice(&tmp[..n]);
+        }
+        n
     }
 
     /// Decodes what the caller handed us of the current chunk, in place.
@@ -654,13 +791,8 @@ impl Lzma2Stream {
     }
 
     pub(crate) fn drain_to_buf(&mut self, buf: &mut Vec<u8>, limit: usize) -> usize {
-        let mut tmp = [0u8; 4096];
-        let cap = limit.min(tmp.len());
-        let n = self.lz.flush_partial(&mut tmp[..cap]);
-        if n > 0 {
-            buf.extend_from_slice(&tmp[..n]);
-            self.total_out += n as u64;
-        }
+        let n = Self::flush_to_buf(&mut self.lz, buf, limit);
+        self.total_out += n as u64;
         if !self.lz.has_output() {
             self.finish_drain();
         }
