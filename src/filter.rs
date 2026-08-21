@@ -4,6 +4,13 @@ pub mod bcj;
 pub mod bcj2;
 pub mod delta;
 
+use alloc::boxed::Box;
+
+use crate::{
+    error_unsupported,
+    filter::{bcj::BcjFilter, delta::Delta},
+};
+
 /// Configuration for a filter in the XZ filter chain.
 #[derive(Debug, Clone)]
 pub struct FilterConfig {
@@ -129,5 +136,82 @@ impl TryFrom<u64> for FilterType {
             0x21 => Ok(FilterType::Lzma2),
             _ => Err(()),
         }
+    }
+}
+
+/// A single filter for the sans-I/O decoders.
+///
+/// Decodes a slice in place. A BCJ filter can not classify the last bytes of a
+/// slice before it knows what follows them, so it holds them back until more
+/// data arrives or the stream ends.
+pub struct StreamFilter {
+    filter: Filter,
+    held_back: usize,
+}
+
+enum Filter {
+    Delta(Box<Delta>),
+    Bcj(BcjFilter),
+}
+
+impl StreamFilter {
+    /// Creates a new filter from its configuration.
+    ///
+    /// LZMA2 is not supported, as it is not a filter that decodes a slice in
+    /// place.
+    pub fn new(config: &FilterConfig) -> crate::Result<Self> {
+        let property = config.property as usize;
+
+        let filter = match config.filter_type {
+            FilterType::Delta => Filter::Delta(Box::new(Delta::new(property))),
+            FilterType::BcjX86 => Filter::Bcj(BcjFilter::new_x86(property, false)),
+            FilterType::BcjPpc => Filter::Bcj(BcjFilter::new_power_pc(property, false)),
+            FilterType::BcjIa64 => Filter::Bcj(BcjFilter::new_ia64(property, false)),
+            FilterType::BcjArm => Filter::Bcj(BcjFilter::new_arm(property, false)),
+            FilterType::BcjArmThumb => Filter::Bcj(BcjFilter::new_arm_thumb(property, false)),
+            FilterType::BcjSparc => Filter::Bcj(BcjFilter::new_sparc(property, false)),
+            FilterType::BcjArm64 => Filter::Bcj(BcjFilter::new_arm64(property, false)),
+            FilterType::BcjRiscv => Filter::Bcj(BcjFilter::new_riscv(property, false)),
+            FilterType::Lzma2 => {
+                return Err(error_unsupported("LZMA2 is not supported as a filter"));
+            }
+        };
+
+        Ok(Self {
+            filter,
+            held_back: 0,
+        })
+    }
+
+    /// Decodes `buf` in place and returns how many bytes at its start are
+    /// settled.
+    ///
+    /// The bytes after that are held back and have to be passed in again
+    /// together with the data that follows them.
+    pub fn decode(&mut self, buf: &mut [u8]) -> usize {
+        let decoded = match &mut self.filter {
+            Filter::Delta(delta) => {
+                delta.decode(buf);
+                buf.len()
+            }
+            Filter::Bcj(bcj) => bcj.code(buf),
+        };
+
+        self.held_back = buf.len() - decoded;
+        decoded
+    }
+
+    /// Returns how many bytes at the end of the last [`Self::decode`] are held
+    /// back.
+    pub fn held_back(&self) -> usize {
+        self.held_back
+    }
+
+    /// Settles the held back bytes at the end of the stream.
+    ///
+    /// Nothing follows them anymore, so they are used as they are and
+    /// [`Self::held_back`] returns zero afterwards.
+    pub fn finish(&mut self) {
+        self.held_back = 0;
     }
 }

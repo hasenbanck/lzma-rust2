@@ -8,11 +8,7 @@ use crate::{
     CountingReader, Lzma2Reader, Read, Result,
     crc::Crc32,
     error_eof, error_invalid_data, error_out_of_memory,
-    filter::{
-        FilterType,
-        bcj::{BcjFilter, BcjReader},
-        delta::{Delta, DeltaReader},
-    },
+    filter::{FilterConfig, FilterType, StreamFilter, bcj::BcjReader, delta::DeltaReader},
     lzma2_reader::{Lzma2Stream, get_stream_memory_usage},
     stream::{Action, Status, StreamResult},
 };
@@ -441,62 +437,6 @@ impl<R: Read> Read for XzReader<R> {
     }
 }
 
-enum StreamFilter {
-    Delta(Box<Delta>),
-    Bcj(BcjFilter),
-}
-
-impl StreamFilter {
-    fn from_filter_type(ft: FilterType, property: u32) -> Option<Self> {
-        match ft {
-            FilterType::Delta => Some(StreamFilter::Delta(Box::new(Delta::new(property as usize)))),
-            FilterType::BcjX86 => Some(StreamFilter::Bcj(BcjFilter::new_x86(
-                property as usize,
-                false,
-            ))),
-            FilterType::BcjArm => Some(StreamFilter::Bcj(BcjFilter::new_arm(
-                property as usize,
-                false,
-            ))),
-            FilterType::BcjArm64 => Some(StreamFilter::Bcj(BcjFilter::new_arm64(
-                property as usize,
-                false,
-            ))),
-            FilterType::BcjArmThumb => Some(StreamFilter::Bcj(BcjFilter::new_arm_thumb(
-                property as usize,
-                false,
-            ))),
-            FilterType::BcjPpc => Some(StreamFilter::Bcj(BcjFilter::new_power_pc(
-                property as usize,
-                false,
-            ))),
-            FilterType::BcjSparc => Some(StreamFilter::Bcj(BcjFilter::new_sparc(
-                property as usize,
-                false,
-            ))),
-            FilterType::BcjIa64 => Some(StreamFilter::Bcj(BcjFilter::new_ia64(
-                property as usize,
-                false,
-            ))),
-            FilterType::BcjRiscv => Some(StreamFilter::Bcj(BcjFilter::new_riscv(
-                property as usize,
-                false,
-            ))),
-            FilterType::Lzma2 => None,
-        }
-    }
-
-    fn apply_decode(&mut self, buf: &mut [u8]) -> usize {
-        match self {
-            StreamFilter::Delta(d) => {
-                d.decode(buf);
-                buf.len()
-            }
-            StreamFilter::Bcj(b) => b.code(buf),
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 enum XzStreamState {
     StreamHeader,
@@ -549,7 +489,6 @@ pub struct XzStream {
     filter: Option<StreamFilter>,
     filter_buf: Vec<u8>,
     filter_pos: usize,
-    filter_unfiltered: usize,
 }
 
 impl XzStream {
@@ -580,7 +519,6 @@ impl XzStream {
             filter: None,
             filter_buf: Vec::new(),
             filter_pos: 0,
-            filter_unfiltered: 0,
         }
     }
 
@@ -804,7 +742,7 @@ impl XzStream {
             return Ok(0);
         }
 
-        if self.filter_pos < self.filter_buf.len() - self.filter_unfiltered {
+        if self.filter_pos < self.filter_buf.len() - self.filter_held_back() {
             return self.emit_filtered_output(output, out_pos);
         }
 
@@ -836,7 +774,7 @@ impl XzStream {
     }
 
     fn emit_filtered_output(&mut self, output: &mut [u8], out_pos: &mut usize) -> Result<usize> {
-        let ready_end = self.filter_buf.len() - self.filter_unfiltered;
+        let ready_end = self.filter_buf.len() - self.filter_held_back();
         let available = ready_end - self.filter_pos;
         let space = output.len() - *out_pos;
         let n = available.min(space);
@@ -871,17 +809,17 @@ impl XzStream {
         lzma2.drain_to_buf(&mut self.filter_buf, 4096);
         let new_bytes = self.filter_buf.len() - prev_len;
         if new_bytes > 0 {
-            let filter_start = prev_len - self.filter_unfiltered;
+            let filter_start = prev_len - self.filter_held_back();
             let filter_slice = &mut self.filter_buf[filter_start..];
-            let filtered = self.filter.as_mut().unwrap().apply_decode(filter_slice);
-            self.filter_unfiltered = filter_slice.len() - filtered;
+            self.filter.as_mut().unwrap().decode(filter_slice);
         }
         new_bytes
     }
 
     fn compact_filter_buf(&mut self) {
-        if self.filter_unfiltered > 0 {
-            let tail_start = self.filter_buf.len() - self.filter_unfiltered;
+        let held_back = self.filter_held_back();
+        if held_back > 0 {
+            let tail_start = self.filter_buf.len() - held_back;
             let pending: Vec<u8> = self.filter_buf[tail_start..].to_vec();
             self.filter_buf.clear();
             self.filter_buf.extend_from_slice(&pending);
@@ -889,12 +827,11 @@ impl XzStream {
             self.filter_buf.clear();
         }
         self.filter_pos = 0;
-        self.filter_unfiltered = self.filter_buf.len();
     }
 
     fn try_complete_filtered_block(&mut self) -> Result<usize> {
         self.flush_filter_pending();
-        if self.filter_pos < self.filter_buf.len() - self.filter_unfiltered {
+        if self.filter_pos < self.filter_buf.len() - self.filter_held_back() {
             return Ok(1);
         }
         self.filter.take();
@@ -902,8 +839,14 @@ impl XzStream {
         Ok(1)
     }
 
+    fn filter_held_back(&self) -> usize {
+        self.filter.as_ref().map_or(0, |filter| filter.held_back())
+    }
+
     fn flush_filter_pending(&mut self) {
-        self.filter_unfiltered = 0;
+        if let Some(filter) = self.filter.as_mut() {
+            filter.finish();
+        }
     }
 
     fn finish_lzma2_block(&mut self) -> Result<()> {
@@ -1030,14 +973,17 @@ impl XzStream {
                 if ft == FilterType::Lzma2 {
                     lzma2_dict_size = properties[i];
                     found_lzma2 = true;
-                } else if let Some(f) = StreamFilter::from_filter_type(ft, properties[i]) {
+                } else {
                     // TODO: Support multiple filters for sans-I/O API.
                     if pre_filter.is_some() {
                         return Err(error_invalid_data(
                             "multiple non-LZMA2 filters not supported yet for stream API",
                         ));
                     }
-                    pre_filter = Some(f);
+                    pre_filter = Some(StreamFilter::new(&FilterConfig {
+                        filter_type: ft,
+                        property: properties[i],
+                    })?);
                 }
             }
         }
@@ -1063,7 +1009,6 @@ impl XzStream {
         self.filter = pre_filter;
         self.filter_buf.clear();
         self.filter_pos = 0;
-        self.filter_unfiltered = 0;
         self.block_count += 1;
         self.block_header_size = header_size as u64;
         self.block_compressed_size = 0;
