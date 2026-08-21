@@ -2,14 +2,14 @@ use alloc::{boxed::Box, vec::Vec};
 use core::num::NonZeroU64;
 
 use super::{
-    CheckType, ChecksumCalculator, FilterConfig, FilterType, IndexRecord, add_padding,
-    write_xz_block_header, write_xz_index, write_xz_stream_footer, write_xz_stream_header,
+    CheckType, ChecksumCalculator, IndexRecord, add_padding, write_xz_block_header, write_xz_index,
+    write_xz_stream_footer, write_xz_stream_header,
 };
 use crate::{
     AutoFinish, AutoFinisher, CountingWriter, Lzma2Options, Result, Write,
     enc::{Lzma2Writer, LzmaOptions},
     error_invalid_data, error_invalid_input,
-    filter::{bcj::BcjWriter, delta::DeltaWriter},
+    filter::{FilterConfig, FilterType, bcj::BcjWriter, delta::DeltaWriter},
 };
 
 #[allow(clippy::large_enum_variant)]

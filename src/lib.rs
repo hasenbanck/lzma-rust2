@@ -92,6 +92,7 @@ pub(crate) use std::io::Write;
 
 #[cfg(feature = "encoder")]
 pub use enc::*;
+pub use filter::{FilterConfig, FilterType};
 pub use lz::MfType;
 #[cfg(all(feature = "lzip", feature = "std"))]
 pub use lzip::LzipReaderMt;
@@ -121,7 +122,7 @@ pub use xz::XzReaderMt;
 #[cfg(all(feature = "xz", feature = "encoder", feature = "std"))]
 pub use xz::XzWriterMt;
 #[cfg(feature = "xz")]
-pub use xz::{CheckType, FilterConfig, FilterType, XzReader, XzStream};
+pub use xz::{CheckType, XzReader, XzStream};
 #[cfg(all(feature = "xz", feature = "encoder"))]
 pub use xz::{XzOptions, XzWriter};
 

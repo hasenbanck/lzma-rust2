@@ -1,14 +1,15 @@
 use alloc::{boxed::Box, vec::Vec};
 
 use super::{
-    BlockHeader, CheckType, ChecksumCalculator, FilterType, Index, IndexRecord, StreamFooter,
-    StreamHeader, XZ_FOOTER_MAGIC, XZ_MAGIC, count_multibyte_integer_size, parse_multibyte_integer,
+    BlockHeader, CheckType, ChecksumCalculator, Index, IndexRecord, StreamFooter, StreamHeader,
+    XZ_FOOTER_MAGIC, XZ_MAGIC, count_multibyte_integer_size, parse_multibyte_integer,
 };
 use crate::{
     CountingReader, Lzma2Reader, Read, Result,
     crc::Crc32,
     error_eof, error_invalid_data, error_out_of_memory,
     filter::{
+        FilterType,
         bcj::{BcjFilter, BcjReader},
         delta::{Delta, DeltaReader},
     },

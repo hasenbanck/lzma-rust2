@@ -8,13 +8,15 @@ use std::{
 };
 
 use super::{
-    CheckType, ChecksumCalculator, FilterConfig, FilterType, IndexRecord, add_padding,
-    write_xz_block_header, write_xz_index, write_xz_stream_footer, write_xz_stream_header,
+    CheckType, ChecksumCalculator, IndexRecord, add_padding, write_xz_block_header, write_xz_index,
+    write_xz_stream_footer, write_xz_stream_header,
 };
 use crate::{
     AutoFinish, AutoFinisher, Lzma2Options, Result, XzOptions,
     enc::{Lzma2Writer, LzmaOptions},
-    error_invalid_input, set_error,
+    error_invalid_input,
+    filter::{FilterConfig, FilterType},
+    set_error,
     work_pool::{WorkPool, WorkPoolConfig},
     work_queue::WorkerHandle,
 };
