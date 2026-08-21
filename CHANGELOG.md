@@ -10,11 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add `new_mem_limit()` to `Lzma2Stream` and `XzStream`.
+- Add `set_filters()` to `Lzma2Stream` and `LzmaStream`, so both can decode through a BCJ or delta pre-filter. At most one filter is supported.
+- Add `filter::StreamFilter`, which decodes a slice in place through a single BCJ or delta filter.
 
 ### Changed
 
 - Decode LZMA2 chunks as they arrive instead of buffering each one, so `Lzma2Stream` and `XzStream` produce output sooner and use less memory.
 - A truncated stream now comes back as `UnexpectedEof` from the sans-I/O decoders instead of `InvalidData`.
+- `FilterConfig` and `FilterType` no longer need the `xz` feature.
 
 ### Fixed
 
