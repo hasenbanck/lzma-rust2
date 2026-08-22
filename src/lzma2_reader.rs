@@ -10,7 +10,7 @@ use super::{
 use crate::{
     ByteReader, DICT_SIZE_MIN,
     filter::{FilterConfig, StreamFilter},
-    lzma_reader::{Limits, LzmaCore, RC_INIT_SIZE},
+    lzma_reader::{InputEnd, Limits, LzmaCore, RC_INIT_SIZE},
     stream::{Action, Status, StreamResult},
 };
 
@@ -643,8 +643,14 @@ impl Lzma2Stream {
 
         let available = &input[*in_pos..];
         // The chunk header says where the payload ends, so the core can be told
-        // without the caller having to say `Action::Finish`.
-        let input_ends_here = compressed_left <= available.len() as u64;
+        // without the caller having to say `Action::Finish`. A symbol that then
+        // runs past that end is corrupt data in a stream that arrived whole,
+        // not a stream that was cut short.
+        let input_end = if compressed_left <= available.len() as u64 {
+            InputEnd::Length
+        } else {
+            InputEnd::More
+        };
 
         let (consumed, produced) = {
             let Self {
@@ -657,7 +663,7 @@ impl Lzma2Stream {
             let lzma = lzma
                 .as_mut()
                 .ok_or_else(|| error_invalid_input("corrupted input data (LZMA2:1)"))?;
-            core.feed(lz, lzma, available, limits, input_ends_here)?
+            core.feed(lz, lzma, available, limits, input_end)?
         };
 
         *in_pos += consumed;

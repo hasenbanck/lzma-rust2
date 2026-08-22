@@ -338,6 +338,23 @@ pub(crate) struct Limits {
     pub(crate) end_reached: bool,
 }
 
+/// Whether anything follows the input a decode pass was given, and if not, what
+/// said so.
+///
+/// The two ends are not the same failure. A caller that has run out of bytes
+/// may simply have been handed a stream that was cut short, while a length
+/// field that does not cover its own payload is part of a stream that arrived
+/// whole and disagrees with itself.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InputEnd {
+    /// More input can still follow.
+    More,
+    /// The caller said this is the last of the input.
+    Caller,
+    /// A length field in the stream says the payload ends here.
+    Length,
+}
+
 /// The part of an LZMA1 decode that has to survive between `process()` calls,
 /// minus the dictionary and the probability model it works on.
 ///
@@ -396,18 +413,19 @@ impl LzmaCore {
     /// Runs one decode pass over `input`, returning `(bytes consumed from
     /// input, bytes decoded into the dictionary)`.
     ///
-    /// `input_ends_here` says that nothing follows this slice, so the last
-    /// bytes of it may be decoded against zero padding. LZMA1 knows that from
-    /// the action the caller gave it; an LZMA2 chunk knows it from the
-    /// compressed size in its own header.
+    /// `input_end` says whether anything follows this slice, and if not, who
+    /// said so. The last bytes of the slice are then decoded against zero
+    /// padding, and a symbol that reaches into that padding is an error of
+    /// whichever kind the end came from.
     pub(crate) fn feed(
         &mut self,
         lz: &mut LzDecoder,
         lzma: &mut LzmaDecoder,
         input: &[u8],
         limits: &mut Limits,
-        input_ends_here: bool,
+        input_end: InputEnd,
     ) -> crate::Result<(usize, usize)> {
+        let input_ends_here = input_end != InputEnd::More;
         // Clamp before anything decides where a symbol may start, so no symbol
         // can reach a byte the budget does not cover. An LZMA2 chunk is
         // followed by the next chunk's header, and `SliceRangeReader` cannot
@@ -495,7 +513,7 @@ impl LzmaCore {
         // Decode the carry against zero padding and require the stream to end
         // inside the real bytes.
         if input_ends_here && !limits.end_reached && in_pos >= input.len() {
-            produced += self.decode_finish_tail(lz, lzma, limits)?;
+            produced += self.decode_finish_tail(lz, lzma, limits, input_end)?;
         }
 
         Ok((in_pos, produced))
@@ -511,6 +529,7 @@ impl LzmaCore {
         lz: &mut LzDecoder,
         lzma: &mut LzmaDecoder,
         limits: &mut Limits,
+        input_end: InputEnd,
     ) -> crate::Result<usize> {
         if room_for(lz, limits.remaining_size) == 0 {
             // No output space, so we cannot yet tell whether the stream really
@@ -535,9 +554,18 @@ impl LzmaCore {
         )?;
 
         if pos > carry_len {
-            // The decoder had to read padding to get here, so the input is
-            // really truncated.
-            return Err(error_eof("truncated LZMA stream"));
+            // The decoder had to read padding to get here, so a symbol runs
+            // past the end of the input. What that means depends on who said
+            // where the end was.
+            return Err(match input_end {
+                // A length field in the stream. Everything it declared is
+                // here, and the data inside it does not fit, so the data is
+                // wrong rather than missing.
+                InputEnd::Length => error_invalid_data("LZMA symbol runs past the compressed size"),
+                // The caller. More bytes would have finished the symbol, so
+                // the stream was cut short.
+                _ => error_eof("truncated LZMA stream"),
+            });
         }
 
         // Padding bytes must never be written back into the carry.
@@ -1242,10 +1270,13 @@ impl LzmaStream {
 
         // For LZMA1 the caller is the only one who knows whether more input is
         // coming, and `Action::Finish` is how it says so.
-        let input_ends_here = action == Action::Finish;
+        let input_end = if action == Action::Finish {
+            InputEnd::Caller
+        } else {
+            InputEnd::More
+        };
 
-        let (consumed, produced) =
-            core.feed(lz, lzma, &input[*in_pos..], limits, input_ends_here)?;
+        let (consumed, produced) = core.feed(lz, lzma, &input[*in_pos..], limits, input_end)?;
         *in_pos += consumed;
         self.total_in += consumed as u64;
 
@@ -1320,7 +1351,7 @@ mod tests {
         // Four bytes of a nineteen byte payload on offer: only four may be
         // taken, and they are too few to start a symbol from.
         let (consumed, produced) = core
-            .feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, false)
+            .feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, InputEnd::More)
             .unwrap();
         assert_eq!(consumed, 4);
         assert_eq!(produced, 0);
@@ -1328,7 +1359,7 @@ mod tests {
 
         // A used up budget stops the core dead, however much input is left.
         let (consumed, produced) = core
-            .feed(&mut lz, &mut lzma, &RAW[9..], &mut limits, false)
+            .feed(&mut lz, &mut lzma, &RAW[9..], &mut limits, InputEnd::More)
             .unwrap();
         assert_eq!(consumed, 0);
         assert_eq!(produced, 0);
@@ -1340,7 +1371,7 @@ mod tests {
         let mut limits = limits(None);
 
         let (consumed, produced) = core
-            .feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, true)
+            .feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, InputEnd::Caller)
             .unwrap();
         assert_eq!(consumed, RAW.len() - 5);
         assert_eq!(produced, 13);

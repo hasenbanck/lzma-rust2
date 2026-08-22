@@ -749,6 +749,70 @@ fn chunk_declaring_unread_bytes_is_rejected() {
     }
 }
 
+/// Raises the uncompressed size a chunk header declares, leaving every other
+/// byte alone. The stream stays complete; it just disagrees with itself.
+fn raise_first_chunk_size(compressed: &[u8], extra: u32) -> Vec<u8> {
+    let mut out = compressed.to_vec();
+    let control = out[0];
+    assert!(control >= 0x80, "first chunk is not an LZMA chunk");
+    let declared = (((control & 0x1F) as u32) << 16 | (out[1] as u32) << 8 | out[2] as u32) + 1;
+    let raised = declared + extra - 1;
+    out[0] = (control & 0xE0) | ((raised >> 16) as u8 & 0x1F);
+    out[1] = (raised >> 8) as u8;
+    out[2] = raised as u8;
+    out
+}
+
+/// A chunk whose header claims more uncompressed bytes than its payload holds
+/// is corrupt, not truncated: every byte the stream declared is present.
+///
+/// The distinction matters to a caller that retries on `UnexpectedEof` and
+/// rejects on anything else. Reporting this as `UnexpectedEof` would have it
+/// wait for bytes that are never coming.
+#[test]
+fn chunk_declaring_too_much_output_is_corrupt_not_truncated() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let (compressed, dict_size) = compress(&data, 6);
+
+    // The untouched stream has to decode, or the rest proves nothing.
+    decode(Lzma2Stream::new(dict_size), &compressed, ENTIRE, 4096).unwrap();
+
+    let corrupt = raise_first_chunk_size(&compressed, 4000);
+    for &chunk in CHUNK_SIZES {
+        for &out_size in OUTPUT_SIZES {
+            let error = decode(Lzma2Stream::new(dict_size), &corrupt, chunk, out_size)
+                .expect_err("a chunk that asks for more output than it has must be rejected");
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::InvalidData,
+                "chunk {chunk} out {out_size}: complete but corrupt stream reported as {:?}",
+                error.kind()
+            );
+        }
+    }
+}
+
+/// The contrast to the test above: a stream that really was cut short still
+/// reports `UnexpectedEof`, which is what the caller needs to tell the two
+/// apart.
+#[test]
+fn a_cut_short_stream_still_reports_eof() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let (compressed, dict_size) = compress(&data, 6);
+
+    for missing in [1usize, 20, 100] {
+        let truncated = &compressed[..compressed.len() - missing];
+        let error = decode(Lzma2Stream::new(dict_size), truncated, ENTIRE, 4096)
+            .expect_err("a truncated stream must be rejected");
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::UnexpectedEof,
+            "missing {missing} bytes: truncated stream reported as {:?}",
+            error.kind()
+        );
+    }
+}
+
 /// "Hello, world!" as one uncompressed LZMA2 chunk that resets the dictionary,
 /// followed by the end of stream control byte.
 static HELLO: &[u8] = &[
