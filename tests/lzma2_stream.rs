@@ -1006,6 +1006,61 @@ fn executable(len: usize) -> Vec<u8> {
     std::fs::read(EXECUTABLE).unwrap()[..len].to_vec()
 }
 
+/// A filled slice replaces whatever filter was set, so an empty one has to as
+/// well. Otherwise the two calls mean different things and the doc comment is
+/// only true for a stream that never had a filter.
+#[test]
+fn an_empty_slice_clears_a_filter_that_was_set() {
+    let data = executable(64 * 1024);
+    let filter = FilterConfig::new_bcj_x86(0);
+    let (compressed, dict_size) = compress_filtered(&data, &filter, 6);
+
+    // What an unfiltered stream gives back: the BCJ encoded bytes, which have
+    // to differ from the plain text or this proves nothing.
+    let unfiltered = decode(Lzma2Stream::new(dict_size), &compressed, ENTIRE, 4096).unwrap();
+    assert_ne!(unfiltered, data);
+
+    let mut stream = Lzma2Stream::new(dict_size);
+    stream.set_filters(std::slice::from_ref(&filter)).unwrap();
+    stream.set_filters(&[]).unwrap();
+
+    let decoded = decode(stream, &compressed, ENTIRE, 4096).unwrap();
+    assert_eq!(decoded, unfiltered, "the earlier filter was left in place");
+}
+
+/// `has_output()` says whether bytes can be had right now. A BCJ filter holds
+/// its last bytes back until it sees what follows them, and those cannot be
+/// handed over, so a caller that drains while `has_output()` is true has to get
+/// something every time or it never stops.
+#[test]
+fn has_output_only_reports_bytes_that_can_be_had() {
+    let data = executable(64 * 1024);
+
+    for filter in filters() {
+        let (compressed, dict_size) = compress_filtered(&data, &filter, 6);
+        for out_size in OUTPUT_SIZES {
+            let mut stream = filtered_stream(dict_size, &filter);
+            let mut output = vec![0u8; *out_size];
+
+            // Feed all but the last of the input, so the stream cannot
+            // reach its end and settle the tail on its own. Draining without
+            // feeding more is what a caller emptying the stream before its
+            // next read does.
+            let head = &compressed[..compressed.len() - 1];
+            stream.process(head, &mut output, Action::Run).unwrap();
+
+            while stream.has_output() {
+                let result = stream.process(&[], &mut output, Action::Run).unwrap();
+                assert!(
+                    result.bytes_produced > 0,
+                    "{:?} out {out_size}: has_output() was true but the call gave nothing",
+                    filter.filter_type
+                );
+            }
+        }
+    }
+}
+
 /// The sans-I/O decoder and the blocking reader chain have to give the same
 /// bytes for the same filtered stream.
 #[test]

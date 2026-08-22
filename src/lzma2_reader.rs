@@ -354,6 +354,7 @@ impl Lzma2Stream {
             return Err(error_unsupported("only one filter is supported"));
         }
         let Some(config) = filters.first() else {
+            self.filter = None;
             return Ok(());
         };
         self.filter = Some(StreamFilter::new(config)?);
@@ -377,7 +378,7 @@ impl Lzma2Stream {
 
     /// Returns true if there is decoded output waiting to be flushed.
     pub fn has_output(&self) -> bool {
-        self.lz.has_output() || self.filter_pos < self.filter_buf.len()
+        self.lz.has_output() || self.filter_pos < self.settled_end()
     }
 
     /// Process available LZMA2 data from `input` into `output`.
