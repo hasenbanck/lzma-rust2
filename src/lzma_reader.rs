@@ -846,6 +846,7 @@ impl LzmaStream {
             return Err(error_unsupported("only one filter is supported"));
         }
         let Some(config) = filters.first() else {
+            self.filter = None;
             return Ok(());
         };
         self.filter = Some(StreamFilter::new(config)?);
@@ -869,8 +870,7 @@ impl LzmaStream {
 
     /// Returns true if there is decoded output waiting to be flushed.
     pub fn has_output(&self) -> bool {
-        self.lz.as_ref().is_some_and(|lz| lz.has_output())
-            || self.filter_pos < self.filter_buf.len()
+        self.lz.as_ref().is_some_and(|lz| lz.has_output()) || self.filter_pos < self.settled_end()
     }
 
     /// Bytes that were absorbed from the caller but turned out not to belong to
