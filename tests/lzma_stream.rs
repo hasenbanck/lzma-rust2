@@ -729,6 +729,8 @@ fn filters() -> Vec<FilterConfig> {
         FilterConfig::new_bcj_x86(0),
         FilterConfig::new_bcj_arm64(0),
         FilterConfig::new_bcj_ia64(0),
+        FilterConfig::new_bcj_arm_thumb(0),
+        FilterConfig::new_bcj_risc_v(0),
     ]
 }
 
@@ -747,6 +749,8 @@ fn filter_through(lzma: LzmaWriter<Vec<u8>>, data: &[u8], filter: &FilterConfig)
             FilterType::BcjX86 => BcjWriter::new_x86(lzma, property),
             FilterType::BcjArm64 => BcjWriter::new_arm64(lzma, property),
             FilterType::BcjIa64 => BcjWriter::new_ia64(lzma, property),
+            FilterType::BcjArmThumb => BcjWriter::new_arm_thumb(lzma, property),
+            FilterType::BcjRiscv => BcjWriter::new_riscv(lzma, property),
             other => panic!("no writer for {other:?}"),
         };
         writer.write_all(data).unwrap();
@@ -817,6 +821,8 @@ fn decompress_filtered(
             FilterType::BcjX86 => BcjReader::new_x86(lzma, property),
             FilterType::BcjArm64 => BcjReader::new_arm64(lzma, property),
             FilterType::BcjIa64 => BcjReader::new_ia64(lzma, property),
+            FilterType::BcjArmThumb => BcjReader::new_arm_thumb(lzma, property),
+            FilterType::BcjRiscv => BcjReader::new_riscv(lzma, property),
             other => panic!("no reader for {other:?}"),
         };
         reader.read_to_end(&mut decompressed)?;
