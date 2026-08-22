@@ -941,6 +941,8 @@ fn filters() -> Vec<FilterConfig> {
         FilterConfig::new_bcj_x86(0),
         FilterConfig::new_bcj_arm64(0),
         FilterConfig::new_bcj_ia64(0),
+        FilterConfig::new_bcj_arm_thumb(0),
+        FilterConfig::new_bcj_risc_v(0),
     ]
 }
 
@@ -962,6 +964,8 @@ fn compress_filtered(data: &[u8], filter: &FilterConfig, preset: u32) -> (Vec<u8
             FilterType::BcjX86 => BcjWriter::new_x86(lzma2, property),
             FilterType::BcjArm64 => BcjWriter::new_arm64(lzma2, property),
             FilterType::BcjIa64 => BcjWriter::new_ia64(lzma2, property),
+            FilterType::BcjArmThumb => BcjWriter::new_arm_thumb(lzma2, property),
+            FilterType::BcjRiscv => BcjWriter::new_riscv(lzma2, property),
             other => panic!("no writer for {other:?}"),
         };
         writer.write_all(data).unwrap();
@@ -987,6 +991,8 @@ fn decompress_filtered(compressed: &[u8], filter: &FilterConfig, dict_size: u32)
             FilterType::BcjX86 => BcjReader::new_x86(lzma2, property),
             FilterType::BcjArm64 => BcjReader::new_arm64(lzma2, property),
             FilterType::BcjIa64 => BcjReader::new_ia64(lzma2, property),
+            FilterType::BcjArmThumb => BcjReader::new_arm_thumb(lzma2, property),
+            FilterType::BcjRiscv => BcjReader::new_riscv(lzma2, property),
             other => panic!("no reader for {other:?}"),
         };
         reader.read_to_end(&mut decompressed).unwrap();
