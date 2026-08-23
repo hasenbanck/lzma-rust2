@@ -5,23 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.20.0 - 2026-08-23
 
 ### Added
 
 - Add `new_mem_limit()` to `Lzma2Stream` and `XzStream`.
-- Add `set_filters()` to `Lzma2Stream` and `LzmaStream`, so both can decode through a BCJ or delta pre-filter. At most one filter is supported.
+- Add `set_filters()` to `Lzma2Stream` and `LzmaStream`, so both can decode through a BCJ or delta pre-filter. At most
+  one filter is supported.
 - Add `filter::StreamFilter`, which decodes a slice in place through a single BCJ or delta filter.
 
 ### Changed
 
-- Decode LZMA2 chunks as they arrive instead of buffering each one, so `Lzma2Stream` and `XzStream` produce output sooner and use less memory.
+- Decode LZMA2 chunks as they arrive instead of buffering each one, so `Lzma2Stream` and `XzStream` produce output
+  sooner and use less memory.
 - A truncated stream now comes back as `UnexpectedEof` from the sans-I/O decoders instead of `InvalidData`.
 - `FilterConfig` and `FilterType` no longer need the `xz` feature.
 
 ### Fixed
 
-- `Lzma2Stream` and `XzStream` now fail every later `process()` call once one has returned an error, like `LzmaStream` already did.
+- `Lzma2Stream` and `XzStream` now fail every later `process()` call once one has returned an error, like `LzmaStream`
+  already did.
 
 ## 0.19.0 - 2026-08-16
 
