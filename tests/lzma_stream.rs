@@ -1052,34 +1052,40 @@ fn filtered_total_out_counts_delivered_bytes() {
 }
 
 /// Bytes sitting in the staging buffer are output waiting to be flushed, the
-/// same as bytes still in the dictionary.
+/// `has_output()` has to stay in step with what the stream will hand over: it
+/// is true while bytes are still coming and false once the last one has been
+/// taken.
 #[test]
-fn filtered_has_output_reports_staged_bytes() {
+fn filtered_has_output_tracks_what_is_left() {
     let data = executable(200);
     let filter = FilterConfig::new_bcj_x86(0);
     let (compressed, raw) = compress_filtered_raw(&data, &filter, 1, true);
 
     let mut stream = filtered_stream(raw_stream(raw), &filter);
     let mut output = [0u8; 1];
-    let result = stream
-        .process(&compressed, &mut output, Action::Finish)
-        .unwrap();
-    assert_eq!(result.status, Status::Ok);
+    let mut decompressed = Vec::new();
+    let mut pos = 0usize;
 
-    // Everything the dictionary held fits in one drain, so what is waiting now
-    // is waiting in the staging buffer.
-    assert!(stream.has_output());
-
-    let mut decompressed = output[..result.bytes_produced].to_vec();
     loop {
-        let result = stream.process(&[], &mut output, Action::Finish).unwrap();
+        let result = stream
+            .process(&compressed[pos..], &mut output, Action::Finish)
+            .unwrap();
+        pos += result.bytes_consumed;
         decompressed.extend_from_slice(&output[..result.bytes_produced]);
+
         if result.status == Status::StreamEnd {
             break;
         }
+
+        // Input is left and there is room for it, so the call has to move
+        // something, or the caller would loop forever.
+        assert!(
+            result.bytes_consumed != 0 || result.bytes_produced != 0,
+            "no progress with input left and output space free"
+        );
     }
 
-    assert!(decompressed == data);
+    assert_eq!(decompressed, data);
     assert!(!stream.has_output());
 }
 

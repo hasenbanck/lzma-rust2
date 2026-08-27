@@ -474,12 +474,23 @@ impl Lzma2Stream {
                 }
 
                 Lzma2State::CompressedData => {
+                    // Decode no further than the caller can take. A caller
+                    // that hands over no output at all takes the bytes out of
+                    // the dictionary itself, so there is nothing to bound it
+                    // against.
+                    let out_room = if output.is_empty() {
+                        usize::MAX
+                    } else {
+                        output.len() - out_pos
+                    };
+
                     if let Some(result) = self.process_compressed_data(
                         input,
                         action,
                         &mut in_pos,
                         out_pos,
                         &mut stalled,
+                        out_room,
                     )? {
                         return Ok(result);
                     }
@@ -612,6 +623,7 @@ impl Lzma2Stream {
         in_pos: &mut usize,
         out_pos: usize,
         stalled: &mut bool,
+        out_room: usize,
     ) -> crate::Result<Option<StreamResult>> {
         let compressed_left = self.limits.compressed_left.unwrap_or(0);
 
@@ -664,7 +676,7 @@ impl Lzma2Stream {
             let lzma = lzma
                 .as_mut()
                 .ok_or_else(|| error_invalid_input("corrupted input data (LZMA2:1)"))?;
-            core.feed(lz, lzma, available, limits, input_end)?
+            core.feed(lz, lzma, available, limits, input_end, out_room)?
         };
 
         *in_pos += consumed;
