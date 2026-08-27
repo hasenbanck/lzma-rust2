@@ -311,8 +311,11 @@ enum LzmaState {
 }
 
 /// Output space the decoder may fill before it has to stop.
-fn room_for(lz: &LzDecoder, remaining_size: u64) -> usize {
-    let mut room = lz.available_space();
+///
+/// `out_room` is what the caller is ready to take. Decoding past that would
+/// read in input whose output the caller has not asked for yet.
+fn room_for(lz: &LzDecoder, remaining_size: u64, out_room: usize) -> usize {
+    let mut room = lz.available_space().min(out_room);
     if remaining_size <= u64::MAX / 2 {
         room = room.min(remaining_size.min(usize::MAX as u64) as usize);
     }
@@ -417,6 +420,9 @@ impl LzmaCore {
     /// said so. The last bytes of the slice are then decoded against zero
     /// padding, and a symbol that reaches into that padding is an error of
     /// whichever kind the end came from.
+    ///
+    /// `out_room` bounds what this pass may decode, so no more input is taken
+    /// in than the output the caller asked for needs.
     pub(crate) fn feed(
         &mut self,
         lz: &mut LzDecoder,
@@ -424,6 +430,7 @@ impl LzmaCore {
         input: &[u8],
         limits: &mut Limits,
         input_end: InputEnd,
+        out_room: usize,
     ) -> crate::Result<(usize, usize)> {
         let input_ends_here = input_end != InputEnd::More;
         // Clamp before anything decides where a symbol may start, so no symbol
@@ -457,8 +464,15 @@ impl LzmaCore {
             scratch[carry_len..filled].copy_from_slice(&input[in_pos..in_pos + m]);
 
             let symbol_limit = filled.saturating_sub(IN_REQUIRED - 1);
-            let (pos, decoded) =
-                self.run(lz, lzma, limits, &scratch[..filled], filled, symbol_limit)?;
+            let (pos, decoded) = self.run(
+                lz,
+                lzma,
+                limits,
+                &scratch[..filled],
+                filled,
+                symbol_limit,
+                out_room,
+            )?;
             produced += decoded;
 
             if pos >= carry_len {
@@ -485,8 +499,15 @@ impl LzmaCore {
                 // A symbol may start only while `pos + IN_REQUIRED <= avail`,
                 // that is while `pos < avail - (IN_REQUIRED - 1)`.
                 let symbol_limit = avail - (IN_REQUIRED - 1);
-                let (pos, decoded) =
-                    self.run(lz, lzma, limits, &input[in_pos..], avail, symbol_limit)?;
+                let (pos, decoded) = self.run(
+                    lz,
+                    lzma,
+                    limits,
+                    &input[in_pos..],
+                    avail,
+                    symbol_limit,
+                    out_room,
+                )?;
                 produced += decoded;
                 in_pos += pos;
             }
@@ -513,7 +534,7 @@ impl LzmaCore {
         // Decode the carry against zero padding and require the stream to end
         // inside the real bytes.
         if input_ends_here && !limits.end_reached && in_pos >= input.len() {
-            produced += self.decode_finish_tail(lz, lzma, limits, input_end)?;
+            produced += self.decode_finish_tail(lz, lzma, limits, input_end, out_room)?;
         }
 
         Ok((in_pos, produced))
@@ -530,8 +551,9 @@ impl LzmaCore {
         lzma: &mut LzmaDecoder,
         limits: &mut Limits,
         input_end: InputEnd,
+        out_room: usize,
     ) -> crate::Result<usize> {
-        if room_for(lz, limits.remaining_size) == 0 {
+        if room_for(lz, limits.remaining_size, out_room) == 0 {
             // No output space, so we cannot yet tell whether the stream really
             // ends here. The caller has to drain first.
             return Ok(0);
@@ -551,6 +573,7 @@ impl LzmaCore {
             &scratch[..padded_len],
             carry_len,
             carry_len + 1,
+            out_room,
         )?;
 
         if pos > carry_len {
@@ -577,6 +600,7 @@ impl LzmaCore {
 
     /// Decodes as much as fits from `buf`, returning `(read position, bytes
     /// decoded into the dictionary)`.
+    #[allow(clippy::too_many_arguments)]
     fn run(
         &mut self,
         lz: &mut LzDecoder,
@@ -585,8 +609,9 @@ impl LzmaCore {
         buf: &[u8],
         real_len: usize,
         symbol_limit: usize,
+        out_room: usize,
     ) -> crate::Result<(usize, usize)> {
-        let room = room_for(lz, limits.remaining_size);
+        let room = room_for(lz, limits.remaining_size, out_room);
         if room == 0 {
             return Ok((0, 0));
         }
@@ -996,7 +1021,8 @@ impl LzmaStream {
                         continue;
                     }
 
-                    let (consumed, produced) = self.decode_pass(input, &mut in_pos, action)?;
+                    let (consumed, produced) =
+                        self.decode_pass(input, &mut in_pos, action, output.len() - out_pos)?;
                     if consumed == 0 && produced == 0 && !self.limits.end_reached {
                         stalled = true;
                     }
@@ -1254,6 +1280,7 @@ impl LzmaStream {
         input: &[u8],
         in_pos: &mut usize,
         action: Action,
+        out_room: usize,
     ) -> crate::Result<(usize, usize)> {
         let Self {
             lz,
@@ -1276,7 +1303,8 @@ impl LzmaStream {
             InputEnd::More
         };
 
-        let (consumed, produced) = core.feed(lz, lzma, &input[*in_pos..], limits, input_end)?;
+        let (consumed, produced) =
+            core.feed(lz, lzma, &input[*in_pos..], limits, input_end, out_room)?;
         *in_pos += consumed;
         self.total_in += consumed as u64;
 
@@ -1351,7 +1379,14 @@ mod tests {
         // Four bytes of a nineteen byte payload on offer: only four may be
         // taken, and they are too few to start a symbol from.
         let (consumed, produced) = core
-            .feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, InputEnd::More)
+            .feed(
+                &mut lz,
+                &mut lzma,
+                &RAW[5..],
+                &mut limits,
+                InputEnd::More,
+                usize::MAX,
+            )
             .unwrap();
         assert_eq!(consumed, 4);
         assert_eq!(produced, 0);
@@ -1359,7 +1394,14 @@ mod tests {
 
         // A used up budget stops the core dead, however much input is left.
         let (consumed, produced) = core
-            .feed(&mut lz, &mut lzma, &RAW[9..], &mut limits, InputEnd::More)
+            .feed(
+                &mut lz,
+                &mut lzma,
+                &RAW[9..],
+                &mut limits,
+                InputEnd::More,
+                usize::MAX,
+            )
             .unwrap();
         assert_eq!(consumed, 0);
         assert_eq!(produced, 0);
@@ -1371,7 +1413,14 @@ mod tests {
         let mut limits = limits(None);
 
         let (consumed, produced) = core
-            .feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, InputEnd::Caller)
+            .feed(
+                &mut lz,
+                &mut lzma,
+                &RAW[5..],
+                &mut limits,
+                InputEnd::Caller,
+                usize::MAX,
+            )
             .unwrap();
         assert_eq!(consumed, RAW.len() - 5);
         assert_eq!(produced, 13);
