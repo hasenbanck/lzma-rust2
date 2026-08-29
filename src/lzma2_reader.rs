@@ -731,12 +731,10 @@ impl Lzma2Stream {
         let new_remaining = remaining - to_copy;
         if new_remaining == 0 {
             self.state = Lzma2State::DrainOutput;
-        } else if self.lz.available_space() == 0 {
-            self.state = Lzma2State::DrainUncompressed {
-                remaining: new_remaining,
-            };
         } else {
-            self.state = Lzma2State::UncompressedData {
+            // A copy reaches the caller before the next one starts, so the
+            // bytes are not left sitting in the dictionary.
+            self.state = Lzma2State::DrainUncompressed {
                 remaining: new_remaining,
             };
         }
