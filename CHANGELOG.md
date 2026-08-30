@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.20.1 - 2026-08-30
+
 ### Fixed
 
 - An uncompressed LZMA2 chunk is now handed over as it is copied, instead of only once the dictionary fills.
