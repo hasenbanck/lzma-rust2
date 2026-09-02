@@ -223,14 +223,14 @@ impl<R: Read> Lzma2ReaderMt<R> {
             );
         }
 
-        // We spawn a new thread if we have work queued, no available workers, and haven't reached
-        // the maximal allowed parallelism yet.
         let spawned_workers = self.worker_handles.len() as u32;
         let active_workers = self.active_workers.load(Ordering::Acquire);
         let queue_len = self.work_queue.len();
 
-        if queue_len > 0 && active_workers == spawned_workers && spawned_workers < self.max_workers
-        {
+        // Spawn another worker when more units are queued than there are idle ones. A parked
+        // worker that has not stolen its unit yet still counts as idle.
+        let idle_workers = spawned_workers.saturating_sub(active_workers) as usize;
+        if queue_len > idle_workers && spawned_workers < self.max_workers {
             self.spawn_worker_thread();
         }
 
@@ -278,8 +278,9 @@ impl<R: Read> Lzma2ReaderMt<R> {
                         }
                     }
 
-                    // If the work queue has capacity, try to read more from the source.
-                    if self.work_queue.is_empty() {
+                    // Read ahead while fewer units are queued than there are workers. Blocking as
+                    // soon as the queue is non-empty stalls the reader behind a single worker.
+                    if self.work_queue.len() < self.max_workers as usize {
                         match self.read_and_dispatch_chunk() {
                             Ok(true) => {
                                 // Successfully read and dispatched a chunk, loop to continue.
