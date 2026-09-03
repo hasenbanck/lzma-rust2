@@ -1,6 +1,6 @@
 use std::io::{ErrorKind, Read, Write};
 
-use lzma_rust2::{Action, Status, XzOptions, XzStream, XzWriter};
+use lzma_rust2::{Action, Status, XzOptions, XzReader, XzStream, XzWriter};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
@@ -722,4 +722,58 @@ fn finish_reports_a_short_stream_when_the_held_back_symbol_needs_more_input() {
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 15, 19, 20],
         "damage the decoder cannot make out on its own was reported as corrupt"
     );
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+/// The block header follows the 12 byte stream header. Its first byte gives the
+/// size, its last four bytes the CRC32 of the rest.
+fn repair_block_header_crc(stream: &mut [u8]) {
+    let size = (stream[12] as usize + 1) * 4;
+    let end = 12 + size;
+    let crc = crc32(&stream[12..end - 4]).to_le_bytes();
+    stream[end - 4..end].copy_from_slice(&crc);
+}
+
+/// The same bytes through the reader, which shares the header parsing.
+fn reader_error(data: &[u8]) -> std::io::Error {
+    let mut decompressed = Vec::new();
+    XzReader::new(data, false)
+        .read_to_end(&mut decompressed)
+        .expect_err("the stream was accepted")
+}
+
+/// Bits 2-5 of the block flags are reserved. A set bit means the header has an
+/// unknown field. It should not be parsed.
+#[test]
+fn block_flags_reserved_bits_are_rejected() {
+    for bits in [0x04u8, 0x08, 0x10, 0x20, 0x3C] {
+        let mut stream = encode_xz(b"block flags", 1);
+        stream[13] |= bits;
+        repair_block_header_crc(&mut stream);
+
+        assert_eq!(stream_error(&stream).kind(), ErrorKind::Unsupported);
+        assert_eq!(reader_error(&stream).kind(), ErrorKind::Unsupported);
+    }
+}
+
+/// The header checksum is verified first. A damaged header is reported as
+/// corrupt and not as unsupported.
+#[test]
+fn a_broken_block_header_checksum_comes_before_the_reserved_bits() {
+    let mut stream = encode_xz(b"block flags", 1);
+    stream[13] |= 0x3C;
+
+    assert_eq!(stream_error(&stream).kind(), ErrorKind::InvalidData);
+    assert_eq!(reader_error(&stream).kind(), ErrorKind::InvalidData);
 }
