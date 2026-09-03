@@ -458,8 +458,8 @@ impl LzmaCore {
 
             let symbol_limit = filled.saturating_sub(IN_REQUIRED - 1);
             let (pos, decoded) =
-                self.run(lz, lzma, limits, &scratch[..filled], filled, symbol_limit)?;
-            produced += decoded;
+                self.run(lz, lzma, limits, &scratch[..filled], filled, symbol_limit);
+            produced += decoded?;
 
             if pos >= carry_len {
                 // The carry is drained. Un-consume the scratch residue so the
@@ -486,8 +486,8 @@ impl LzmaCore {
                 // that is while `pos < avail - (IN_REQUIRED - 1)`.
                 let symbol_limit = avail - (IN_REQUIRED - 1);
                 let (pos, decoded) =
-                    self.run(lz, lzma, limits, &input[in_pos..], avail, symbol_limit)?;
-                produced += decoded;
+                    self.run(lz, lzma, limits, &input[in_pos..], avail, symbol_limit);
+                produced += decoded?;
                 in_pos += pos;
             }
         }
@@ -544,14 +544,14 @@ impl LzmaCore {
         let mut scratch = [0u8; CARRY_CAP + IN_REQUIRED + 1];
         scratch[..carry_len].copy_from_slice(&self.carry[..carry_len]);
         let padded_len = carry_len + IN_REQUIRED + 1;
-        let (pos, produced) = self.run(
+        let (pos, result) = self.run(
             lz,
             lzma,
             limits,
             &scratch[..padded_len],
             carry_len,
             carry_len + 1,
-        )?;
+        );
 
         if pos > carry_len {
             // The decoder had to read padding to get here, so a symbol runs
@@ -568,6 +568,8 @@ impl LzmaCore {
             });
         }
 
+        let produced = result?;
+
         // Padding bytes must never be written back into the carry.
         self.carry.copy_within(pos..carry_len, 0);
         self.carry_len = carry_len - pos;
@@ -575,8 +577,11 @@ impl LzmaCore {
         Ok(produced)
     }
 
-    /// Decodes as much as fits from `buf`, returning `(read position, bytes
-    /// decoded into the dictionary)`.
+    /// Decodes as much as fits from `buf`, returning the read position and
+    /// either the bytes decoded into the dictionary or why the decode failed.
+    ///
+    /// The position comes back even when the decode failed. A caller that
+    /// padded `buf` can then tell whether the padding was reached.
     fn run(
         &mut self,
         lz: &mut LzDecoder,
@@ -585,10 +590,10 @@ impl LzmaCore {
         buf: &[u8],
         real_len: usize,
         symbol_limit: usize,
-    ) -> crate::Result<(usize, usize)> {
+    ) -> (usize, crate::Result<usize>) {
         let room = room_for(lz, limits.remaining_size);
         if room == 0 {
-            return Ok((0, 0));
+            return (0, Ok(0));
         }
 
         let pos_before = lz.get_pos();
@@ -632,7 +637,7 @@ impl LzmaCore {
         self.rc = rc.state();
 
         if let Some(error) = error {
-            return Err(error);
+            return (pos, Err(error));
         }
 
         if limits.remaining_size <= u64::MAX / 2 {
@@ -643,10 +648,13 @@ impl LzmaCore {
         }
 
         if limits.end_reached && lz.has_pending() {
-            return Err(error_invalid_data("end reached but not decoder finished"));
+            return (
+                pos,
+                Err(error_invalid_data("end reached but not decoder finished")),
+            );
         }
 
-        Ok((pos, produced))
+        (pos, Ok(produced))
     }
 }
 

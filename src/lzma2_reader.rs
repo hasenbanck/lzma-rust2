@@ -620,6 +620,28 @@ impl Lzma2Stream {
         // takes no input at all.
         if *in_pos >= input.len() && compressed_left > 0 {
             if action == Action::Finish {
+                // The input ends here. Let the core decode what it still holds
+                // back. Data that is already corrupt is then reported as
+                // corrupt and not as a stream that was cut short.
+                let produced = {
+                    let Self {
+                        lz,
+                        lzma,
+                        core,
+                        limits,
+                        ..
+                    } = self;
+                    match lzma.as_mut() {
+                        Some(lzma) => core.feed(lz, lzma, &[], limits, InputEnd::Caller)?.1,
+                        None => 0,
+                    }
+                };
+
+                if produced > 0 {
+                    self.state = Lzma2State::DrainCompressed;
+                    return Ok(None);
+                }
+
                 return Err(error_eof("unexpected end of LZMA2 stream"));
             }
             return Ok(Some(StreamResult {
@@ -649,6 +671,8 @@ impl Lzma2Stream {
         // not a stream that was cut short.
         let input_end = if compressed_left <= available.len() as u64 {
             InputEnd::Length
+        } else if action == Action::Finish {
+            InputEnd::Caller
         } else {
             InputEnd::More
         };

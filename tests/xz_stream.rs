@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 
 use lzma_rust2::{Action, Status, XzOptions, XzStream, XzWriter};
 
@@ -604,4 +604,122 @@ fn memory_limit_matches_the_dictionary_in_the_block_header() {
         .process(&compressed, &mut output_buf, Action::Finish)
         .unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+}
+
+/// Decodes until the stream fails, and returns why. Panics if it is accepted.
+fn stream_error(data: &[u8]) -> std::io::Error {
+    let mut decoder = XzStream::new(false);
+    let mut output = [0u8; 4096];
+    let mut in_pos = 0;
+
+    for _ in 0..64 {
+        match decoder.process(&data[in_pos..], &mut output, Action::Finish) {
+            Ok(result) => {
+                in_pos += result.bytes_consumed;
+                assert_ne!(result.status, Status::StreamEnd, "the stream was accepted");
+            }
+            Err(error) => return error,
+        }
+    }
+    panic!("the stream neither ended nor failed");
+}
+
+/// A valid stream, and the same stream cut inside its LZMA2 chunk. The chunk
+/// header declares more data than is handed over. The core cannot lean on the
+/// length and still holds bytes back when the input runs out.
+fn whole_and_cut_inside_the_lzma2_chunk(data: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let stream = encode_xz(data, 1);
+    // Stream header, block header and LZMA2 chunk header are 12 + 12 + 6 bytes.
+    assert!(
+        stream[24] >= 0xC0,
+        "expected an LZMA2 chunk that carries properties"
+    );
+    assert!(
+        stream.len() > 30 + 500 + 20,
+        "the chunk is too short to cut"
+    );
+
+    let cut = stream[..30 + 500].to_vec();
+    (stream, cut)
+}
+
+/// Damages each of the twenty bytes that can still be held back, one at a time,
+/// and splits the positions by verdict: corrupt data, or a stream cut short.
+/// Positions count back from the end. `1` is the last byte handed over.
+fn split_held_back_damage(stream: &[u8]) -> (Vec<usize>, Vec<usize>) {
+    let mut corrupt = Vec::new();
+    let mut short = Vec::new();
+
+    for back in 1..=20 {
+        let mut damaged = stream.to_vec();
+        let at = damaged.len() - back;
+        damaged[at] ^= 0xFF;
+
+        let error = stream_error(&damaged);
+        if error.kind() == ErrorKind::UnexpectedEof {
+            short.push(back);
+        } else {
+            corrupt.push(back);
+        }
+    }
+
+    (corrupt, short)
+}
+
+/// The held back bytes have to be decoded once the caller says the input ended.
+/// A symbol that is already in hand and already broken is otherwise reported as
+/// a stream that was cut short. Which positions carry one is a property of this
+/// stream. All twenty are damaged and the split is pinned.
+#[test]
+fn finish_reports_corrupt_data_in_the_held_back_input() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let (whole, cut) = whole_and_cut_inside_the_lzma2_chunk(&data);
+    let (corrupt, _) = split_held_back_damage(&cut);
+
+    assert_eq!(
+        corrupt,
+        [10, 12, 13, 16, 17, 18],
+        "the damage the decoder can already see changed"
+    );
+
+    // The broken symbol lies entirely in the bytes handed over. The same
+    // damage in the whole stream fails in the same way.
+    for back in corrupt {
+        let at = cut.len() - back;
+
+        let mut damaged_cut = cut.clone();
+        damaged_cut[at] ^= 0xFF;
+        let cut_error = stream_error(&damaged_cut);
+
+        let mut damaged_whole = whole.clone();
+        damaged_whole[at] ^= 0xFF;
+        let whole_error = stream_error(&damaged_whole);
+
+        assert_eq!(cut_error.kind(), whole_error.kind(), "byte {back} back");
+        assert_eq!(
+            cut_error.to_string(),
+            whole_error.to_string(),
+            "byte {back} back"
+        );
+    }
+}
+
+/// The other half of that decision. A symbol that can only be finished by
+/// reading the zero padding is no evidence that the data is wrong, only that
+/// the stream stops too early.
+#[test]
+fn finish_reports_a_short_stream_when_the_held_back_symbol_needs_more_input() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let (_, cut) = whole_and_cut_inside_the_lzma2_chunk(&data);
+
+    let error = stream_error(&cut);
+    assert_eq!(error.kind(), ErrorKind::UnexpectedEof, "{error}");
+
+    let (_, short) = split_held_back_damage(&cut);
+
+    assert_eq!(
+        short,
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 15, 19, 20],
+        "damage the decoder cannot make out on its own was reported as corrupt"
+    );
 }

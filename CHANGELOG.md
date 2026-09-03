@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `Lzma2ReaderMt` and `XzReaderMt` no longer degrade to single-threaded decoding.
+- `Lzma2Stream` and `XzStream` now decode the input they still hold back once the caller says the input ends, so corrupt
+  data in a chunk is reported as such instead of as a stream that was cut short.
 
 ## 0.20.1 - 2026-08-30
 
