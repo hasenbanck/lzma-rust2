@@ -24,7 +24,7 @@ pub use writer_mt::XzWriterMt;
 use crate::{
     ByteReader, Read,
     crc::{Crc32, Crc64},
-    error_invalid_data, error_invalid_input,
+    error_invalid_data, error_invalid_input, error_unsupported,
     filter::FilterType,
 };
 #[cfg(feature = "encoder")]
@@ -219,7 +219,28 @@ impl BlockHeader {
         let mut header_data = vec![0u8; header_size - 1];
         reader.read_exact(&mut header_data)?;
 
+        // The header carries its own checksum. It is verified first. A corrupt
+        // header is reported as corrupt and not as unsupported.
+        let crc_offset = header_data.len() - 4;
+        let expected_crc = u32::from_le_bytes([
+            header_data[crc_offset],
+            header_data[crc_offset + 1],
+            header_data[crc_offset + 2],
+            header_data[crc_offset + 3],
+        ]);
+        let mut crc = Crc32::new();
+        crc.update(&[header_size_encoded]);
+        crc.update(&header_data[..crc_offset]);
+        if expected_crc != crc.finalize() {
+            return Err(error_invalid_data("XZ block header CRC32 mismatch"));
+        }
+
         let block_flags = header_data[0];
+        // Bits 2-5 are reserved. A set bit means the header has an unknown
+        // field. It should not be parsed.
+        if block_flags & 0x3C != 0 {
+            return Err(error_unsupported("reserved block flag bits are set"));
+        }
         let num_filters = ((block_flags & 0x03) + 1) as usize;
         let has_compressed_size = (block_flags & 0x40) != 0;
         let has_uncompressed_size = (block_flags & 0x80) != 0;
@@ -415,22 +436,6 @@ impl BlockHeader {
             return Err(error_invalid_data("invalid XZ block header CRC32 position"));
         }
 
-        let expected_crc = u32::from_le_bytes([
-            header_data[offset],
-            header_data[offset + 1],
-            header_data[offset + 2],
-            header_data[offset + 3],
-        ]);
-
-        // Calculate CRC32 of header size byte + header data (excluding CRC32).
-        let mut crc = Crc32::new();
-        crc.update(&[header_size_encoded]);
-        crc.update(&header_data[..offset]);
-
-        if expected_crc != crc.finalize() {
-            return Err(error_invalid_data("XZ block header CRC32 mismatch"));
-        }
-
         Ok(Some(BlockHeader {
             header_size,
             compressed_size,
@@ -459,6 +464,11 @@ impl BlockHeader {
 
         let header_data = &block_data[1..header_size];
         let block_flags = header_data[0];
+        // Bits 2-5 are reserved. A set bit means the header has an unknown
+        // field. It should not be parsed.
+        if block_flags & 0x3C != 0 {
+            return Err(error_unsupported("reserved block flag bits are set"));
+        }
         let num_filters = ((block_flags & 0x03) + 1) as usize;
         let has_compressed_size = (block_flags & 0x40) != 0;
         let has_uncompressed_size = (block_flags & 0x80) != 0;
