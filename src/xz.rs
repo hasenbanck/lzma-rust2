@@ -99,7 +99,7 @@ impl CheckType {
             0x01 => Ok(CheckType::Crc32),
             0x04 => Ok(CheckType::Crc64),
             0x0A => Ok(CheckType::Sha256),
-            _ => Err(error_invalid_data("unsupported XZ check type")),
+            _ => Err(error_unsupported("unsupported XZ check type")),
         }
     }
 
@@ -731,17 +731,20 @@ impl StreamHeader {
         let mut flags = [0u8; 2];
         reader.read_exact(&mut flags)?;
 
-        if flags[0] != 0 {
-            return Err(error_invalid_data("invalid XZ stream flags"));
-        }
-
-        let check_type = CheckType::from_byte(flags[1])?;
-
         let expected_crc = reader.read_u32()?;
 
         if expected_crc != Crc32::checksum(&flags) {
             return Err(error_invalid_data("XZ stream header CRC32 mismatch"));
         }
+
+        // The first byte and the upper nibble of the second byte are reserved.
+        // The checksum check comes first. A corrupt header is reported as
+        // corrupt and not as unsupported.
+        if flags[0] != 0 || flags[1] & 0xF0 != 0 {
+            return Err(error_unsupported("invalid XZ stream flags"));
+        }
+
+        let check_type = CheckType::from_byte(flags[1])?;
 
         Ok(StreamHeader { check_type })
     }

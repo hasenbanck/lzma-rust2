@@ -7,7 +7,7 @@ use super::{
 use crate::{
     CountingReader, Lzma2Reader, Read, Result,
     crc::Crc32,
-    error_eof, error_invalid_data, error_out_of_memory,
+    error_eof, error_invalid_data, error_out_of_memory, error_unsupported,
     filter::{FilterConfig, FilterType, StreamFilter, bcj::BcjReader, delta::DeltaReader},
     lzma2_reader::{Lzma2Stream, get_stream_memory_usage},
     stream::{Action, Status, StreamResult},
@@ -914,14 +914,17 @@ impl XzStream {
         if data[..6] != XZ_MAGIC {
             return Err(error_invalid_data("invalid XZ magic bytes"));
         }
-        if data[6] != 0 {
-            return Err(error_invalid_data("invalid XZ stream flags"));
-        }
-        let check_type = CheckType::from_byte(data[7])?;
         let expected_crc = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
         if expected_crc != Crc32::checksum(&data[6..8]) {
             return Err(error_invalid_data("XZ stream header CRC32 mismatch"));
         }
+        // The first byte and the upper nibble of the second byte are reserved.
+        // The checksum check comes first. A corrupt header is reported as
+        // corrupt and not as unsupported.
+        if data[6] != 0 || data[7] & 0xF0 != 0 {
+            return Err(error_unsupported("invalid XZ stream flags"));
+        }
+        let check_type = CheckType::from_byte(data[7])?;
         self.check_type = Some(check_type);
         self.index_records.clear();
         self.block_count = 0;
@@ -1187,12 +1190,9 @@ impl XzStream {
             return Err(error_invalid_data("invalid XZ footer magic"));
         }
         if data[8] != 0 {
-            return Err(error_invalid_data(
-                "reserved stream footer flags byte is non-zero",
-            ));
+            return Err(error_invalid_data("stream footer flags don't match header"));
         }
-        let footer_check_type = CheckType::from_byte(data[9])?;
-        if Some(footer_check_type) != self.check_type {
+        if self.check_type.map(|check_type| check_type as u8) != Some(data[9]) {
             return Err(error_invalid_data("stream footer flags don't match header"));
         }
 

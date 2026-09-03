@@ -777,3 +777,33 @@ fn a_broken_block_header_checksum_comes_before_the_reserved_bits() {
     assert_eq!(stream_error(&stream).kind(), ErrorKind::InvalidData);
     assert_eq!(reader_error(&stream).kind(), ErrorKind::InvalidData);
 }
+
+/// The stream header flags sit at offset 6, their CRC32 right behind them.
+fn repair_stream_header_crc(stream: &mut [u8]) {
+    let crc = crc32(&stream[6..8]).to_le_bytes();
+    stream[8..12].copy_from_slice(&crc);
+}
+
+/// The first byte of the stream flags is reserved, and so is the upper nibble
+/// of the second one, which holds the check type.
+#[test]
+fn stream_flags_reserved_bits_are_rejected() {
+    for (offset, bits) in [(6usize, 0x01u8), (6, 0x80), (7, 0x10), (7, 0xF0)] {
+        let mut stream = encode_xz(b"stream flags", 1);
+        stream[offset] |= bits;
+        repair_stream_header_crc(&mut stream);
+
+        assert_eq!(stream_error(&stream).kind(), ErrorKind::Unsupported);
+        assert_eq!(reader_error(&stream).kind(), ErrorKind::Unsupported);
+    }
+}
+
+/// The same for the stream header.
+#[test]
+fn a_broken_stream_header_checksum_comes_before_the_reserved_bits() {
+    let mut stream = encode_xz(b"stream flags", 1);
+    stream[6] |= 0x01;
+
+    assert_eq!(stream_error(&stream).kind(), ErrorKind::InvalidData);
+    assert_eq!(reader_error(&stream).kind(), ErrorKind::InvalidData);
+}

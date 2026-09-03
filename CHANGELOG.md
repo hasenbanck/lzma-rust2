@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- The reserved bits of the XZ stream header flags are now all checked, and come back as `Unsupported` instead of
+  `InvalidData`. The format checksums those flags on their own so that a decoder can tell a corrupt file from one it
+  does not support, and a set reserved bit fits an `Unsupported` error better.
+
 ### Fixed
 
 - `Lzma2ReaderMt` and `XzReaderMt` no longer degrade to single-threaded decoding.
