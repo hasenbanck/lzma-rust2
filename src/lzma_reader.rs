@@ -6,7 +6,7 @@ use crate::{
     error_eof, error_invalid_data, error_invalid_input, error_out_of_memory, error_unsupported,
     filter::{FilterConfig, StreamFilter},
     lz::LzDecoder,
-    range_dec::{RangeCoderState, RangeDecoder, SliceRangeReader},
+    range_dec::{InputBuffer, RangeCoderState, RangeDecoder, SliceRangeReader},
     stream::{Action, Status, StreamResult},
 };
 
@@ -42,6 +42,11 @@ fn get_dict_size(dict_size: u32) -> crate::Result<u32> {
 
 /// A single-threaded LZMA decompressor.
 ///
+/// The reader takes its input through a 64 KiB buffer, and the decoder takes
+/// exactly the bytes it needs out of that. A stream that has arrived whole
+/// ends without the inner reader being asked for more, and what was read past
+/// the end of the stream comes back from [`into_parts`](Self::into_parts).
+///
 /// # Examples
 /// ```
 /// use std::io::Read;
@@ -66,8 +71,9 @@ fn get_dict_size(dict_size: u32) -> crate::Result<u32> {
 /// ```
 pub struct LzmaReader<R> {
     lz: LzDecoder,
-    rc: RangeDecoder<R>,
     lzma: LzmaDecoder,
+    input: InputBuffer<R>,
+    rc: RangeCoderState,
     end_reached: bool,
     relaxed_end_cond: bool,
     remaining_size: u64,
@@ -75,18 +81,28 @@ pub struct LzmaReader<R> {
 
 impl<R> LzmaReader<R> {
     /// Unwraps the reader, returning the underlying reader.
+    ///
+    /// Compressed bytes that were read ahead of the end of the LZMA stream
+    /// are dropped. [`into_parts`](Self::into_parts) hands them over instead.
     pub fn into_inner(self) -> R {
-        self.rc.into_inner()
+        self.input.into_inner()
+    }
+
+    /// Unwraps the reader, returning the underlying reader and the bytes read
+    /// from it that the LZMA stream did not consume. They are what followed
+    /// the stream in the input, for a caller that goes on reading from there.
+    pub fn into_parts(self) -> (R, Vec<u8>) {
+        self.input.into_parts()
     }
 
     /// Returns a reference to the inner reader.
     pub fn inner(&self) -> &R {
-        self.rc.inner()
+        self.input.inner()
     }
 
     /// Returns a mutable reference to the inner reader.
     pub fn inner_mut(&mut self) -> &mut R {
-        self.rc.inner_mut()
+        self.input.inner_mut()
     }
 }
 
@@ -142,20 +158,15 @@ impl<R: Read> LzmaReader<R> {
             dict_size = get_dict_size(min_history_size as u32)?;
         }
 
-        let rc = RangeDecoder::new_stream(reader);
-        let rc = match rc {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(e);
-            }
-        };
+        let mut input = InputBuffer::new(reader);
+        let rc = RangeDecoder::new_stream(&mut input)?.state();
         let lz = LzDecoder::new(get_dict_size(dict_size)? as _, preset_dict);
         let lzma = LzmaDecoder::new(lc, lp, pb);
         Ok(Self {
-            // reader,
             lz,
-            rc,
             lzma,
+            input,
+            rc,
             end_reached: false,
             relaxed_end_cond: true,
             remaining_size: uncomp_size,
@@ -239,15 +250,16 @@ impl<R: Read> LzmaReader<R> {
             }
             self.lz.set_limit(copy_size_max as usize);
 
-            match self.lzma.decode(&mut self.lz, &mut self.rc) {
-                Ok(_) => {}
-                Err(error) => {
-                    if self.remaining_size != u64::MAX || !self.lzma.end_marker_detected() {
-                        return Err(error);
-                    }
-                    self.end_reached = true;
-                    self.rc.normalize();
+            let decoded = self.decode();
+            if let Some(failure) = self.input.take_failure() {
+                return Err(failure);
+            }
+            if let Err(error) = decoded {
+                if self.remaining_size != u64::MAX || !self.lzma.end_marker_detected() {
+                    return Err(error);
                 }
+                self.end_reached = true;
+                self.normalize()?;
             }
 
             let copied_size = self.lz.flush(buf, off as _)? as u64;
@@ -262,15 +274,51 @@ impl<R: Read> LzmaReader<R> {
             }
 
             if self.end_reached {
-                if self.lz.has_pending()
-                    || (!self.relaxed_end_cond && !self.rc.is_stream_finished())
-                {
+                if self.lz.has_pending() || (!self.relaxed_end_cond && self.rc.code != 0) {
                     return Err(error_invalid_data("end reached but not decoder finished"));
                 }
                 return Ok(size as _);
             }
         }
         Ok(size as _)
+    }
+
+    /// Runs the decoder for a while. It comes back once the output is full or
+    /// the stream has ended, and also when the buffered input drops below a
+    /// symbol's worth, or climbs back above it after a refill.
+    fn decode(&mut self) -> crate::Result<()> {
+        let unread = self.input.unread();
+        if unread.len() >= IN_REQUIRED {
+            // Straight over the buffer, with nothing to call in the hot loop.
+            // A symbol may start only while a whole one is sure to fit.
+            let symbol_limit = unread.len() - (IN_REQUIRED - 1);
+            let reader = SliceRangeReader::new(unread, unread.len(), symbol_limit);
+            let mut rc = RangeDecoder::from_parts(reader, self.rc);
+            let decoded = self.lzma.decode(&mut self.lz, &mut rc);
+            let taken = rc.inner().pos();
+            self.rc = rc.state();
+            self.input.advance(taken);
+            return decoded;
+        }
+
+        // The last few bytes, a byte at a time, with a refill when a symbol
+        // needs more. A stream that ends within them ends here, and the inner
+        // reader is not asked for more.
+        let mut rc = RangeDecoder::from_parts(&mut self.input, self.rc);
+        let decoded = self.lzma.decode(&mut self.lz, &mut rc);
+        self.rc = rc.state();
+        decoded
+    }
+
+    /// Takes the last byte of the stream, if the range coder still needs one.
+    fn normalize(&mut self) -> crate::Result<()> {
+        let mut rc = RangeDecoder::from_parts(&mut self.input, self.rc);
+        rc.normalize();
+        self.rc = rc.state();
+        match self.input.take_failure() {
+            Some(failure) => Err(failure),
+            None => Ok(()),
+        }
     }
 }
 
@@ -285,7 +333,7 @@ impl<R: Read> Read for LzmaReader<R> {
 /// The worst case is a match with the maximum length at the maximum distance:
 /// 22 probability-coded bits plus 26 direct bits, which together can consume at
 /// most 20 input bytes.
-const IN_REQUIRED: usize = 20;
+pub(crate) const IN_REQUIRED: usize = 20;
 
 /// Capacity of the carry buffer: up to 19 bytes left over from the last call,
 /// plus 20 fresh ones.

@@ -1,8 +1,9 @@
 use alloc::{vec, vec::Vec};
 
 use crate::{
-    BIT_MODEL_TOTAL_BITS, ByteReader, MOVE_BITS, RC_BIT_MODEL_OFFSET, Read, SHIFT_BITS, error_eof,
-    error_invalid_data, error_invalid_input, error_other,
+    BIT_MODEL_TOTAL_BITS, ByteReader, DeferredError, Error, MOVE_BITS, RC_BIT_MODEL_OFFSET, Read,
+    SHIFT_BITS, error_eof, error_invalid_data, error_invalid_input, error_other, is_interrupted,
+    lzma_reader::IN_REQUIRED,
 };
 
 pub(crate) struct RangeDecoder<R> {
@@ -676,5 +677,186 @@ impl RangeReader for RangeDecoderBuffer {
     #[inline(always)]
     fn buf(&self) -> &[u8] {
         self.buf.as_slice()
+    }
+}
+
+/// How much compressed input [`InputBuffer`] takes from its reader at a time.
+const INPUT_BUFFER_SIZE: usize = 64 * 1024;
+
+/// The input of a reader, through a buffer.
+///
+/// The range decoder takes its input a byte at a time. Taking each byte
+/// through `Read` costs a call, which made a reader over a `BufReader` a third
+/// to two thirds slower than the same decoder over a slice, and one over a
+/// bare `File` ten times slower.
+///
+/// The reader runs the decoder over [`unread()`](Self::unread) as a slice for
+/// as long as a whole symbol is sure to fit, and through this type's
+/// [`RangeReader`] impl for the last few bytes. That impl refills the buffer
+/// when a symbol needs more, and only then, so a stream that has arrived whole
+/// ends without the inner reader being asked again. That matters for a source
+/// that stays open after the stream. What is left in the buffer afterwards is
+/// exactly what followed the stream in the input.
+pub(crate) struct InputBuffer<R> {
+    inner: R,
+    buf: Vec<u8>,
+    /// The bytes of `buf` not taken yet are `pos..len`.
+    pos: usize,
+    len: usize,
+    /// A refill that failed underneath the decoder, waiting to be picked up.
+    failure: Option<DeferredError>,
+}
+
+impl<R> InputBuffer<R> {
+    pub(crate) fn into_inner(self) -> R {
+        self.inner
+    }
+
+    /// Returns the inner reader and the bytes read from it that were not taken.
+    pub(crate) fn into_parts(self) -> (R, Vec<u8>) {
+        let unread = self.buf[self.pos..self.len].to_vec();
+        (self.inner, unread)
+    }
+
+    pub(crate) fn inner(&self) -> &R {
+        &self.inner
+    }
+
+    pub(crate) fn inner_mut(&mut self) -> &mut R {
+        &mut self.inner
+    }
+
+    /// The bytes read from the inner reader that were not taken yet.
+    pub(crate) fn unread(&self) -> &[u8] {
+        &self.buf[self.pos..self.len]
+    }
+
+    /// Takes `count` bytes of [`unread()`](Self::unread).
+    pub(crate) fn advance(&mut self, count: usize) {
+        debug_assert!(count <= self.len - self.pos);
+        self.pos += count;
+    }
+
+    /// Returns the error of a refill that failed underneath the decoder, if
+    /// there was one. The decoder was given ones in place of the bytes it
+    /// could not get, so whatever it made of them is not worth keeping.
+    pub(crate) fn take_failure(&mut self) -> Option<Error> {
+        self.failure.take().map(DeferredError::into_error)
+    }
+}
+
+impl<R: Read> InputBuffer<R> {
+    pub(crate) fn new(inner: R) -> Self {
+        Self {
+            inner,
+            buf: vec![0; INPUT_BUFFER_SIZE],
+            pos: 0,
+            len: 0,
+            failure: None,
+        }
+    }
+
+    /// Refills the used up buffer, returning how many bytes arrived. Zero
+    /// means the inner reader has no more.
+    fn fill(&mut self) -> crate::Result<usize> {
+        debug_assert_eq!(self.pos, self.len);
+        self.pos = 0;
+        self.len = 0;
+        loop {
+            match self.inner.read(&mut self.buf) {
+                Ok(read) => {
+                    self.len = read;
+                    return Ok(read);
+                }
+                Err(error) if is_interrupted(&error) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// The part of [`RangeReader::read_u8`] that needs the inner reader.
+    #[cold]
+    #[inline(never)]
+    fn read_u8_slow(&mut self) -> u8 {
+        if self.failure.is_none() {
+            match self.fill() {
+                Ok(0) => {
+                    let error = error_eof("unexpected end of LZMA input");
+                    self.failure = Some(DeferredError::new(&error));
+                }
+                Ok(_) => {
+                    self.pos = 1;
+                    return self.buf[0];
+                }
+                Err(error) => self.failure = Some(DeferredError::new(&error)),
+            }
+        }
+        // The same stand-in the other readers use once they run out. It makes
+        // the decoder fail with "dist overflow" before long, and the failure
+        // kept above is what the reader reports.
+        1
+    }
+}
+
+/// The byte at a time way through the buffer, for the last few bytes of it
+/// and for the five the range coder starts from.
+impl<R: Read> RangeReader for &mut InputBuffer<R> {
+    #[inline(always)]
+    fn read_u8(&mut self) -> u8 {
+        if self.pos < self.len {
+            let byte = self.buf[self.pos];
+            self.pos += 1;
+            return byte;
+        }
+        self.read_u8_slow()
+    }
+
+    fn try_read_u8(&mut self) -> crate::Result<u8> {
+        if self.pos == self.len && self.fill()? == 0 {
+            return Err(error_eof("unexpected end of range coder input"));
+        }
+        let byte = self.buf[self.pos];
+        self.pos += 1;
+        Ok(byte)
+    }
+
+    fn read_u32_be(&mut self) -> crate::Result<u32> {
+        let mut bytes = [0; 4];
+        for byte in bytes.iter_mut() {
+            *byte = self.try_read_u8()?;
+        }
+        Ok(u32::from_be_bytes(bytes))
+    }
+
+    /// A symbol may start here only while a whole one is not sure to fit in
+    /// the buffer. Once a refill has brought enough, the reader goes back to
+    /// running the decoder over the buffer as a slice, which is faster.
+    #[inline(always)]
+    fn can_start_symbol(&self) -> bool {
+        self.len - self.pos < IN_REQUIRED
+    }
+
+    /// The assembly paths read from `buf()` and never refill, so they may only
+    /// run while the rest of the current symbol is sure to be in the buffer. A
+    /// whole symbol needs at most `IN_REQUIRED` bytes, and the rest of one
+    /// needs no more.
+    #[inline(always)]
+    fn is_buffer(&self) -> bool {
+        self.len - self.pos >= IN_REQUIRED
+    }
+
+    #[inline(always)]
+    fn pos(&self) -> usize {
+        self.pos
+    }
+
+    #[inline(always)]
+    fn set_pos(&mut self, pos: usize) {
+        self.pos = pos;
+    }
+
+    #[inline(always)]
+    fn buf(&self) -> &[u8] {
+        &self.buf[..self.len]
     }
 }

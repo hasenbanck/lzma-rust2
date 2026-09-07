@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use lzma_rust2::{LzipOptions, LzipReader, LzipWriter};
 
@@ -178,4 +178,61 @@ fn round_trip_pg6800_8() {
 #[test]
 fn round_trip_pg6800_9() {
     test_round_trip(PG6800, 9);
+}
+
+/// Hands out at most `max` bytes per call, the way a pipe or a socket might.
+struct Chunks<'a> {
+    data: &'a [u8],
+    max: usize,
+}
+
+impl Read for Chunks<'_> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let n = out.len().min(self.max).min(self.data.len());
+        out[..n].copy_from_slice(&self.data[..n]);
+        self.data = &self.data[n..];
+        Ok(n)
+    }
+}
+
+fn member(data: &[u8]) -> Vec<u8> {
+    let mut compressed = Vec::new();
+    let mut writer = LzipWriter::new(&mut compressed, LzipOptions::with_preset(0));
+    writer.write_all(data).unwrap();
+    writer.finish().unwrap();
+    compressed
+}
+
+/// The LZMA reader under a member reads ahead of the member's stream. However
+/// few bytes arrive per read, the trailer and the member after it are read
+/// from what it read ahead, and nothing is lost between them.
+#[test]
+fn members_are_read_whole_however_the_input_arrives() {
+    let mut compressed = member(b"Hello, world!");
+    compressed.extend_from_slice(&member(b"Goodbye, world!"));
+    for max in 1..=64 {
+        let mut reader = LzipReader::new(Chunks {
+            data: &compressed,
+            max,
+        });
+        let mut out = Vec::new();
+        reader
+            .read_to_end(&mut out)
+            .unwrap_or_else(|error| panic!("{max} bytes per read: {error}"));
+        assert_eq!(out, b"Hello, world!Goodbye, world!");
+    }
+}
+
+/// A bad trailer fails the read, and the reader still has its inner reader
+/// to give back afterwards.
+#[test]
+fn into_inner_survives_a_bad_trailer() {
+    let mut compressed = member(b"Hello, world!");
+    let crc_byte = compressed.len() - 20;
+    compressed[crc_byte] ^= 0xFF;
+
+    let mut reader = LzipReader::new(compressed.as_slice());
+    let error = reader.read_to_end(&mut Vec::new()).unwrap_err();
+    assert_eq!(error.to_string(), "LZIP CRC32 mismatch");
+    assert!(reader.into_inner().is_empty());
 }

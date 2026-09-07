@@ -7,14 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `LzmaReader::into_parts` returns the inner reader together with the bytes read from it that the LZMA stream did not
+  consume, for a caller that goes on reading what follows the stream.
+
 ### Changed
 
+- `LzmaReader` reads its input through a 64 KiB buffer instead of pulling every compressed byte through `Read`. Over a
+  `BufReader` it now decodes as fast as over a slice, which is a third to two thirds faster than before, and over a bare
+  `File` about ten times faster. The decoder still takes exactly the bytes of the stream, so a stream that has arrived
+  whole ends without the reader asking its source for more. `into_inner` drops the bytes read ahead of the stream's end,
+  which `into_parts` hands over instead.
+- An error from the reader under `LzmaReader` now comes back from `read`. Before, the decoder went on as if it had read
+  ones, and reported corrupt data at best.
+- `LzipReader` keeps the bytes its LZMA reader read ahead, so a member's trailer and the members after it are read from
+  them first.
 - The reserved bits of the XZ stream header flags are now all checked, and come back as `Unsupported` instead of
   `InvalidData`. The format checksums those flags on their own so that a decoder can tell a corrupt file from one it
   does not support, and a set reserved bit fits an `Unsupported` error better.
 
 ### Fixed
 
+- `LzipReader::into_inner` no longer panics after a member's trailer failed to parse.
 - `Lzma2ReaderMt` and `XzReaderMt` no longer degrade to single-threaded decoding.
 - `Lzma2Stream` and `XzStream` now decode the input they still hold back once the caller says the input ends, so corrupt
   data in a chunk is reported as such instead of as a stream that was cut short.

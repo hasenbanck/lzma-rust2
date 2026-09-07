@@ -5,10 +5,55 @@ use crate::{
     CountingReader, LzmaReader, Read, Result, crc::Crc32, error_invalid_data, error_invalid_input,
 };
 
+/// The input, with the bytes the last member's LZMA reader read ahead of its
+/// stream put back in front. Those hold the trailer, and then the next member.
+struct Prefixed<R> {
+    pending: Vec<u8>,
+    pos: usize,
+    inner: R,
+}
+
+impl<R> Prefixed<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            pending: Vec::new(),
+            pos: 0,
+            inner,
+        }
+    }
+
+    /// Puts `bytes` in front of whatever is still pending.
+    fn put_back(&mut self, bytes: Vec<u8>) {
+        if bytes.is_empty() {
+            return;
+        }
+        let mut pending = bytes;
+        pending.extend_from_slice(&self.pending[self.pos..]);
+        self.pending = pending;
+        self.pos = 0;
+    }
+}
+
+impl<R: Read> Read for Prefixed<R> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        if self.pos < self.pending.len() {
+            let n = (self.pending.len() - self.pos).min(buf.len());
+            buf[..n].copy_from_slice(&self.pending[self.pos..self.pos + n]);
+            self.pos += n;
+            if self.pos == self.pending.len() {
+                self.pending.clear();
+                self.pos = 0;
+            }
+            return Ok(n);
+        }
+        self.inner.read(buf)
+    }
+}
+
 /// A single-threaded LZIP decompressor.
 pub struct LzipReader<R> {
-    inner: Option<R>,
-    lzma_reader: Option<LzmaReader<CountingReader<R>>>,
+    inner: Option<Prefixed<R>>,
+    lzma_reader: Option<LzmaReader<CountingReader<Prefixed<R>>>>,
     current_header: Option<LzipHeader>,
     finished: bool,
     trailer_buf: Vec<u8>,
@@ -18,28 +63,30 @@ pub struct LzipReader<R> {
 
 impl<R> LzipReader<R> {
     /// Consume the LzipReader and return the inner reader.
+    ///
+    /// Bytes read ahead of the current position in the LZIP stream are dropped.
     pub fn into_inner(mut self) -> R {
         if let Some(lzma_reader) = self.lzma_reader.take() {
-            return lzma_reader.into_inner().inner;
+            return lzma_reader.into_inner().inner.inner;
         }
 
-        self.inner.take().expect("inner reader not set")
+        self.inner.take().expect("inner reader not set").inner
     }
 
     /// Returns a reference to the inner reader.
     pub fn inner(&self) -> &R {
         self.lzma_reader
             .as_ref()
-            .map(|reader| reader.inner().inner())
-            .unwrap_or_else(|| self.inner.as_ref().expect("inner reader not set"))
+            .map(|reader| &reader.inner().inner().inner)
+            .unwrap_or_else(|| &self.inner.as_ref().expect("inner reader not set").inner)
     }
 
     /// Returns a mutable reference to the inner reader.
     pub fn inner_mut(&mut self) -> &mut R {
         self.lzma_reader
             .as_mut()
-            .map(|reader| reader.inner_mut().inner_mut())
-            .unwrap_or_else(|| self.inner.as_mut().expect("inner reader not set"))
+            .map(|reader| &mut reader.inner_mut().inner_mut().inner)
+            .unwrap_or_else(|| &mut self.inner.as_mut().expect("inner reader not set").inner)
     }
 }
 
@@ -47,7 +94,7 @@ impl<R: Read> LzipReader<R> {
     /// Create a new LZIP reader.
     pub fn new(inner: R) -> Self {
         Self {
-            inner: Some(inner),
+            inner: Some(Prefixed::new(inner)),
             lzma_reader: None,
             current_header: None,
             finished: false,
@@ -98,32 +145,33 @@ impl<R: Read> LzipReader<R> {
     fn finish_current_member(&mut self) -> Result<()> {
         let lzma_reader = self.lzma_reader.take().expect("lzma reader not set");
 
-        let counting_reader = lzma_reader.into_inner();
-        let compressed_bytes = counting_reader.bytes_read();
+        // What the LZMA reader read ahead of its stream is the trailer and
+        // whatever follows. It goes back in front of the input.
+        let (counting_reader, leftover) = lzma_reader.into_parts();
+        let compressed_bytes = counting_reader.bytes_read() - leftover.len() as u64;
 
         let mut inner_reader = counting_reader.inner;
-        let trailer = LzipTrailer::parse(&mut inner_reader)?;
+        inner_reader.put_back(leftover);
+
+        // The reader goes back in place first, so that a bad trailer leaves
+        // `into_inner` something to return.
+        let inner_reader = self.inner.insert(inner_reader);
+        let trailer = LzipTrailer::parse(inner_reader)?;
 
         let computed_crc = self.crc_digest.take().expect("no CRC digest").finalize();
 
         if computed_crc != trailer.crc32 {
-            self.inner = Some(inner_reader);
             return Err(error_invalid_data("LZIP CRC32 mismatch"));
         }
 
         if self.data_size != trailer.data_size {
-            self.inner = Some(inner_reader);
             return Err(error_invalid_data("LZIP data size mismatch"));
         }
 
         let actual_member_size = HEADER_SIZE as u64 + compressed_bytes + TRAILER_SIZE as u64;
         if actual_member_size != trailer.member_size {
-            self.inner = Some(inner_reader);
             return Err(error_invalid_data("LZIP member size mismatch"));
         }
-
-        // Store the reader for potential next member.
-        self.inner = Some(inner_reader);
 
         Ok(())
     }

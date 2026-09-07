@@ -467,6 +467,38 @@ fn copy_error(error: &Error) -> Error {
     Error::new(error.kind(), error.to_string())
 }
 
+#[cfg(feature = "std")]
+#[inline(always)]
+fn is_interrupted(error: &Error) -> bool {
+    error.kind() == std::io::ErrorKind::Interrupted
+}
+
+/// An error kept until there is someone to hand it to.
+///
+/// The range decoder takes its bytes through a call that cannot fail, so a
+/// read that fails underneath it has to wait until the decoder returns. Only
+/// the kind and the message are kept, the way `copy_error` copies them. A
+/// reader that held the error itself would no longer be unwind safe.
+#[cfg(feature = "std")]
+struct DeferredError {
+    kind: std::io::ErrorKind,
+    message: alloc::string::String,
+}
+
+#[cfg(feature = "std")]
+impl DeferredError {
+    fn new(error: &Error) -> Self {
+        Self {
+            kind: error.kind(),
+            message: error.to_string(),
+        }
+    }
+
+    fn into_error(self) -> Error {
+        Error::new(self.kind, self.message)
+    }
+}
+
 #[cfg(not(feature = "std"))]
 #[inline(always)]
 fn error_eof(_msg: &'static str) -> Error {
@@ -507,6 +539,27 @@ fn error_unsupported(msg: &'static str) -> Error {
 #[inline(always)]
 fn copy_error(error: &Error) -> Error {
     *error
+}
+
+#[cfg(not(feature = "std"))]
+#[inline(always)]
+fn is_interrupted(error: &Error) -> bool {
+    matches!(error, Error::Interrupted)
+}
+
+/// An error kept until there is someone to hand it to. See the `std` version.
+#[cfg(not(feature = "std"))]
+struct DeferredError(Error);
+
+#[cfg(not(feature = "std"))]
+impl DeferredError {
+    fn new(error: &Error) -> Self {
+        Self(*error)
+    }
+
+    fn into_error(self) -> Error {
+        self.0
+    }
 }
 
 struct CountingReader<R> {
