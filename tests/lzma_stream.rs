@@ -98,6 +98,146 @@ fn decode(
     }
 }
 
+/// Drives a stream with `Action::Run` only, the way a caller does when it reads
+/// from a source that simply runs out instead of announcing the end.
+fn decode_run_only(mut stream: LzmaStream, compressed: &[u8]) -> std::io::Result<Vec<u8>> {
+    let mut decompressed = Vec::new();
+    let mut output = vec![0u8; 1 << 16];
+    let mut pos = 0usize;
+
+    loop {
+        let result = stream.process(&compressed[pos..], &mut output, Action::Run)?;
+        pos += result.bytes_consumed;
+        decompressed.extend_from_slice(&output[..result.bytes_produced]);
+
+        if result.status == Status::StreamEnd {
+            return Ok(decompressed);
+        }
+
+        assert!(
+            result.bytes_consumed != 0 || result.bytes_produced != 0,
+            "stalled at input {pos}/{} after {} of {} bytes of output",
+            compressed.len(),
+            decompressed.len(),
+            stream.total_out(),
+        );
+    }
+}
+
+/// What came of driving a stream with `Action::Run` only.
+struct RunOnly {
+    decompressed: Vec<u8>,
+    /// Everything the stream did not take, or `None` when it never ended.
+    unused: Option<Vec<u8>>,
+}
+
+/// Drives a stream with `Action::Run` only, handing over at most `chunk` bytes
+/// per call and asking for the rest of the output with an empty call in
+/// between, the way a caller does when its source has nothing for it right now.
+///
+/// Gives up once a whole round makes no progress and there is nothing left to
+/// hand over.
+fn decode_run_only_chunked(
+    stream: &mut LzmaStream,
+    compressed: &[u8],
+    chunk: usize,
+    out_size: usize,
+) -> std::io::Result<RunOnly> {
+    let mut decompressed = Vec::new();
+    let mut output = vec![0u8; out_size];
+    let mut pos = 0usize;
+
+    loop {
+        let end = pos.saturating_add(chunk).min(compressed.len());
+        let result = stream.process(&compressed[pos..end], &mut output, Action::Run)?;
+        pos += result.bytes_consumed;
+        decompressed.extend_from_slice(&output[..result.bytes_produced]);
+        let moved = result.bytes_consumed != 0 || result.bytes_produced != 0;
+
+        if result.status == Status::StreamEnd {
+            let mut unused = stream.unused_input().to_vec();
+            unused.extend_from_slice(&compressed[pos..]);
+            return Ok(RunOnly {
+                decompressed,
+                unused: Some(unused),
+            });
+        }
+
+        let result = stream.process(&[], &mut output, Action::Run)?;
+        decompressed.extend_from_slice(&output[..result.bytes_produced]);
+        assert_eq!(result.bytes_consumed, 0, "an empty call took input");
+
+        if result.status == Status::StreamEnd {
+            let mut unused = stream.unused_input().to_vec();
+            unused.extend_from_slice(&compressed[pos..]);
+            return Ok(RunOnly {
+                decompressed,
+                unused: Some(unused),
+            });
+        }
+
+        if !moved && result.bytes_produced == 0 && pos >= compressed.len() {
+            return Ok(RunOnly {
+                decompressed,
+                unused: None,
+            });
+        }
+    }
+}
+
+/// Drives a stream the way a caller does when it has to hand back at least one
+/// byte per read: it keeps calling while nothing comes out, and gives up as
+/// soon as a call produces nothing and its source has no more to offer.
+///
+/// Such a caller never makes an empty call after the one that took the last of
+/// its input, so anything the decoder still needs a further call for is lost on
+/// it. Returns `None` when it gave up.
+fn decode_run_only_giving_up(
+    stream: &mut LzmaStream,
+    compressed: &[u8],
+    src_chunk: usize,
+    out_size: usize,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let mut decompressed = Vec::new();
+    let mut output = vec![0u8; out_size];
+    let mut pos = 0usize;
+    // How much of the source has been read in so far.
+    let mut end = 0usize;
+
+    loop {
+        let result = stream.process(&compressed[pos..end], &mut output, Action::Run)?;
+        pos += result.bytes_consumed;
+        decompressed.extend_from_slice(&output[..result.bytes_produced]);
+
+        if result.status == Status::StreamEnd {
+            return Ok(Some(decompressed));
+        }
+        if result.bytes_produced > 0 || end > pos {
+            continue;
+        }
+        if end >= compressed.len() {
+            return Ok(None);
+        }
+        end = end.saturating_add(src_chunk).min(compressed.len());
+    }
+}
+
+/// Like [`compress_header`], but with a dictionary size of its own, so that a
+/// test can make the dictionary wrap without needing a large input.
+fn compress_header_with_dict(
+    data: &[u8],
+    preset: u32,
+    dict_size: u32,
+    known_size: bool,
+) -> Vec<u8> {
+    let mut options = LzmaOptions::with_preset(preset);
+    options.dict_size = dict_size;
+    let size = known_size.then_some(data.len() as u64);
+    let mut writer = LzmaWriter::new_use_header(Vec::new(), &options, size).unwrap();
+    writer.write_all(data).unwrap();
+    writer.finish().unwrap()
+}
+
 /// The reference: same compressed bytes through the blocking reader.
 fn decode_with_reader(compressed: &[u8], raw: Option<RawProps>) -> std::io::Result<Vec<u8>> {
     let mut decompressed = Vec::new();
@@ -1149,4 +1289,223 @@ fn set_filters_accepts_an_empty_chain() {
     let mut stream = LzmaStream::new_mem_limit(u32::MAX, None);
     stream.set_filters(&[]).unwrap();
     assert!(decode(stream, &compressed, ENTIRE, 4096).unwrap() == data);
+}
+
+#[test]
+fn run_only_decodes_a_whole_stream() {
+    let data = std::fs::read(APACHE2).unwrap();
+
+    for known_size in [false, true] {
+        let compressed = compress_header(&data, 1, known_size);
+
+        // The blocking reader gets everything out of these same bytes.
+        let expected = decode_with_reader(&compressed, None).unwrap();
+        assert_eq!(expected, data, "known_size = {known_size}");
+
+        let stream = LzmaStream::new_mem_limit(u32::MAX, None);
+        let decompressed = decode_run_only(stream, &compressed).unwrap();
+        assert_eq!(decompressed, data, "known_size = {known_size}");
+    }
+}
+
+#[test]
+fn run_only_matches_the_reader() {
+    for file in [APACHE2, INPUT_HTML] {
+        let data = std::fs::read(file).unwrap();
+
+        for preset in [0, 1, 6, 9] {
+            for known_size in [false, true] {
+                let compressed = compress_header(&data, preset, known_size);
+                let expected = decode_with_reader(&compressed, None).unwrap();
+
+                for &chunk in CHUNK_SIZES {
+                    let mut stream = LzmaStream::new_mem_limit(u32::MAX, None);
+                    let run =
+                        decode_run_only_chunked(&mut stream, &compressed, chunk, 4096).unwrap();
+                    let where_ = format!("{file} preset {preset} known {known_size} chunk {chunk}");
+                    assert!(run.unused.is_some(), "{where_}: stalled");
+                    assert!(run.decompressed == expected, "{where_}: wrong output");
+                    assert!(run.unused.unwrap().is_empty(), "{where_}: left bytes over");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn run_only_decodes_a_raw_stream() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+
+    for preset in [0, 6, 9] {
+        for use_end_marker in [false, true] {
+            let (compressed, raw) = compress_raw(&data, preset, use_end_marker);
+
+            for &chunk in CHUNK_SIZES {
+                let mut stream = raw_stream(raw);
+                let run = decode_run_only_chunked(&mut stream, &compressed, chunk, 4096).unwrap();
+                let where_ = format!("preset {preset} eopm {use_end_marker} chunk {chunk}");
+                assert!(run.unused.is_some(), "{where_}: stalled");
+                assert!(run.decompressed == data, "{where_}: wrong output");
+            }
+        }
+    }
+}
+
+/// A pass that is given up on has to put back the stretch of dictionary it
+/// wrote over, not only the position it wrote at. Once the dictionary has
+/// wrapped those bytes are the oldest history in the window, and a match at a
+/// large enough distance reads them again.
+#[test]
+fn run_only_leaves_a_wrapped_dictionary_alone() {
+    let data = &std::fs::read(PG100).unwrap()[..1 << 20];
+
+    for known_size in [false, true] {
+        // A dictionary far smaller than the input, so that it wraps sixteen
+        // times over, with an empty call after every few bytes of input to make
+        // a speculative pass run in between.
+        let compressed = compress_header_with_dict(data, 1, 1 << 16, known_size);
+
+        let mut stream = LzmaStream::new_mem_limit(u32::MAX, None);
+        let run = decode_run_only_chunked(&mut stream, &compressed, 64, 1 << 16).unwrap();
+
+        assert!(run.unused.is_some(), "known_size = {known_size}: stalled");
+        assert!(
+            run.decompressed == data,
+            "known_size = {known_size}: wrong output"
+        );
+    }
+}
+
+/// Finishing without being told to must not cost the stream a byte: a decoder
+/// that stops one normalisation short reports that byte as unused.
+#[test]
+fn run_only_recovers_trailing_data() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let garbage: Vec<u8> = (0u8..=255).cycle().take(300).collect();
+
+    for preset in [0, 1, 6, 9] {
+        for known_size in [false, true] {
+            let compressed = compress_header(&data, preset, known_size);
+            let mut input = compressed.clone();
+            input.extend_from_slice(&garbage);
+
+            for &chunk in CHUNK_SIZES {
+                let mut stream = LzmaStream::new_mem_limit(u32::MAX, None);
+                let run = decode_run_only_chunked(&mut stream, &input, chunk, 4096).unwrap();
+                let where_ = format!("preset {preset} known {known_size} chunk {chunk}");
+                assert!(run.decompressed == data, "{where_}: wrong output");
+                assert_eq!(run.unused, Some(garbage.clone()), "{where_}");
+            }
+        }
+    }
+}
+
+/// A stream cut short at any point must stall rather than end, and must still
+/// decode once the rest of it turns up.
+#[test]
+fn run_only_never_ends_a_truncated_stream() {
+    let data = std::fs::read(APACHE2).unwrap();
+
+    for known_size in [false, true] {
+        let compressed = compress_header(&data, 1, known_size);
+
+        for cut in 0..compressed.len() {
+            let mut stream = LzmaStream::new_mem_limit(u32::MAX, None);
+            let run = decode_run_only_chunked(&mut stream, &compressed[..cut], 512, 4096).unwrap();
+            assert!(run.unused.is_none(), "cut {cut}: ended on a partial stream");
+            assert!(
+                data.starts_with(&run.decompressed),
+                "cut {cut}: decoded bytes the data does not have"
+            );
+
+            // The same stream still finishes once it gets the rest.
+            let mut decompressed = run.decompressed;
+            let mut output = vec![0u8; 4096];
+            let mut pos = cut;
+            loop {
+                let result = stream
+                    .process(&compressed[pos..], &mut output, Action::Finish)
+                    .unwrap();
+                pos += result.bytes_consumed;
+                decompressed.extend_from_slice(&output[..result.bytes_produced]);
+                if result.status == Status::StreamEnd {
+                    break;
+                }
+                assert!(
+                    result.bytes_consumed != 0 || result.bytes_produced != 0,
+                    "cut {cut}: stalled after the rest arrived"
+                );
+            }
+            assert!(decompressed == data, "cut {cut}: wrong output");
+        }
+    }
+}
+
+/// Highly compressible data is what drives a speculative pass into its output
+/// ceiling, which leaves a repeat half copied, and what fills the dictionary
+/// while the caller has nothing left to hand over. Neither is rare, and both
+/// used to leave the stream stuck short of the end.
+#[test]
+fn run_only_decodes_repetitive_data() {
+    // Dictionaries far smaller than the data, so that it wraps several times,
+    // and an output buffer small enough that the caller is forever draining.
+    for dict_size in [1 << 12, 1 << 14] {
+        for known_size in [false, true] {
+            // A broad stride, and a dense run just past a dictionary's worth
+            // on top of it: a tail that needs no input byte at all to decode is
+            // scattered too thinly for a stride alone to find.
+            let lengths = (1..=200).map(|k| k * 128).chain(16_384..17_408);
+            for len in lengths {
+                let data = vec![b'x'; len];
+                let compressed = compress_header_with_dict(&data, 6, dict_size, known_size);
+
+                let mut stream = LzmaStream::new_mem_limit(u32::MAX, None);
+                let run = decode_run_only_chunked(&mut stream, &compressed, 4096, 512).unwrap();
+
+                let where_ = format!("dict {dict_size} known {known_size} len {len}");
+                assert!(
+                    run.unused.is_some(),
+                    "{where_}: stalled at {} of {len}",
+                    run.decompressed.len()
+                );
+                assert!(run.decompressed == data, "{where_}: wrong output");
+                assert!(run.unused.unwrap().is_empty(), "{where_}: left bytes over");
+            }
+        }
+    }
+}
+
+/// A caller that reads a call which gives it nothing as the end of the stream
+/// never makes the further call an empty input would be. A stream small enough
+/// that all of its output is still held back when the last of the input goes in
+/// has to finish in that same call.
+#[test]
+fn run_only_finishes_before_the_caller_gives_up() {
+    let mut payloads: Vec<Vec<u8>> = (1..=40)
+        .chain((1..=64).map(|k| k * 37))
+        .map(|len| vec![b'x'; len])
+        .collect();
+    payloads.push(std::fs::read(APACHE2).unwrap());
+
+    for preset in [0, 6] {
+        for known_size in [false, true] {
+            for data in &payloads {
+                let compressed = compress_header(data, preset, known_size);
+
+                for &src_chunk in &[1usize, 19, 4096, ENTIRE] {
+                    let mut stream = LzmaStream::new_mem_limit(u32::MAX, None);
+                    let decompressed =
+                        decode_run_only_giving_up(&mut stream, &compressed, src_chunk, 8192)
+                            .unwrap();
+
+                    let where_ = format!(
+                        "preset {preset} known {known_size} len {} source {src_chunk}",
+                        data.len()
+                    );
+                    let decompressed = decompressed.unwrap_or_else(|| panic!("{where_}: gave up"));
+                    assert!(decompressed == *data, "{where_}: wrong output");
+                }
+            }
+        }
+    }
 }

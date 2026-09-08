@@ -5,6 +5,9 @@ use crate::{
     error_invalid_data, error_invalid_input, error_other,
 };
 
+/// The range below which the decoder has to take another input byte.
+const TOP_VALUE: u32 = 0x0100_0000;
+
 pub(crate) struct RangeDecoder<R> {
     inner: R,
     range: u32,
@@ -20,6 +23,12 @@ pub(crate) struct RangeDecoder<R> {
 pub(crate) struct RangeCoderState {
     pub(crate) range: u32,
     pub(crate) code: u32,
+}
+
+impl RangeCoderState {
+    pub(crate) fn wants_byte(&self) -> bool {
+        self.range < TOP_VALUE
+    }
 }
 
 impl<R> RangeDecoder<R> {
@@ -116,7 +125,7 @@ impl<R: RangeReader> RangeDecoder<R> {
 impl<R: RangeReader> RangeDecoder<R> {
     #[inline(always)]
     pub(crate) fn normalize(&mut self) {
-        if self.range < 0x0100_0000 {
+        if self.range < TOP_VALUE {
             let b = self.inner.read_u8() as u32;
             self.code = (self.code << SHIFT_BITS) | b;
             self.range <<= SHIFT_BITS;
@@ -208,7 +217,7 @@ impl<R: RangeReader> RangeDecoder<R> {
 
         'outer: loop {
             // Fast Path
-            while self.range >= 0x0100_0000 {
+            while self.range >= TOP_VALUE {
                 if count == 0 {
                     break 'outer;
                 }

@@ -187,6 +187,7 @@ fn set_error(
     shutdown_flag.store(true, std::sync::atomic::Ordering::Release);
 }
 
+#[derive(Clone)]
 pub(crate) struct LzmaCoder {
     pub(crate) pos_mask: u32,
     pub(crate) reps: [i32; REPS],
@@ -270,6 +271,7 @@ pub(crate) fn init_probs(probs: &mut [u16]) {
     probs.fill(PROB_INIT);
 }
 
+#[derive(Clone)]
 pub(crate) struct LiteralCoder {
     lc: u32,
     literal_pos_mask: u32,
@@ -306,6 +308,7 @@ impl LiteralCoder {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct LengthCoder {
     choice: [u16; 2],
     low: [[u16; LOW_SYMBOLS]; POS_STATES_MAX],

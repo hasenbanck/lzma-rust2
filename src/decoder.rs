@@ -7,6 +7,7 @@ use super::{
 };
 use crate::range_dec::RangeReader;
 
+#[derive(Clone)]
 pub(crate) struct LzmaDecoder {
     coder: LzmaCoder,
     literal_decoder: LiteralDecoder,
@@ -146,6 +147,7 @@ impl LzmaDecoder {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct LiteralDecoder {
     coder: LiteralCoder,
     sub_decoders: Vec<LiteralSubDecoder>,
