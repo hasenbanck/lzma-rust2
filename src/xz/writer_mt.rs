@@ -7,13 +7,14 @@ use std::{
     },
 };
 
+use super::writer::FilterWriter;
 use super::{
     CheckType, ChecksumCalculator, IndexRecord, add_padding, write_xz_block_header, write_xz_index,
     write_xz_stream_footer, write_xz_stream_header,
 };
 use crate::{
-    AutoFinish, AutoFinisher, Lzma2Options, Result, XzOptions,
-    enc::{Lzma2Writer, LzmaOptions},
+    AutoFinish, AutoFinisher, CountingWriter, Result, XzOptions,
+    enc::LzmaOptions,
     error_invalid_input,
     filter::{FilterConfig, FilterType},
     set_error,
@@ -26,6 +27,8 @@ use crate::{
 struct WorkUnit {
     uncompressed_data: Vec<u8>,
     lzma_options: LzmaOptions,
+    /// The pre-filters before LZMA2, which each block applies from its own start.
+    filters: Vec<FilterConfig>,
     check_type: CheckType,
 }
 
@@ -141,6 +144,7 @@ impl<W: Write> XzWriterMt<W> {
             Ok(WorkUnit {
                 uncompressed_data: data,
                 lzma_options: self.options.lzma_options.clone(),
+                filters: self.options.filters.clone(),
                 check_type: self.options.check_type,
             })
         })?;
@@ -286,12 +290,25 @@ fn worker_thread_logic(
         checksum_calculator.update(&work_unit.uncompressed_data);
         let checksum = checksum_calculator.finalize_to_bytes();
 
-        let options = Lzma2Options {
-            lzma_options: work_unit.lzma_options,
-            ..Default::default()
+        // The block's filter chain, as the single-threaded writer builds it: the
+        // pre-filters the block header names, then LZMA2.
+        let mut filters = work_unit.filters;
+        filters.push(FilterConfig {
+            filter_type: FilterType::Lzma2,
+            property: 0,
+        });
+        let mut writer = match FilterWriter::create_filter_chain(
+            CountingWriter::new(&mut compressed_buffer),
+            &filters,
+            &work_unit.lzma_options,
+        ) {
+            Ok(writer) => writer,
+            Err(error) => {
+                active_workers.fetch_sub(1, Ordering::Release);
+                set_error(error, &error_store, &shutdown_flag);
+                return;
+            }
         };
-
-        let mut writer = Lzma2Writer::new(&mut compressed_buffer, options);
         let result = match writer.write_all(&work_unit.uncompressed_data) {
             Ok(_) => match writer.finish() {
                 Ok(_) => ResultUnit {

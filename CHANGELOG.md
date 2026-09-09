@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Lzma2Stream` and `XzStream` now decode the input they still hold back once the caller says the input ends, so corrupt
   data in a chunk is reported as such instead of as a stream that was cut short.
 - Reject a block header that sets reserved flag bits, instead of decoding the block as if they meant nothing.
+- `XzWriterMt` now applies the pre-filters set with `XzOptions::prepend_pre_filter` in every block. It named them in
+  the block headers but compressed the bytes unfiltered, so the output decoded to the wrong bytes.
 
 ## 0.20.1 - 2026-08-30
 

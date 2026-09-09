@@ -230,3 +230,56 @@ fn round_trip_pg6800_8() {
 fn round_trip_pg6800_9() {
     test_round_trip(PG6800, 9);
 }
+
+/// A pre-filter goes into every block's header, so every block's data must have been
+/// filtered: the writer once named the filter and compressed the bytes as they were.
+fn round_trip_with_pre_filter(filter: lzma_rust2::FilterType, property: u32, path: &str) {
+    use lzma_rust2::{XzReader, XzWriter};
+
+    let data = std::fs::read(path).unwrap();
+    let mut options = XzOptions::with_preset(3);
+    options.set_block_size(NonZeroU64::new(1 << 18));
+    options.prepend_pre_filter(filter, property);
+
+    let mut threaded = Vec::new();
+    {
+        let mut writer = XzWriterMt::new(&mut threaded, options.clone(), 2).unwrap();
+        writer.write_all(&data).unwrap();
+        writer.finish().unwrap();
+    }
+    let mut uncompressed = Vec::new();
+    XzReader::new(Cursor::new(threaded.as_slice()), false)
+        .read_to_end(&mut uncompressed)
+        .unwrap();
+    assert!(
+        uncompressed == data,
+        "{filter:?}: the blocks were not filtered"
+    );
+    let mut liblzma_uncompressed = Vec::new();
+    liblzma::read::XzDecoder::new(threaded.as_slice())
+        .read_to_end(&mut liblzma_uncompressed)
+        .unwrap();
+    assert!(liblzma_uncompressed == data, "{filter:?}: liblzma");
+
+    // The single-threaded writer, given one block, makes the same bytes.
+    options.set_block_size(None);
+    let mut single = Vec::new();
+    {
+        let mut writer = XzWriter::new(&mut single, options.clone()).unwrap();
+        writer.write_all(&data).unwrap();
+        writer.finish().unwrap();
+    }
+    let mut from_single = Vec::new();
+    XzReaderMt::new(Cursor::new(single.as_slice()), false, 2)
+        .unwrap()
+        .read_to_end(&mut from_single)
+        .unwrap();
+    assert!(from_single == data, "{filter:?}: single-threaded");
+}
+
+#[test]
+fn pre_filters_are_applied_in_every_block() {
+    round_trip_with_pre_filter(lzma_rust2::FilterType::BcjX86, 0, EXECUTABLE);
+    round_trip_with_pre_filter(lzma_rust2::FilterType::BcjArm64, 0, EXECUTABLE);
+    round_trip_with_pre_filter(lzma_rust2::FilterType::Delta, 4, PG100);
+}

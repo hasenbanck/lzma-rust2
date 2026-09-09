@@ -13,7 +13,7 @@ use crate::{
 };
 
 #[allow(clippy::large_enum_variant)]
-enum FilterWriter<W: Write> {
+pub(super) enum FilterWriter<W: Write> {
     Counting(CountingWriter<W>),
     Lzma2(Lzma2Writer<Box<FilterWriter<W>>>),
     Delta(DeltaWriter<Box<FilterWriter<W>>>),
@@ -44,7 +44,7 @@ impl<W: Write> Write for FilterWriter<W> {
 }
 
 impl<W: Write> FilterWriter<W> {
-    fn create_filter_chain(
+    pub(super) fn create_filter_chain(
         inner: CountingWriter<W>,
         filters: &[FilterConfig],
         lzma_options: &LzmaOptions,
@@ -162,7 +162,7 @@ impl<W: Write> FilterWriter<W> {
         }
     }
 
-    fn finish(self) -> Result<CountingWriter<W>> {
+    pub(super) fn finish(self) -> Result<CountingWriter<W>> {
         match self {
             FilterWriter::Counting(writer) => Ok(writer),
             FilterWriter::Lzma2(writer) => {
