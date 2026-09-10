@@ -104,6 +104,28 @@ impl<R> Lzma2Reader<R> {
 }
 
 impl<R: Read> Lzma2Reader<R> {
+    /// Create a new LZMA2 reader with a memory usage limit.
+    /// - `inner` - the reader to read compressed data from.
+    /// - `dict_size` - the dictionary size in bytes.
+    /// - `mem_limit_kb` - memory usage limit in kibibytes (KiB). `u32::MAX` means no limit.
+    /// - `preset_dict` - preset dictionary or None to use no preset dictionary.
+    ///
+    /// Returns an out of memory error when the dictionary would need more than the limit,
+    /// before any of it is allocated.
+    pub fn new_mem_limit(
+        inner: R,
+        dict_size: u32,
+        mem_limit_kb: u32,
+        preset_dict: Option<&[u8]>,
+    ) -> crate::Result<Self> {
+        if mem_limit_kb < get_memory_usage(dict_size) {
+            return Err(error_out_of_memory(
+                "needed memory too big for mem_limit_kb",
+            ));
+        }
+        Ok(Self::new(inner, dict_size, preset_dict))
+    }
+
     /// Create a new LZMA2 reader.
     /// `inner` is the reader to read compressed data from.
     /// `dict_size` is the dictionary size in bytes.

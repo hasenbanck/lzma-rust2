@@ -180,3 +180,30 @@ fn round_trip_pg6800_8() {
 fn round_trip_pg6800_9() {
     test_round_trip(PG6800, 9);
 }
+
+#[test]
+fn memory_limit_refuses_a_dictionary_it_cannot_hold() {
+    let data = b"a small stream with a dictionary the limit cannot hold";
+    let dict_size = 8 << 20;
+    let mut compressed = Vec::new();
+    {
+        let mut option = Lzma2Options::with_preset(6);
+        option.lzma_options.dict_size = dict_size;
+        let mut writer = Lzma2Writer::new(&mut compressed, option);
+        writer.write_all(data).unwrap();
+        writer.finish().unwrap();
+    }
+
+    // An 8 MiB dictionary is more than a 1 MiB limit allows.
+    let error = Lzma2Reader::new_mem_limit(compressed.as_slice(), dict_size, 1024, None)
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+
+    // A limit the dictionary fits reads the stream as before.
+    let mut uncompressed = Vec::new();
+    let mut reader =
+        Lzma2Reader::new_mem_limit(compressed.as_slice(), dict_size, 16 * 1024, None).unwrap();
+    reader.read_to_end(&mut uncompressed).unwrap();
+    assert_eq!(uncompressed, data);
+}
