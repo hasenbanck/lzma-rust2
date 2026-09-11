@@ -420,6 +420,9 @@ impl BlockHeader {
                 "XZ block's last filter must be a LZMA2 filter",
             ));
         }
+        if filters[..num_filters - 1].contains(&Some(FilterType::Lzma2)) {
+            return Err(error_invalid_data("LZMA2 must be the last XZ block filter"));
+        }
 
         // Header must be padded so that the total header size matches the declared size.
         // We need to pad until: 1 (size byte) + offset + 4 (CRC32) == header_size
@@ -617,6 +620,9 @@ impl BlockHeader {
             return Err(error_invalid_data(
                 "XZ block's last filter must be a LZMA2 filter",
             ));
+        }
+        if filters[..num_filters - 1].contains(&Some(FilterType::Lzma2)) {
+            return Err(error_invalid_data("LZMA2 must be the last XZ block filter"));
         }
 
         Ok((filters, properties, header_size))

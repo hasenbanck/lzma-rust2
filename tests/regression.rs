@@ -114,6 +114,175 @@ fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
+mod allocation_tracking {
+    use std::{
+        alloc::{GlobalAlloc, Layout, System},
+        cell::Cell,
+    };
+
+    struct Allocator;
+
+    #[global_allocator]
+    static ALLOCATOR: Allocator = Allocator;
+
+    thread_local! {
+        static USAGE: Cell<Option<(usize, usize)>> = const { Cell::new(None) };
+    }
+
+    fn update(added: usize, removed: usize) {
+        let _ = USAGE.try_with(|usage| {
+            if let Some((current, peak)) = usage.get() {
+                let current = current + added - removed;
+                usage.set(Some((current, peak.max(current))));
+            }
+        });
+    }
+
+    unsafe impl GlobalAlloc for Allocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let ptr = unsafe { System.alloc(layout) };
+            if !ptr.is_null() {
+                update(layout.size(), 0);
+            }
+            ptr
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            let ptr = unsafe { System.alloc_zeroed(layout) };
+            if !ptr.is_null() {
+                update(layout.size(), 0);
+            }
+            ptr
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            update(0, layout.size());
+            unsafe { System.dealloc(ptr, layout) };
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            let ptr = unsafe { System.realloc(ptr, layout, size) };
+            if !ptr.is_null() {
+                update(size, layout.size());
+            }
+            ptr
+        }
+    }
+
+    // Measures requested live heap memory on this thread. The closure must
+    // allocate and drop its own objects without dropping pre-existing ones.
+    pub fn peak(f: impl FnOnce()) -> usize {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                USAGE.with(|usage| usage.set(None));
+            }
+        }
+
+        USAGE.with(|usage| usage.set(Some((0, 0))));
+        let _reset = Reset;
+        f();
+        USAGE.with(|usage| usage.get().unwrap().1)
+    }
+}
+
+#[test]
+fn xz_rejects_multiple_lzma2_filters() {
+    let mut input = b"\xfd7zXZ\0\0\0".to_vec();
+    input.extend_from_slice(&crc32(&[0, 0]).to_le_bytes());
+
+    // Four LZMA2 filters, each declaring a 1 MiB dictionary.
+    let mut header = vec![4, 3];
+    for _ in 0..4 {
+        header.extend_from_slice(&[0x21, 1, 16]);
+    }
+    header.extend_from_slice(&[0, 0]);
+    header.extend_from_slice(&crc32(&header).to_le_bytes());
+    input.extend_from_slice(&header);
+
+    let mut payload = vec![b'a'];
+    for _ in 0..4 {
+        let mut chunk = vec![1];
+        chunk.extend_from_slice(&((payload.len() - 1) as u16).to_be_bytes());
+        chunk.extend_from_slice(&payload);
+        chunk.push(0);
+        payload = chunk;
+    }
+    input.extend_from_slice(&payload);
+
+    let mut reader = XzReader::new(input.as_slice(), false);
+    let error = reader.read(&mut [0]).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(reader.into_inner(), payload);
+
+    let mut reader = XzReader::new_mem_limit(input.as_slice(), false, 1128);
+    let error = reader.read(&mut [0]).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(reader.into_inner(), payload);
+
+    let mut stream = lzma_rust2::XzStream::new_mem_limit(false, 1128);
+    let error = stream
+        .process(&input, &mut [0], lzma_rust2::Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn lzma2_preset_uses_one_dictionary_buffer() {
+    let dict_size = 1 << 20;
+    for preset_size in [0, 1, dict_size / 2, dict_size, dict_size + 1] {
+        let preset: Vec<u8> = (0..preset_size).map(|i| i as u8).collect();
+        let mut options = Lzma2Options::with_preset(0);
+        options.lzma_options.dict_size = dict_size as u32;
+        options.lzma_options.preset_dict = (!preset.is_empty()).then(|| preset.clone());
+        let mut data = [42; 8192];
+        if !preset.is_empty() {
+            let suffix_len = preset.len().min(data.len());
+            for (i, byte) in data.iter_mut().enumerate() {
+                *byte = preset[preset.len() - suffix_len + i % suffix_len];
+            }
+        }
+        let mut writer = Lzma2Writer::new(Vec::new(), options);
+        writer.write_all(&data).unwrap();
+        let compressed = writer.finish().unwrap();
+
+        for limited in [false, true] {
+            let peak = allocation_tracking::peak(|| {
+                let mut reader = if limited {
+                    Lzma2Reader::new_mem_limit(
+                        compressed.as_slice(),
+                        dict_size as u32,
+                        1128,
+                        Some(&preset),
+                    )
+                    .unwrap()
+                } else {
+                    Lzma2Reader::new(compressed.as_slice(), dict_size as u32, Some(&preset))
+                };
+                let mut output = [0; 8192];
+                reader.read_exact(&mut output).unwrap();
+                assert_eq!(output, data);
+                assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+            });
+            // One dictionary plus the range decoder and probability model budget.
+            assert!(
+                peak <= dict_size + 104 * 1024,
+                "preset {preset_size}: peak {peak}"
+            );
+        }
+
+        let error = Lzma2Reader::new_mem_limit(
+            compressed.as_slice(),
+            dict_size as u32,
+            1127,
+            Some(&preset),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+    }
+}
+
 fn encode_multibyte(mut value: u64) -> Vec<u8> {
     let mut out = Vec::new();
     while value >= 0x80 {
@@ -347,4 +516,63 @@ fn issue_107_hc4() {
 #[ignore = "pushes ~2 GiB through the encoder; run with --release"]
 fn issue_107_bt4() {
     regression_normalization(6);
+}
+
+#[test]
+fn lzma2_memory_limit_includes_decoder_overhead() {
+    // An uncompressed three-byte chunk followed by the end marker.
+    const RAW: &[u8] = b"\x01\x00\x02raw\x00";
+
+    for (dict_size, required_kib) in [(4096, 108), (65536, 168)] {
+        let mut input = std::io::Cursor::new(RAW);
+        let error = Lzma2Reader::new_mem_limit(&mut input, dict_size, required_kib - 1, None)
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+        assert_eq!(input.position(), 0);
+
+        let mut reader =
+            Lzma2Reader::new_mem_limit(&mut input, dict_size, required_kib, None).unwrap();
+        assert_eq!(reader.inner().position(), 0);
+        let mut output = [0; 3];
+        reader.read_exact(&mut output).unwrap();
+        assert_eq!(&output, b"raw");
+        assert_eq!(reader.read(&mut output).unwrap(), 0);
+        assert_eq!(reader.into_inner().position(), RAW.len() as u64);
+    }
+}
+
+#[test]
+fn lzma2_memory_limit_rejects_maximum_dictionary_without_reading_input() {
+    let mut input = std::io::Cursor::new([0]);
+    let error = Lzma2Reader::new_mem_limit(&mut input, u32::MAX, 1128, None)
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+    assert_eq!(input.position(), 0);
+}
+
+#[test]
+fn xz_memory_limit_boundary_preserves_unread_block_data() {
+    // One uncompressed LZMA2 chunk with a 4 KiB dictionary and no data checksum.
+    const XZ: &[u8] = &[
+        0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00, 0x00, 0x00, 0xFF, 0x12, 0xD9, 0x41, 0x02, 0x00, 0x21,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x37, 0x27, 0x97, 0xD6, 0x01, 0x00, 0x05, 0x6C, 0x69, 0x6D,
+        0x69, 0x74, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x01, 0x16, 0x06, 0xC9, 0xA5, 0x7D, 0xD5, 0x06,
+        0x72, 0x9E, 0x7A, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x59, 0x5A,
+    ];
+
+    // The dictionary and decoder overhead require 108 KiB.
+    let mut output = [0xA5; 6];
+    let mut reader = XzReader::new_mem_limit(XZ, false, 107);
+    let error = reader.read(&mut output).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+    assert_eq!(output, [0xA5; 6]);
+    assert_eq!(reader.into_inner(), &XZ[24..]);
+
+    let mut reader = XzReader::new_mem_limit(XZ, false, 108);
+    reader.read_exact(&mut output).unwrap();
+    assert_eq!(&output, b"limit\n");
+    assert_eq!(reader.read(&mut output).unwrap(), 0);
+    assert!(reader.into_inner().is_empty());
 }
