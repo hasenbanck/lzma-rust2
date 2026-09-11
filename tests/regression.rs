@@ -1,8 +1,12 @@
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::{
+    io::{Read, Seek, SeekFrom, Write},
+    num::NonZeroU64,
+};
 
 use lzma_rust2::{
     LzipOptions, LzipReaderMt, LzipWriter, Lzma2Options, Lzma2Reader, Lzma2ReaderMt, Lzma2Writer,
-    LzmaOptions, LzmaReader, LzmaWriter, XzReader, XzReaderMt,
+    Lzma2WriterMt, LzmaOptions, LzmaReader, LzmaWriter, XzOptions, XzReader, XzReaderMt,
+    XzWriterMt,
 };
 
 fn regression_lzma2_reader_mt(input_data: &[u8], expected_output: &[u8], dict_size: u32) {
@@ -575,4 +579,51 @@ fn xz_memory_limit_boundary_preserves_unread_block_data() {
     assert_eq!(&output, b"limit\n");
     assert_eq!(reader.read(&mut output).unwrap(), 0);
     assert!(reader.into_inner().is_empty());
+}
+
+/// A worker that gives up has to be reported by the next flush, not left for
+/// the caller to wait on. A `pb` above four is not allowed, so the worker fails
+/// as soon as it picks the work up, and flush has to hand that error back.
+///
+/// The writing happens on its own thread so that a flush which never returns
+/// shows up here as a timeout instead of stopping the whole test run.
+#[test]
+fn flush_reports_worker_exit() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut options = Lzma2Options::with_preset(0);
+        options.lzma_options.pb = 5;
+        options.set_chunk_size(NonZeroU64::new(256 * 1024));
+        let mut writer = Lzma2WriterMt::new(Vec::new(), options, 1).unwrap();
+        let data: Vec<u8> = (0..4096).map(|i| ((i * 37 + i / 7) % 256) as u8).collect();
+        writer.write_all(&data).unwrap();
+        tx.send(writer.flush().is_err()).unwrap();
+    });
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("flush hung after the worker exited")
+    );
+}
+
+/// The same, but flushing twice. Once a worker is gone the second flush has to
+/// report it too, rather than wait for work that is never coming.
+#[test]
+fn repeated_flush_reports_worker_failure() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut options = XzOptions::with_preset(0);
+        options.lzma_options.pb = 5;
+        options.set_block_size(NonZeroU64::new(256 * 1024));
+        let mut writer = XzWriterMt::new(Vec::new(), options, 1).unwrap();
+        let data: Vec<u8> = (0..4096).map(|i| ((i * 37 + i / 7) % 256) as u8).collect();
+        writer.write_all(&data).unwrap();
+        tx.send(writer.flush().is_err()).unwrap();
+        tx.send(writer.flush().is_err()).unwrap();
+    });
+    for attempt in 1..=2 {
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap_or_else(|_| panic!("flush attempt {attempt} hung"))
+        );
+    }
 }

@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Lzma2Stream` and `XzStream` now decode the input they still hold back once the caller says the input ends, so corrupt
   data in a chunk is reported as such instead of as a stream that was cut short.
 - Reject a block header that sets reserved flag bits, instead of decoding the block as if they meant nothing.
+- `flush()` of the multi-threaded XZ, LZMA2 and LZIP writers now waits for the pending work, so the flushed data
+  reaches the inner writer.
 - Reduce stack usage of `XzWriter` by boxing `FilterWriter` enum variants.
 
 ## 0.20.1 - 2026-08-30

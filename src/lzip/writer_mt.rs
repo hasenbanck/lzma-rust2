@@ -237,7 +237,7 @@ impl<W: Write> Write for LzipWriterMt<W> {
         }
 
         // Wait for all pending work to complete and write the results.
-        while let Some(compressed_data) = self.work_pool.try_get_result()? {
+        while let Some(compressed_data) = self.work_pool.get_dispatched_result()? {
             self.inner.write_all(&compressed_data)?;
         }
 

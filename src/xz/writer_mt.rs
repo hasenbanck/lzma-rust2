@@ -357,7 +357,7 @@ impl<W: Write> Write for XzWriterMt<W> {
         }
 
         // Wait for all pending work to complete and write the results.
-        while let Some(result) = self.work_pool.try_get_result()? {
+        while let Some(result) = self.work_pool.get_dispatched_result()? {
             self.write_compressed_block(
                 result.compressed_data,
                 result.checksum,
