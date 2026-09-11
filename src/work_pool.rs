@@ -180,6 +180,67 @@ where
         }
     }
 
+    /// Get the next result of the already dispatched work, blocking until available.
+    ///
+    /// Returns `None` once everything that was dispatched has been returned. Unlike
+    /// `get_result` this never asks for new work and never ends the pool, so more
+    /// work can be dispatched afterwards.
+    pub(crate) fn get_dispatched_result(&mut self) -> io::Result<Option<R>> {
+        loop {
+            if self.state == WorkPoolState::Error {
+                return Err(self
+                    .error_store
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .unwrap_or_else(|| io::Error::other("work pool failed with unknown error")));
+            }
+
+            // Always check for already-received results first.
+            if let Some(result) = self.out_of_order_results.remove(&self.next_index_to_return) {
+                self.next_index_to_return += 1;
+                return Ok(Some(result));
+            }
+
+            // Check for a globally stored error.
+            if let Some(err) = self.error_store.lock().unwrap().take() {
+                self.state = WorkPoolState::Error;
+                return Err(err);
+            }
+
+            // Everything that was handed out has come back.
+            if self.next_index_to_return >= self.next_index_to_dispatch {
+                return Ok(None);
+            }
+
+            match self.result_rx.recv_timeout(ERROR_CHECK_INTERVAL) {
+                Ok((seq, result)) => {
+                    if seq == self.next_index_to_return {
+                        self.next_index_to_return += 1;
+                        return Ok(Some(result));
+                    } else {
+                        self.out_of_order_results.insert(seq, result);
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    // The workers are gone while results are still outstanding.
+                    if let Some(err) = self.error_store.lock().unwrap().take() {
+                        self.state = WorkPoolState::Error;
+                        return Err(err);
+                    }
+
+                    let error = io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "worker threads have shut down with work outstanding",
+                    );
+                    self.state = WorkPoolState::Error;
+                    return Err(error);
+                }
+            }
+        }
+    }
+
     /// Get the next result in sequence order, blocking until available.
     pub(crate) fn get_result<F>(&mut self, mut next_work_function: F) -> io::Result<Option<R>>
     where
@@ -343,13 +404,24 @@ where
         let worker_fn = self.worker_fn;
 
         let handle = thread::spawn(move || {
-            worker_fn(
-                worker_handle,
-                result_tx,
-                shutdown_flag,
-                error_store,
-                active_workers,
-            );
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                worker_fn(
+                    worker_handle,
+                    result_tx,
+                    Arc::clone(&shutdown_flag),
+                    Arc::clone(&error_store),
+                    active_workers,
+                );
+            }));
+
+            // A panicking worker never sends a result, so report it like any other error.
+            if result.is_err() {
+                set_error(
+                    io::Error::other("worker thread panicked"),
+                    &error_store,
+                    &shutdown_flag,
+                );
+            }
         });
 
         self.worker_handles.push(handle);

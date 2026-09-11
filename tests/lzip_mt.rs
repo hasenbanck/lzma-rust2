@@ -1,13 +1,73 @@
 use std::{
     io::{Cursor, Read, Write},
     num::{NonZero, NonZeroU64},
+    sync::{Arc, Mutex},
 };
 
-use lzma_rust2::{LzipOptions, LzipReaderMt, LzipWriterMt};
+use lzma_rust2::{LzipOptions, LzipReader, LzipReaderMt, LzipWriterMt};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
 static PG6800: &str = "tests/data/pg6800.txt";
+
+/// A sink that can be read while the writer still holds it.
+#[derive(Clone, Default)]
+struct SharedSink(Arc<Mutex<Vec<u8>>>);
+
+impl Write for SharedSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn flush_writes_out_every_member() {
+    let data = std::fs::read(PG100).unwrap();
+    let member_size = 128 * 1024;
+
+    for num_workers in [1, 4] {
+        let mut options = LzipOptions::with_preset(6);
+        options.lzma_options.dict_size = member_size as u32;
+        options.set_member_size(NonZeroU64::new(member_size));
+
+        let sink = SharedSink::default();
+        let mut writer = LzipWriterMt::new(sink.clone(), options, num_workers).unwrap();
+
+        let mut written = 0;
+
+        for chunk in data[..900 * 1024].chunks(300 * 1024) {
+            writer.write_all(chunk).unwrap();
+            writer.flush().unwrap();
+            written += chunk.len();
+
+            // Every member that was flushed is complete, so this is a valid file.
+            let compressed = sink.0.lock().unwrap().clone();
+            let mut uncompressed = Vec::new();
+            LzipReader::new(Cursor::new(compressed.as_slice()))
+                .read_to_end(&mut uncompressed)
+                .unwrap();
+
+            // We don't use assert_eq since the debug output would be too big.
+            assert!(uncompressed == data[..written]);
+        }
+
+        // Writing has to continue to work after the flushes.
+        writer.finish().unwrap();
+
+        let compressed = sink.0.lock().unwrap().clone();
+        let mut uncompressed = Vec::new();
+        LzipReader::new(Cursor::new(compressed.as_slice()))
+            .read_to_end(&mut uncompressed)
+            .unwrap();
+
+        assert!(uncompressed == data[..written]);
+    }
+}
 
 fn test_round_trip(path: &str, level: u32) {
     let data = std::fs::read(path).unwrap();
