@@ -3,9 +3,12 @@
 // shipped with 7-Zip. The C preprocessor has been run over the two files so
 // that the assembly stands alone (`cc -E -P -x assembler-with-cpp`), and the
 // entry symbol is renamed so that a program linking 7-Zip as well can hold
-// both. Nothing else is changed: the register plan, the struct offsets and
-// the probability layout are those of 7-Zip's LzmaDec.c, mirrored in
-// `DecState` and the constants of `decoder_fast.rs`.
+// both. One thing is changed: the SDK copies a match a byte at a time, and
+// here a match whose source lies a word or more from its destination is
+// copied sixteen or eight bytes at a time, or in one masked word when it is
+// shorter than a word (COPY MATCH FAST, below). The register plan, the
+// struct offsets and the probability layout are those of 7-Zip's LzmaDec.c,
+// mirrored in `DecState` and the constants of `decoder_fast.rs`.
 //
 // int lzma_rust2_lzma_decode_real(DecState *p, size_t limit, const u8 *buf_limit)
 //   In: the range coder normalised, p->dic_pos < limit, and at least 20 bytes
@@ -774,7 +777,89 @@ Lcopy_match:
 1:
  # ---------- COPY MATCH FAST ----------
     # x7 : src_pos
-        p2_add x7, x24
+    # The SDK copies a byte at a time. A match whose source lies at least
+    # sixteen (or eight) bytes from its destination in the window, either
+    # way round, is copied in words of that size instead, the last word
+    # overlapping the one before it so that exactly the match's bytes are
+    # written. A source that far behind holds only bytes written before the
+    # word that reads it, and one that far ahead (a distance near the
+    # window's size, wrapped) is never overwritten before it is read. The
+    # source is known not to wrap here.
+        add x7, x7, x24
+        sub x3, x14, x2
+        cmp x2, 16
+        jb Lcopy_lt16
+        sub x9, x7, x3
+        cmp x9, 16
+        b.ge Lcopy_v16
+        cmn x9, 16
+        b.gt Lcopy_lt16
+Lcopy_v16:
+        sub x4, x2, 16
+        add x9, x7, x4
+        add x10, x3, x4
+2:
+        ldr q0, [x7], 16
+        subs x4, x4, 16
+        str q0, [x3], 16
+        jae 2b
+        ldr q0, [x9]
+        str q0, [x10]
+        jmp Lcopy_words_end
+Lcopy_lt16:
+        cmp x2, 8
+        jb Lcopy_short
+        sub x9, x7, x3
+        cmp x9, 8
+        b.ge Lcopy_v8
+        cmn x9, 8
+        b.gt Lcopy_bytes
+Lcopy_v8:
+        sub x4, x2, 8
+        add x9, x7, x4
+        add x10, x3, x4
+2:
+        ldr x8, [x7], 8
+        subs x4, x4, 8
+        str x8, [x3], 8
+        jae 2b
+        ldr x8, [x9]
+        str x8, [x10]
+Lcopy_words_end:
+        dec x14
+        ldrb w3, [x14]
+        IsMatchBranch_Pre
+        jmp Lcopy_end
+ # ---------- COPY SHORT MATCH ----------
+    # A match shorter than a word, with the same distance condition and both
+    # words inside the window: one word read from the source, one from the
+    # destination, and the destination's bytes past the match kept, so that
+    # the copy is a few instructions with no loop to mispredict.
+Lcopy_short:
+        sub x9, x7, x3
+        cmp x9, 8
+        b.ge 3f
+        cmn x9, 8
+        b.gt Lcopy_bytes
+3:
+        add x4, x24, x17
+        add x8, x7, 8
+        cmp x8, x4
+        b.hi Lcopy_bytes
+        add x8, x3, 8
+        cmp x8, x4
+        b.hi Lcopy_bytes
+        ldr x8, [x7]
+        ldr x10, [x3]
+        lsl x4, x2, 3
+        mov x9, -1
+        lsl x9, x9, x4
+        and x10, x10, x9
+        bic x8, x8, x9
+        orr x8, x8, x10
+        str x8, [x3]
+        jmp Lcopy_words_end
+Lcopy_bytes:
         ldrb w3, [x7]
         p2_add x7, x2
         p1_neg x2
