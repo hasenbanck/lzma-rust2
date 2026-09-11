@@ -78,6 +78,50 @@ impl LzDecoder {
         self.pending_len > 0
     }
 
+    /// The window's buffer, for a decoder that writes into it directly. Only
+    /// valid after `ensure_capacity`.
+    #[cfg(all(feature = "optimization", target_arch = "aarch64"))]
+    pub(crate) fn buf_mut(&mut self) -> &mut [u8] {
+        &mut self.buf
+    }
+
+    /// The window's size in bytes.
+    #[cfg(all(feature = "optimization", target_arch = "aarch64"))]
+    pub(crate) fn buf_size(&self) -> usize {
+        self.buf_size
+    }
+
+    /// How many bytes the window holds: its position before it first wraps,
+    /// its whole size after.
+    #[cfg(all(feature = "optimization", target_arch = "aarch64"))]
+    pub(crate) fn full(&self) -> usize {
+        self.full
+    }
+
+    /// Where the current output must stop.
+    #[cfg(all(feature = "optimization", target_arch = "aarch64"))]
+    pub(crate) fn limit(&self) -> usize {
+        self.limit
+    }
+
+    /// Moves the position to where a decoder writing into the buffer left
+    /// it, and counts what it wrote.
+    #[cfg(all(feature = "optimization", target_arch = "aarch64"))]
+    pub(crate) fn set_pos(&mut self, pos: usize) {
+        self.pos = pos;
+        if self.full < self.pos {
+            self.full = self.pos;
+        }
+    }
+
+    /// The tail of a match the output limit cut, to be copied when there is
+    /// room again.
+    #[cfg(all(feature = "optimization", target_arch = "aarch64"))]
+    pub(crate) fn set_pending(&mut self, len: usize, dist: usize) {
+        self.pending_len = len;
+        self.pending_dist = dist;
+    }
+
     pub(crate) fn get_pos(&self) -> usize {
         self.pos
     }

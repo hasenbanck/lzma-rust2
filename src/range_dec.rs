@@ -39,6 +39,14 @@ impl<R> RangeDecoder<R> {
         }
     }
 
+    /// Takes the range and code back from a decoder that ran over the bytes
+    /// itself.
+    #[cfg(all(feature = "optimization", target_arch = "aarch64"))]
+    pub(crate) fn set_state(&mut self, state: RangeCoderState) {
+        self.range = state.range;
+        self.code = state.code;
+    }
+
     pub(crate) fn into_inner(self) -> R {
         self.inner
     }
@@ -548,6 +556,11 @@ impl RangeReader for SliceRangeReader<'_> {
     fn buf(&self) -> &[u8] {
         self.buf
     }
+
+    #[inline(always)]
+    fn symbol_limit(&self) -> usize {
+        self.symbol_limit
+    }
 }
 
 pub(crate) trait RangeReader {
@@ -593,6 +606,12 @@ pub(crate) trait RangeReader {
 
     #[inline(always)]
     fn buf(&self) -> &[u8] {
+        unimplemented!("not a buffer reader")
+    }
+
+    /// The position a symbol may not start at or past, for a buffer reader.
+    #[inline(always)]
+    fn symbol_limit(&self) -> usize {
         unimplemented!("not a buffer reader")
     }
 }
@@ -677,6 +696,11 @@ impl RangeReader for RangeDecoderBuffer {
     #[inline(always)]
     fn buf(&self) -> &[u8] {
         self.buf.as_slice()
+    }
+
+    #[inline(always)]
+    fn symbol_limit(&self) -> usize {
+        self.buf.len()
     }
 }
 
@@ -858,5 +882,11 @@ impl<R: Read> RangeReader for &mut InputBuffer<R> {
     #[inline(always)]
     fn buf(&self) -> &[u8] {
         &self.buf[..self.len]
+    }
+
+    /// A symbol may start only while a whole one is sure to be in the buffer.
+    #[inline(always)]
+    fn symbol_limit(&self) -> usize {
+        self.len.saturating_sub(IN_REQUIRED - 1)
     }
 }

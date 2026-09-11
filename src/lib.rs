@@ -55,7 +55,12 @@
 
 extern crate alloc;
 
+#[cfg(not(all(feature = "optimization", target_arch = "aarch64")))]
 mod decoder;
+#[cfg(all(feature = "optimization", target_arch = "aarch64"))]
+mod decoder_fast;
+#[cfg(all(feature = "optimization", target_arch = "aarch64"))]
+use decoder_fast as decoder;
 mod lz;
 #[cfg(feature = "lzip")]
 mod lzip;
