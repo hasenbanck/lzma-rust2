@@ -240,3 +240,25 @@ fn round_trip_pg6800_8() {
 fn round_trip_pg6800_9() {
     test_round_trip(PG6800, 9);
 }
+
+#[test]
+fn memory_limit_refuses_a_dictionary_it_cannot_hold() {
+    let data = b"a small stream with a dictionary the limit cannot hold";
+    let mut compressed = Vec::new();
+    {
+        let mut writer = XzWriter::new(&mut compressed, XzOptions::with_preset(6)).unwrap();
+        writer.write_all(data).unwrap();
+        writer.finish().unwrap();
+    }
+
+    // Preset 6 declares an 8 MiB dictionary, exceeding the 1 MiB limit.
+    let mut reader = XzReader::new_mem_limit(compressed.as_slice(), false, 1024);
+    let error = reader.read_to_end(&mut Vec::new()).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+
+    // Decoding succeeds with a 16 MiB limit.
+    let mut uncompressed = Vec::new();
+    let mut reader = XzReader::new_mem_limit(compressed.as_slice(), false, 16 * 1024);
+    reader.read_to_end(&mut uncompressed).unwrap();
+    assert_eq!(uncompressed, data);
+}

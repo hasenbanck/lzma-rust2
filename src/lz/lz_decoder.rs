@@ -12,7 +12,6 @@ pub(crate) struct LzDecoder {
     limit: usize,
     pending_len: usize,
     pending_dist: usize,
-    pending_preset: Option<Vec<u8>>,
     allocated: bool,
 }
 
@@ -21,39 +20,35 @@ impl LzDecoder {
         let mut pos = 0;
         let mut full = 0;
         let mut start = 0;
-        let mut pending_preset = None;
+        let mut buf = Vec::new();
         if let Some(preset) = preset_dict {
             pos = preset.len().min(dict_size);
             full = pos;
             start = pos;
             let ps = preset.len() - pos;
-            pending_preset = Some(preset[ps..].to_vec());
+            buf = preset[ps..].to_vec();
         }
         Self {
-            buf: Vec::new(),
+            buf,
             buf_size: dict_size,
             pos,
             full,
             start,
-            pending_preset,
             allocated: false,
             ..Default::default()
         }
     }
 
-    /// Allocates the dictionary window on first use, fallibly, so a malicious
-    /// `dict_size` returns an error instead of aborting the process.
+    /// Grows the preset buffer to the dictionary size on first use.
+    /// Returns an out of memory error if reservation fails.
     pub(crate) fn ensure_capacity(&mut self) -> crate::Result<()> {
         if self.allocated {
             return Ok(());
         }
         self.buf
-            .try_reserve_exact(self.buf_size)
+            .try_reserve_exact(self.buf_size - self.buf.len())
             .map_err(|_| error_out_of_memory("dictionary allocation too large"))?;
         self.buf.resize(self.buf_size, 0);
-        if let Some(preset) = self.pending_preset.take() {
-            self.buf[..preset.len()].copy_from_slice(&preset);
-        }
         self.allocated = true;
         Ok(())
     }
