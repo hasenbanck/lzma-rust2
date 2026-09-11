@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Add `Lzma2Reader::new_mem_limit` and `XzReader::new_mem_limit`.
+
 ### Changed
 
 - The reserved bits of the XZ stream header flags are now all checked, and come back as `Unsupported` instead of
@@ -15,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reject invalid XZ filter chains.
+- Fix excessive memory usage when decoding with preset dictionaries.
 - `Lzma2ReaderMt` and `XzReaderMt` no longer degrade to single-threaded decoding.
 - `Lzma2Stream` and `XzStream` now decode the input they still hold back once the caller says the input ends, so corrupt
   data in a chunk is reported as such instead of as a stream that was cut short.

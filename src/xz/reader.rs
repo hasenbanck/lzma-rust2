@@ -9,7 +9,7 @@ use crate::{
     crc::Crc32,
     error_eof, error_invalid_data, error_out_of_memory, error_unsupported,
     filter::{FilterConfig, FilterType, StreamFilter, bcj::BcjReader, delta::DeltaReader},
-    lzma2_reader::{Lzma2Stream, get_stream_memory_usage},
+    lzma2_reader::{Lzma2Stream, get_memory_usage, get_stream_memory_usage},
     stream::{Action, Status, StreamResult},
 };
 
@@ -164,6 +164,18 @@ impl<R: Read> FilterReader<R> {
     }
 }
 
+/// Checks the block's LZMA2 dictionary and estimated decoder overhead.
+fn check_memory_limit(block_header: &BlockHeader, mem_limit_kb: u32) -> Result<()> {
+    for (filter, property) in block_header.filters.iter().zip(&block_header.properties) {
+        if *filter == Some(FilterType::Lzma2) && mem_limit_kb < get_memory_usage(*property) {
+            return Err(error_out_of_memory(
+                "needed memory too big for mem_limit_kb",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// A single-threaded XZ decompressor.
 pub struct XzReader<R: Read> {
     reader: FilterReader<R>,
@@ -172,11 +184,22 @@ pub struct XzReader<R: Read> {
     finished: bool,
     allow_multiple_streams: bool,
     blocks_processed: u64,
+    mem_limit_kb: u32,
 }
 
 impl<R: Read> XzReader<R> {
     /// Create a new [`XzReader`].
     pub fn new(inner: R, allow_multiple_streams: bool) -> Self {
+        Self::new_mem_limit(inner, allow_multiple_streams, u32::MAX)
+    }
+
+    /// Creates an XZ reader with a per-block LZMA2 decoder memory limit.
+    ///
+    /// `mem_limit_kb` is in KiB. `u32::MAX` disables the limit.
+    ///
+    /// Reading a block returns an out of memory error before dictionary allocation if its
+    /// dictionary and estimated LZMA2 decoder overhead exceed the limit.
+    pub fn new_mem_limit(inner: R, allow_multiple_streams: bool, mem_limit_kb: u32) -> Self {
         let reader = FilterReader::Counting(CountingReader::new(inner));
 
         Self {
@@ -186,6 +209,7 @@ impl<R: Read> XzReader<R> {
             finished: false,
             allow_multiple_streams,
             blocks_processed: 0,
+            mem_limit_kb,
         }
     }
 
@@ -217,6 +241,8 @@ impl<R: Read> XzReader<R> {
     fn prepare_next_block(&mut self) -> Result<bool> {
         match BlockHeader::parse(&mut self.reader)? {
             Some(block_header) => {
+                // Check before replacing the reader to preserve access to the input on error.
+                check_memory_limit(&block_header, self.mem_limit_kb)?;
                 let base_reader: FilterReader<R> =
                     core::mem::replace(&mut self.reader, FilterReader::Dummy);
 
