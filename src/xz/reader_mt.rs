@@ -27,8 +27,9 @@ struct XzBlock {
 }
 
 /// A work unit for a worker thread.
-/// Contains the sequence number and block data.
-type WorkUnit = (u64, Vec<u8>);
+/// Contains the sequence number, the block data and the uncompressed size the index
+/// records for the block.
+type WorkUnit = (u64, Vec<u8>, u64);
 
 /// A result unit from a worker thread.
 /// Contains the sequence number and the decompressed data.
@@ -208,6 +209,7 @@ impl<R: Read + Seek> XzReaderMt<R> {
         }
 
         let block = &self.blocks[block_index];
+        let uncompressed_size = block.uncompressed_size;
         let mut reader = self.inner.take().expect("inner reader not set");
 
         reader.seek(SeekFrom::Start(block.start_pos))?;
@@ -228,10 +230,11 @@ impl<R: Read + Seek> XzReaderMt<R> {
 
         self.inner = Some(reader);
 
-        if !self
-            .work_queue
-            .push((self.next_sequence_to_dispatch, block_data))
-        {
+        if !self.work_queue.push((
+            self.next_sequence_to_dispatch,
+            block_data,
+            uncompressed_size,
+        )) {
             // Queue is closed, this indicates shutdown.
             self.state = State::Error;
             set_error(
@@ -432,7 +435,7 @@ fn worker_thread_logic(
     active_workers: Arc<AtomicU32>,
 ) {
     while !shutdown_flag.load(Ordering::Acquire) {
-        let (seq, work_unit_data) = match worker_handle.steal() {
+        let (seq, work_unit_data, uncompressed_size) = match worker_handle.steal() {
             Some(work) => {
                 active_workers.fetch_add(1, Ordering::Release);
                 work
@@ -443,7 +446,7 @@ fn worker_thread_logic(
             }
         };
 
-        let result = decompress_xz_block(work_unit_data, check_type);
+        let result = decompress_xz_block(work_unit_data, check_type, uncompressed_size);
 
         match result {
             Ok(decompressed_data) => {
@@ -464,7 +467,15 @@ fn worker_thread_logic(
 }
 
 /// Decompresses a single XZ block by parsing the header and applying filters directly.
-fn decompress_xz_block(block_data: Vec<u8>, check_type: CheckType) -> io::Result<Vec<u8>> {
+///
+/// The block must decode to exactly `uncompressed_size`, the size the index records for
+/// it. The decode stops one byte past that size, so a block whose data expands beyond
+/// what the index says fails instead of growing the buffer without bound.
+fn decompress_xz_block(
+    block_data: Vec<u8>,
+    check_type: CheckType,
+    uncompressed_size: u64,
+) -> io::Result<Vec<u8>> {
     let (filters, properties, header_size) = BlockHeader::parse_from_slice(&block_data)?;
 
     let checksum_size = check_type.checksum_size() as usize;
@@ -485,10 +496,17 @@ fn decompress_xz_block(block_data: Vec<u8>, check_type: CheckType) -> io::Result
     let mut compressed_data = compressed_data.as_slice();
 
     let base_reader: Box<dyn Read> = Box::new(&mut compressed_data);
-    let mut chain_reader = create_filter_chain(base_reader, &filters, &properties);
+    let chain_reader = create_filter_chain(base_reader, &filters, &properties);
 
     let mut decompressed_data = Vec::new();
-    chain_reader.read_to_end(&mut decompressed_data)?;
+    chain_reader
+        .take(uncompressed_size.saturating_add(1))
+        .read_to_end(&mut decompressed_data)?;
+    if decompressed_data.len() as u64 != uncompressed_size {
+        return Err(error_invalid_data(
+            "XZ block decompresses to a size other than the index records",
+        ));
+    }
 
     Ok(decompressed_data)
 }
@@ -536,8 +554,43 @@ mod tests {
     fn decompress_block_shorter_than_checksum_errs() {
         // Minimal valid 8-byte block header (single LZMA2 filter).
         let block = [1u8, 0, 0x21, 0x01, 0, 0, 0, 0];
-        assert!(decompress_xz_block(block.to_vec(), CheckType::Sha256).is_err());
-        assert!(decompress_xz_block(block.to_vec(), CheckType::Crc64).is_err());
+        assert!(decompress_xz_block(block.to_vec(), CheckType::Sha256, 0).is_err());
+        assert!(decompress_xz_block(block.to_vec(), CheckType::Crc64, 0).is_err());
+    }
+
+    /// The bytes of the one block in a single-block stream, and the data it holds.
+    fn one_block() -> (Vec<u8>, Vec<u8>) {
+        use std::io::Write;
+
+        use crate::{XzOptions, XzWriter};
+
+        let data = vec![0x5Au8; 64 * 1024];
+        let mut compressed = Vec::new();
+        {
+            let mut writer = XzWriter::new(&mut compressed, XzOptions::with_preset(1)).unwrap();
+            writer.write_all(&data).unwrap();
+            writer.finish().unwrap();
+        }
+        // The stream header is 12 bytes, and the index starts with a zero byte after
+        // the block's checksum and padding. The footer's backward size finds it.
+        let footer = &compressed[compressed.len() - 12..];
+        let backward_size =
+            (u32::from_le_bytes([footer[4], footer[5], footer[6], footer[7]]) as usize + 1) * 4;
+        let index_start = compressed.len() - 12 - backward_size;
+        (compressed[12..index_start].to_vec(), data)
+    }
+
+    #[test]
+    fn decompress_block_stops_at_the_size_the_index_records() {
+        let (block, data) = one_block();
+        let decoded =
+            decompress_xz_block(block.clone(), CheckType::Crc64, data.len() as u64).unwrap();
+        assert!(decoded == data);
+        // An index that understates the block: the decode stops a byte past the
+        // stated size and reports the mismatch, rather than decoding it all.
+        assert!(decompress_xz_block(block.clone(), CheckType::Crc64, 1024).is_err());
+        // One that overstates it fails the same way.
+        assert!(decompress_xz_block(block, CheckType::Crc64, data.len() as u64 + 1).is_err());
     }
 
     #[test]
