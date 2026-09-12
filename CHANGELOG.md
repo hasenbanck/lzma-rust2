@@ -9,24 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `LzmaReader::into_parts` to recover buffered input together with the inner reader.
+- Add `LzipReader::into_parts` to recover buffered input together with the inner reader.
 - Add `Lzma2Reader::new_mem_limit` and `XzReader::new_mem_limit`.
 
 ### Changed
 
+- `LzmaReader` buffers its input, which makes decoding faster. `into_inner` discards the bytes it read ahead, and
+  `into_parts` hands them back together with the reader.
 - The reserved bits of the XZ stream header flags are now all checked, and come back as `Unsupported` instead of
   `InvalidData`. The format checksums those flags on their own so that a decoder can tell a corrupt file from one it
   does not support, and a set reserved bit fits an `Unsupported` error better.
 
 ### Fixed
 
+- Propagate LZMA input errors instead of decoding with invalid bytes. The reported error keeps the kind, the message and
+  the operating system code of the error the source gave.
+- Keep the inner LZIP reader accessible after a truncated trailer or a member that cannot start. Reading from or
+  unwrapping an `LzipReader` that rejected such a member panicked.
+- `LzipReader` reports a rejected member again on every later read, instead of taking the position it stopped at for the
+  end of the file.
+- `LzipReader` rejects a member header it cannot parse, instead of taking it for the end of the file. Data behind the
+  last member, a header that is cut short and a source error while the reader looks for the next member now all come
+  back as errors, and `into_parts` hands those bytes back.
 - Reject invalid XZ filter chains.
 - Fix excessive memory usage when decoding with preset dictionaries.
 - `Lzma2ReaderMt` and `XzReaderMt` no longer degrade to single-threaded decoding.
 - `Lzma2Stream` and `XzStream` now decode the input they still hold back once the caller says the input ends, so corrupt
   data in a chunk is reported as such instead of as a stream that was cut short.
 - Reject a block header that sets reserved flag bits, instead of decoding the block as if they meant nothing.
-- `flush()` of the multi-threaded XZ, LZMA2 and LZIP writers now waits for the pending work, so the flushed data
-  reaches the inner writer.
+- `flush()` of the multi-threaded XZ, LZMA2 and LZIP writers now waits for the pending work, so the flushed data reaches
+  the inner writer.
 - Reduce stack usage of `XzWriter` by boxing `FilterWriter` enum variants.
 
 ## 0.20.1 - 2026-08-30

@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use crate::{
-    ByteReader, DICT_SIZE_MAX, Read,
+    ByteReader, DICT_SIZE_MAX, Read, StickyError,
     decoder::LzmaDecoder,
     error_eof, error_invalid_data, error_invalid_input, error_out_of_memory, error_unsupported,
     filter::{FilterConfig, StreamFilter},
@@ -42,6 +42,9 @@ fn get_dict_size(dict_size: u32) -> crate::Result<u32> {
 
 /// A single-threaded LZMA decompressor.
 ///
+/// Reads from a source that blocks until it has data. An error from the source
+/// ends the decoding: the reader reports that error again on every later call.
+///
 /// # Examples
 /// ```
 /// use std::io::Read;
@@ -66,27 +69,175 @@ fn get_dict_size(dict_size: u32) -> crate::Result<u32> {
 /// ```
 pub struct LzmaReader<R> {
     lz: LzDecoder,
-    rc: RangeDecoder<R>,
+    rc: RangeDecoder<ReaderInput<R>>,
     lzma: LzmaDecoder,
     end_reached: bool,
     relaxed_end_cond: bool,
     remaining_size: u64,
 }
 
+/// Size of the first refill. A container of many small members reads ahead over
+/// the member it decodes, and hands what it read too far back to the member that
+/// follows, so a first refill that is any larger copies far more than it decodes.
+const INPUT_BUFFER_MIN: usize = 4 << 10;
+
+/// Size the refills settle at. The buffer reaches it on the third refill.
+const INPUT_BUFFER_MAX: usize = 64 << 10;
+
+/// Buffered compressed input. The decoder only refills when it needs a byte.
+struct ReaderInput<R> {
+    reader: R,
+    buffer: Vec<u8>,
+    position: usize,
+    length: usize,
+    failure: Option<StickyError>,
+}
+
+impl<R> ReaderInput<R> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader,
+            buffer: Vec::new(),
+            position: 0,
+            length: 0,
+            failure: None,
+        }
+    }
+
+    fn available(&self) -> usize {
+        self.length - self.position
+    }
+
+    fn check_failure(&self) -> crate::Result<()> {
+        match &self.failure {
+            Some(failure) => Err(failure.report()),
+            None => Ok(()),
+        }
+    }
+
+    /// The reader together with the compressed bytes it buffered but never used.
+    fn into_parts(self) -> (R, Vec<u8>) {
+        let unused = self.buffer[self.position..self.length].to_vec();
+        (self.reader, unused)
+    }
+}
+
+impl<R: Read> ReaderInput<R> {
+    /// Fills the buffer, growing it towards [`INPUT_BUFFER_MAX`] as the stream
+    /// turns out to be long enough to be worth the wider reads.
+    #[cfg(feature = "std")]
+    fn refill(&mut self) -> crate::Result<usize> {
+        self.grow();
+        loop {
+            match self.reader.read(&mut self.buffer) {
+                Ok(0) => return Err(error_eof("unexpected end of LZMA input")),
+                Ok(count) => return Ok(count),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    #[cfg(not(feature = "std"))]
+    fn refill(&mut self) -> crate::Result<usize> {
+        self.grow();
+        match self.reader.read(&mut self.buffer)? {
+            0 => Err(error_eof("unexpected end of LZMA input")),
+            count => Ok(count),
+        }
+    }
+
+    fn grow(&mut self) {
+        if self.buffer.len() < INPUT_BUFFER_MAX {
+            let size = if self.buffer.is_empty() {
+                INPUT_BUFFER_MIN
+            } else {
+                (self.buffer.len() * 4).min(INPUT_BUFFER_MAX)
+            };
+            self.buffer.resize(size, 0);
+        }
+    }
+
+    fn next_byte(&mut self) -> crate::Result<u8> {
+        if self.position == self.length {
+            self.length = self.refill()?;
+            self.position = 0;
+        }
+        let byte = self.buffer[self.position];
+        self.position += 1;
+        Ok(byte)
+    }
+}
+
+impl<R: Read> crate::range_dec::RangeReader for ReaderInput<R> {
+    fn read_u8(&mut self) -> u8 {
+        if self.failure.is_some() {
+            return 1;
+        }
+        match self.next_byte() {
+            Ok(byte) => byte,
+            Err(error) => {
+                // Hold the error until the decoder has finished the symbol it is
+                // in, so that the caller sees it rather than the bytes it
+                // decoded from a source that never delivered them.
+                self.failure = Some(StickyError::new(error));
+                1
+            }
+        }
+    }
+
+    fn try_read_u8(&mut self) -> crate::Result<u8> {
+        self.next_byte()
+    }
+
+    fn read_u32_be(&mut self) -> crate::Result<u32> {
+        let mut bytes = [0; 4];
+        for byte in &mut bytes {
+            *byte = self.next_byte()?;
+        }
+        Ok(u32::from_be_bytes(bytes))
+    }
+
+    fn can_start_symbol(&self) -> bool {
+        // A refill can make the slice path usable again. Finish the current
+        // symbol before handing decoding back to it.
+        self.failure.is_none() && self.available() < IN_REQUIRED
+    }
+
+    fn can_normalize(&self) -> bool {
+        self.failure.is_none()
+    }
+}
+
 impl<R> LzmaReader<R> {
     /// Unwraps the reader, returning the underlying reader.
+    ///
+    /// Discards any buffered input. Use [`Self::into_parts`] to recover it.
     pub fn into_inner(self) -> R {
-        self.rc.into_inner()
+        self.rc.into_inner().reader
+    }
+
+    /// Returns the underlying reader and compressed bytes buffered but not consumed.
+    /// Read the returned bytes before continuing with the underlying reader.
+    pub fn into_parts(self) -> (R, Vec<u8>) {
+        self.rc.into_inner().into_parts()
     }
 
     /// Returns a reference to the inner reader.
+    ///
+    /// The reader reads ahead, so it already sits past the compressed bytes the
+    /// decoder has decoded so far. [`Self::into_parts`] gives the difference.
     pub fn inner(&self) -> &R {
-        self.rc.inner()
+        &self.rc.inner().reader
     }
 
     /// Returns a mutable reference to the inner reader.
+    ///
+    /// The reader reads ahead, so it already sits past the compressed bytes the
+    /// decoder has decoded so far. Reading from the returned reader takes bytes
+    /// the decoder still needs.
     pub fn inner_mut(&mut self) -> &mut R {
-        self.rc.inner_mut()
+        &mut self.rc.inner_mut().reader
     }
 }
 
@@ -128,10 +279,45 @@ impl<R: Read> LzmaReader<R> {
         dict_size: u32,
         preset_dict: Option<&[u8]>,
     ) -> crate::Result<Self> {
+        Self::construct2_recover(reader, uncomp_size, lc, lp, pb, dict_size, preset_dict)
+            .map_err(|(_, _, error)| error)
+    }
+
+    /// Like [`Self::new`], handing the reader and the compressed bytes it had
+    /// already buffered back when the stream cannot be started. A container
+    /// format needs both to keep reading after it rejects a member.
+    pub(crate) fn new_recover(
+        reader: R,
+        uncomp_size: u64,
+        lc: u32,
+        lp: u32,
+        pb: u32,
+        dict_size: u32,
+        preset_dict: Option<&[u8]>,
+    ) -> Result<Self, (R, Vec<u8>, crate::Error)> {
+        Self::construct2_recover(reader, uncomp_size, lc, lp, pb, dict_size, preset_dict)
+    }
+
+    fn construct2_recover(
+        reader: R,
+        uncomp_size: u64,
+        lc: u32,
+        lp: u32,
+        pb: u32,
+        dict_size: u32,
+        preset_dict: Option<&[u8]>,
+    ) -> Result<Self, (R, Vec<u8>, crate::Error)> {
         if lc > 8 || lp > 4 || pb > 4 {
-            return Err(error_invalid_input("invalid lc or lp or pb"));
+            return Err((
+                reader,
+                Vec::new(),
+                error_invalid_input("invalid lc or lp or pb"),
+            ));
         }
-        let mut dict_size = get_dict_size(dict_size)?;
+        let mut dict_size = match get_dict_size(dict_size) {
+            Ok(dict_size) => dict_size,
+            Err(error) => return Err((reader, Vec::new(), error)),
+        };
 
         let preset_size = preset_dict
             .map(|dict| dict.len().min(dict_size as usize) as u64)
@@ -139,20 +325,22 @@ impl<R: Read> LzmaReader<R> {
         let min_history_size = uncomp_size.saturating_add(preset_size);
 
         if uncomp_size <= u64::MAX / 2 && dict_size as u64 > min_history_size {
-            dict_size = get_dict_size(min_history_size as u32)?;
+            dict_size = match get_dict_size(min_history_size as u32) {
+                Ok(dict_size) => dict_size,
+                Err(error) => return Err((reader, Vec::new(), error)),
+            };
         }
 
-        let rc = RangeDecoder::new_stream(reader);
-        let rc = match rc {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(e);
+        let rc = match RangeDecoder::new_stream_recover(ReaderInput::new(reader)) {
+            Ok(rc) => rc,
+            Err((input, error)) => {
+                let (reader, unused) = input.into_parts();
+                return Err((reader, unused, error));
             }
         };
-        let lz = LzDecoder::new(get_dict_size(dict_size)? as _, preset_dict);
+        let lz = LzDecoder::new(dict_size as _, preset_dict);
         let lzma = LzmaDecoder::new(lc, lp, pb);
         Ok(Self {
-            // reader,
             lz,
             rc,
             lzma,
@@ -219,10 +407,48 @@ impl<R: Read> LzmaReader<R> {
         Self::construct2(reader, uncomp_size, lc, lp, pb, dict_size, preset_dict)
     }
 
+    fn decode_buffered(&mut self) -> crate::Result<()> {
+        loop {
+            let available = self.rc.inner().available();
+            let decoded = if available >= IN_REQUIRED {
+                let state = self.rc.state();
+                let input = self.rc.inner_mut();
+                let bytes = &input.buffer[input.position..input.length];
+                let source = SliceRangeReader::new(bytes, available, available - IN_REQUIRED + 1);
+                let mut decoder = RangeDecoder::from_parts(source, state);
+                let result = self.lzma.decode(&mut self.lz, &mut decoder);
+                // `symbol_limit` keeps a symbol inside the slice, so this holds.
+                // Clamp anyway: an out-of-bounds read of `SliceRangeReader` is
+                // silent, and a `position` past `length` would make `available()`
+                // underflow and panic where an error belongs.
+                let consumed = decoder.inner().pos();
+                debug_assert!(consumed <= available);
+                input.position += consumed.min(available);
+                let state = decoder.state();
+                self.rc.set_state(state);
+                result
+            } else {
+                // Do not refill for lookahead. A complete stream may already be
+                // here even though the source remains open.
+                self.lzma.decode(&mut self.lz, &mut self.rc)
+            };
+            self.rc.inner().check_failure()?;
+            decoded?;
+            if !self.lz.has_space() {
+                // The slice path cannot normalize past its buffer. Complete
+                // that read here if the final symbol used its last byte.
+                self.rc.normalize();
+                self.rc.inner().check_failure()?;
+                return Ok(());
+            }
+        }
+    }
+
     fn read_decode(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
         }
+        self.rc.inner().check_failure()?;
         if self.end_reached {
             return Ok(0);
         }
@@ -239,14 +465,16 @@ impl<R: Read> LzmaReader<R> {
             }
             self.lz.set_limit(copy_size_max as usize);
 
-            match self.lzma.decode(&mut self.lz, &mut self.rc) {
+            match self.decode_buffered() {
                 Ok(_) => {}
                 Err(error) => {
+                    self.rc.inner().check_failure()?;
                     if self.remaining_size != u64::MAX || !self.lzma.end_marker_detected() {
                         return Err(error);
                     }
                     self.end_reached = true;
                     self.rc.normalize();
+                    self.rc.inner().check_failure()?;
                 }
             }
 

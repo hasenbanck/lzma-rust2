@@ -509,6 +509,54 @@ fn copy_error(error: &Error) -> Error {
     *error
 }
 
+/// A read error that every later call has to report again.
+///
+/// It keeps the parts of the error rather than the error itself. A
+/// `std::io::Error` cannot be cloned, and holding one would cost every reader
+/// that holds it the unwind safety the crate guarantees. The kind, the message
+/// and the operating system code carry over, a payload of the source's own does
+/// not.
+#[cfg(feature = "std")]
+struct StickyError {
+    kind: std::io::ErrorKind,
+    message: alloc::string::String,
+    os_code: Option<i32>,
+}
+
+#[cfg(feature = "std")]
+impl StickyError {
+    fn new(error: Error) -> Self {
+        Self {
+            kind: error.kind(),
+            message: error.to_string(),
+            os_code: error.raw_os_error(),
+        }
+    }
+
+    fn report(&self) -> Error {
+        match self.os_code {
+            Some(code) => Error::from_raw_os_error(code),
+            None => Error::new(self.kind, self.message.clone()),
+        }
+    }
+}
+
+#[cfg(not(feature = "std"))]
+struct StickyError {
+    error: Error,
+}
+
+#[cfg(not(feature = "std"))]
+impl StickyError {
+    fn new(error: Error) -> Self {
+        Self { error }
+    }
+
+    fn report(&self) -> Error {
+        self.error
+    }
+}
+
 struct CountingReader<R> {
     inner: R,
     bytes_read: u64,
