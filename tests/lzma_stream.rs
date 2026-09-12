@@ -676,6 +676,20 @@ fn memory_limit_is_enforced_when_the_header_arrives_byte_by_byte() {
     assert_eq!(result.unwrap_err().kind(), ErrorKind::OutOfMemory);
 }
 
+#[test]
+fn memory_limit_includes_speculation() {
+    let input = [
+        224, 0, 16, 0, 0, // lc=8, lp=4, pb=4; 4 KiB dictionary
+        255, 255, 255, 255, 255, 255, 255, 255, // unknown size
+        0, 0, 0, 0, 0, 0, // range coder initialization and tail
+    ];
+    let mut stream = LzmaStream::new_mem_limit(6158, None);
+    let error = stream
+        .process(&input, &mut [0; 512], Action::Run)
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+}
+
 /// Feeds `input` and returns the decoded bytes plus everything the stream did
 /// not use up.
 fn decode_recovering_tail(

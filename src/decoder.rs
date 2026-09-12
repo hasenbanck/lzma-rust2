@@ -5,9 +5,8 @@ use super::{
     LiteralSubCoder, LzmaCoder, MATCH_LEN_MIN, MID_SYMBOLS, coder_get_dict_size, lz::LzDecoder,
     range_dec::RangeDecoder,
 };
-use crate::range_dec::RangeReader;
+use crate::{error_out_of_memory, range_dec::RangeReader};
 
-#[derive(Clone)]
 pub(crate) struct LzmaDecoder {
     coder: LzmaCoder,
     literal_decoder: LiteralDecoder,
@@ -35,6 +34,17 @@ impl LzmaDecoder {
             match_len_decoder,
             rep_len_decoder,
         }
+    }
+
+    /// Copies the decoder, which a speculative pass keeps so it can undo itself.
+    /// Returns an out of memory error if reservation fails.
+    pub(crate) fn try_clone(&self) -> crate::Result<Self> {
+        Ok(Self {
+            coder: self.coder.clone(),
+            literal_decoder: self.literal_decoder.try_clone()?,
+            match_len_decoder: self.match_len_decoder.clone(),
+            rep_len_decoder: self.rep_len_decoder.clone(),
+        })
     }
 
     pub(crate) fn reset(&mut self) {
@@ -147,7 +157,6 @@ impl LzmaDecoder {
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct LiteralDecoder {
     coder: LiteralCoder,
     sub_decoders: Vec<LiteralSubDecoder>,
@@ -162,6 +171,19 @@ impl LiteralDecoder {
             coder,
             sub_decoders,
         }
+    }
+
+    fn try_clone(&self) -> crate::Result<Self> {
+        let mut sub_decoders = Vec::new();
+        sub_decoders
+            .try_reserve_exact(self.sub_decoders.len())
+            .map_err(|_| error_out_of_memory("literal decoder allocation too large"))?;
+        sub_decoders.extend_from_slice(&self.sub_decoders);
+
+        Ok(Self {
+            coder: self.coder.clone(),
+            sub_decoders,
+        })
     }
 
     fn reset(&mut self) {

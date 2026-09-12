@@ -29,7 +29,12 @@ pub fn get_memory_usage(dict_size: u32, lc: u32, lp: u32) -> crate::Result<u32> 
     if lc > 8 || lp > 4 {
         return Err(error_invalid_input("invalid lc or lp"));
     }
-    Ok(10 + get_dict_size(dict_size)? / 1024 + ((2 * 0x300) << (lc + lp)) / 1024)
+    Ok(10 + get_dict_size(dict_size)? / 1024 + probability_model_size(lc, lp) / 1024)
+}
+
+/// The size in bytes of the probability model for the given literal bits.
+fn probability_model_size(lc: u32, lp: u32) -> u32 {
+    (2 * 0x300) << (lc + lp)
 }
 
 fn get_dict_size(dict_size: u32) -> crate::Result<u32> {
@@ -541,6 +546,12 @@ const DRAIN_SIZE_MAX: usize = 4096;
 /// [`LzmaCore::flush_pending`] before the next attempt.
 const SPEC_OUTPUT_MAX: usize = 4096;
 
+/// The memory in KiB a speculative tail decode adds: a second probability model
+/// and the dictionary bytes it may write over.
+pub(crate) fn speculation_memory_usage(lc: u32, lp: u32) -> u32 {
+    (probability_model_size(lc, lp) + SPEC_OUTPUT_MAX as u32) / 1024
+}
+
 /// What came of asking the core to finish on the bytes it already holds.
 enum Speculation {
     /// The attempt never ran, so nothing has been ruled out and asking again
@@ -870,8 +881,8 @@ impl LzmaCore {
             return Ok(Speculation::NotAttempted);
         }
 
-        let spec = lz.begin_speculation(SPEC_OUTPUT_MAX);
-        let lzma_saved = lzma.clone();
+        let lzma_saved = lzma.try_clone()?;
+        let spec = lz.begin_speculation(SPEC_OUTPUT_MAX)?;
         let rc_saved = self.rc;
         let carry_saved = self.carry;
         let carry_len_saved = self.carry_len;
@@ -1570,19 +1581,21 @@ impl LzmaStream {
             self.accum[12],
         ]);
 
+        let mut bits = props;
+        let pb = bits / (9 * 5);
+        bits -= pb * 9 * 5;
+        let lp = bits / 9;
+        let lc = bits - lp * 9;
+
         // Check the memory limit before allocating anything.
-        let need_mem = get_memory_usage_by_props(dict_size, props)?;
+        let need_mem = get_memory_usage_by_props(dict_size, props)?
+            + speculation_memory_usage(lc as u32, lp as u32);
         if self.mem_limit_kb < need_mem {
             return Err(error_out_of_memory(
                 "needed memory too big for mem_limit_kb",
             ));
         }
 
-        let mut props = props;
-        let pb = props / (9 * 5);
-        props -= pb * 9 * 5;
-        let lp = props / 9;
-        let lc = props - lp * 9;
         if dict_size > DICT_SIZE_MAX {
             return Err(error_invalid_input("dict size too large"));
         }

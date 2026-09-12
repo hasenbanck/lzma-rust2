@@ -216,7 +216,9 @@ impl LzDecoder {
     /// positions. Once the dictionary has wrapped, the bytes from `pos` on are
     /// the oldest history still in the window, and a match at a large enough
     /// distance reads them back.
-    pub(crate) fn begin_speculation(&mut self, max_output: usize) -> LzSpeculation {
+    ///
+    /// Returns an out of memory error if reservation fails.
+    pub(crate) fn begin_speculation(&mut self, max_output: usize) -> crate::Result<LzSpeculation> {
         debug_assert!(
             self.spec_end.is_none(),
             "a speculative pass is already open"
@@ -228,21 +230,25 @@ impl LzDecoder {
             "the dictionary is neither still filling nor full"
         );
         let end = self.pos.saturating_add(max_output).min(self.buf_size);
-        self.spec_end = Some(end);
 
         let mut saved = Vec::new();
         if self.full == self.buf_size {
+            saved
+                .try_reserve_exact(end - self.pos)
+                .map_err(|_| error_out_of_memory("speculation backup too large"))?;
             saved.extend_from_slice(&self.buf[self.pos..end]);
         }
 
-        LzSpeculation {
+        self.spec_end = Some(end);
+
+        Ok(LzSpeculation {
             pos: self.pos,
             full: self.full,
             limit: self.limit,
             pending_len: self.pending_len,
             pending_dist: self.pending_dist,
             saved,
-        }
+        })
     }
 
     /// Takes the saved state so that a pass cannot end without saying whether

@@ -592,7 +592,9 @@ fn empty_input_asks_for_more() {
 /// Memory a member with the given dictionary size needs, in KiB. LZIP fixes
 /// lc=3 and lp=0.
 fn member_memory(dict_size: u32) -> u32 {
-    lzma_rust2::lzma_get_memory_usage(dict_size, 3, 0).unwrap()
+    // A speculative finish snapshots a probability model and part of the dictionary.
+    let speculation = ((2 * 0x300) << 3) + 4096;
+    lzma_rust2::lzma_get_memory_usage(dict_size, 3, 0).unwrap() + speculation / 1024
 }
 
 #[test]
@@ -634,5 +636,29 @@ fn memory_limit_is_enforced_on_a_later_member() {
 
     input.extend_from_slice(&compress(&data, 9, None));
     let error = decode_err(&mut LzipStream::new_mem_limit(limit), &input, ENTIRE, 4096);
+    assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+}
+
+#[test]
+fn memory_limit_includes_speculation() {
+    let data = std::fs::read(APACHE2).unwrap();
+    let compressed = compress(&data, 0, None);
+    let limit = member_memory(1 << 18);
+
+    let decompressed = decode(
+        &mut LzipStream::new_mem_limit(limit),
+        &compressed,
+        ENTIRE,
+        4096,
+    )
+    .unwrap();
+    assert!(decompressed == data);
+
+    let error = decode_err(
+        &mut LzipStream::new_mem_limit(limit - 1),
+        &compressed,
+        ENTIRE,
+        4096,
+    );
     assert_eq!(error.kind(), ErrorKind::OutOfMemory);
 }
