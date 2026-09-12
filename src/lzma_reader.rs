@@ -942,8 +942,34 @@ impl LzmaCore {
         if !lz.has_pending() {
             return Ok(0);
         }
-        let (_, result) = self.run(lz, lzma, limits, &[0], 0, 0);
+
+        let rc_saved = self.rc;
+        let (pos, result) = self.run(lz, lzma, limits, &[0], 0, 0);
+
+        if pos > 0 {
+            // Only padding is there to normalise from, so the byte stays owed.
+            self.rc = rc_saved;
+        }
+
         result
+    }
+
+    /// Hands the range coder the byte it is still owed, from the carry when one
+    /// waits there and from `input` otherwise.
+    ///
+    /// Returns how much of `input` that took, or `None` when neither has it.
+    fn pay_normalization(&mut self, input: &[u8]) -> Option<usize> {
+        if self.carry_len > 0 {
+            let byte = self.carry[0];
+            self.carry.copy_within(1..self.carry_len, 0);
+            self.carry_len -= 1;
+            self.rc.take_byte(byte);
+            return Some(0);
+        }
+
+        let byte = *input.first()?;
+        self.rc.take_byte(byte);
+        Some(1)
     }
 
     /// Decodes as much as fits from `buf`, returning the read position and
@@ -1360,6 +1386,19 @@ impl LzmaStream {
                         });
                     }
 
+                    if self.owes_normalization(action) {
+                        let Some(consumed) = self.core.pay_normalization(&input[in_pos..]) else {
+                            return Ok(StreamResult {
+                                bytes_consumed: in_pos,
+                                bytes_produced: out_pos,
+                                status: Status::Ok,
+                            });
+                        };
+                        in_pos += consumed;
+                        self.total_in += consumed as u64;
+                        continue;
+                    }
+
                     // A stream whose declared size is zero is already over; no
                     // decode pass will ever set this for us.
                     if self.limits.remaining_size == 0 {
@@ -1394,8 +1433,8 @@ impl LzmaStream {
                     }
 
                     if self.filter.is_some() {
-                        self.drain_and_filter()?;
-                    } else if !self.flush_output(output, &mut out_pos)? {
+                        self.drain_and_filter(action)?;
+                    } else if !self.flush_output(output, &mut out_pos, action)? {
                         return Ok(StreamResult {
                             bytes_consumed: in_pos,
                             bytes_produced: out_pos,
@@ -1409,7 +1448,12 @@ impl LzmaStream {
 
     /// Hands decoded bytes straight to the caller, returning false when the
     /// output buffer filled before the dictionary ran dry.
-    fn flush_output(&mut self, output: &mut [u8], out_pos: &mut usize) -> crate::Result<bool> {
+    fn flush_output(
+        &mut self,
+        output: &mut [u8],
+        out_pos: &mut usize,
+        action: Action,
+    ) -> crate::Result<bool> {
         let (flushed, has_output) = {
             let lz = self.lz_mut()?;
             let flushed = lz.flush_partial(&mut output[*out_pos..]);
@@ -1421,7 +1465,7 @@ impl LzmaStream {
         if has_output {
             return Ok(false);
         }
-        self.finish_drain();
+        self.finish_drain(action);
         Ok(true)
     }
 
@@ -1448,7 +1492,7 @@ impl LzmaStream {
     ///
     /// The bytes are counted as produced once they reach the caller in
     /// [`Self::emit_filtered`], not here.
-    fn drain_and_filter(&mut self) -> crate::Result<()> {
+    fn drain_and_filter(&mut self, action: Action) -> crate::Result<()> {
         let filter_start = self.settled_end();
 
         let has_output = {
@@ -1475,7 +1519,7 @@ impl LzmaStream {
         };
 
         if !has_output {
-            self.finish_drain();
+            self.finish_drain(action);
         }
         Ok(())
     }
@@ -1519,12 +1563,18 @@ impl LzmaStream {
     }
 
     /// Where a finished drain leaves the stream: over, or back to decoding.
-    fn finish_drain(&mut self) {
-        self.state = if self.limits.end_reached {
+    fn finish_drain(&mut self, action: Action) {
+        self.state = if self.limits.end_reached && !self.owes_normalization(action) {
             LzmaState::Finished
         } else {
             LzmaState::Decode
         };
+    }
+
+    /// Whether the stream has all of its data out but still wants the byte the
+    /// range coder was going to normalise with, and the caller may yet have it.
+    fn owes_normalization(&self, action: Action) -> bool {
+        action == Action::Run && self.limits.end_reached && self.core.rc.wants_byte()
     }
 
     fn lz_mut(&mut self) -> crate::Result<&mut LzDecoder> {

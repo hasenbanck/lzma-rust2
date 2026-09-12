@@ -29,6 +29,11 @@ impl RangeCoderState {
     pub(crate) fn wants_byte(&self) -> bool {
         self.range < TOP_VALUE
     }
+
+    pub(crate) fn take_byte(&mut self, byte: u8) {
+        self.code = (self.code << SHIFT_BITS) | byte as u32;
+        self.range <<= SHIFT_BITS;
+    }
 }
 
 impl<R> RangeDecoder<R> {

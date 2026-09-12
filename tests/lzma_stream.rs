@@ -1531,3 +1531,18 @@ fn run_only_reports_invalid_distance() {
     assert!(stream.process(&input, &mut [0; 1024], Action::Run).is_err());
     assert!(stream.process(&[], &mut [0; 1024], Action::Run).is_err());
 }
+
+#[test]
+fn run_only_waits_for_final_normalization() {
+    let data = vec![b'x'; 8337];
+    let compressed = compress_header_with_dict(&data, 1, 4096, true);
+    let mut stream = LzmaStream::new_mem_limit(u32::MAX, None);
+    let run = decode_run_only_chunked(&mut stream, &compressed[..compressed.len() - 1], 4096, 512)
+        .unwrap();
+    assert!(run.unused.is_none(), "ended before the final byte arrived");
+
+    let mut stream = LzmaStream::new_mem_limit(u32::MAX, None);
+    let run = decode_run_only_chunked(&mut stream, &compressed, 1, 512).unwrap();
+    assert_eq!(run.decompressed, data);
+    assert_eq!(run.unused, Some(Vec::new()));
+}
