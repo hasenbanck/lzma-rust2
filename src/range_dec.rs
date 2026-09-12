@@ -31,6 +31,11 @@ impl<R> RangeDecoder<R> {
         }
     }
 
+    pub(crate) fn set_state(&mut self, state: RangeCoderState) {
+        self.range = state.range;
+        self.code = state.code;
+    }
+
     pub(crate) fn state(&self) -> RangeCoderState {
         RangeCoderState {
             range: self.range,
@@ -62,12 +67,28 @@ impl RangeDecoder<RangeDecoderBuffer> {
 }
 
 impl<R: RangeReader> RangeDecoder<R> {
-    pub(crate) fn new_stream(mut inner: R) -> crate::Result<Self> {
-        let b = inner.try_read_u8()?;
-        if b != 0x00 {
-            return Err(error_invalid_input("range decoder first byte is not zero"));
+    pub(crate) fn new_stream(inner: R) -> crate::Result<Self> {
+        Self::new_stream_recover(inner).map_err(|(_, error)| error)
+    }
+
+    /// Like [`Self::new_stream`], handing the byte source back when the
+    /// initialisation bytes are missing or malformed. A caller that owns the
+    /// source needs it back to stay usable after such a stream is rejected.
+    pub(crate) fn new_stream_recover(mut inner: R) -> Result<Self, (R, crate::Error)> {
+        match inner.try_read_u8() {
+            Ok(0x00) => {}
+            Ok(_) => {
+                return Err((
+                    inner,
+                    error_invalid_input("range decoder first byte is not zero"),
+                ));
+            }
+            Err(error) => return Err((inner, error)),
         }
-        let code = inner.read_u32_be()?;
+        let code = match inner.read_u32_be() {
+            Ok(code) => code,
+            Err(error) => return Err((inner, error)),
+        };
         Ok(Self {
             inner,
             code,

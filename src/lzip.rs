@@ -24,7 +24,7 @@ pub use writer::{LzipOptions, LzipWriter};
 #[cfg(all(feature = "encoder", feature = "std"))]
 pub use writer_mt::LzipWriterMt;
 
-use crate::{ByteReader, Read, Result, error_invalid_data, error_invalid_input};
+use crate::{ByteReader, Read, Result, error_eof, error_invalid_data, error_invalid_input};
 
 const LZIP_MAGIC: [u8; 4] = *b"LZIP";
 
@@ -40,29 +40,56 @@ const MAX_DICT_SIZE: u32 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub(crate) struct LzipHeader {
-    version: u8,
     dict_size: u32,
 }
 
 impl LzipHeader {
-    fn parse<R: Read>(reader: &mut R) -> Result<Self> {
-        let mut magic = [0u8; 4];
-        reader.read_exact(&mut magic)?;
+    /// Parses a member header out of `bytes`, which holds what the source still
+    /// had. A member follows the one before it without a gap, so anything short
+    /// of a whole header is a member that is damaged or cut short.
+    fn parse(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() < HEADER_SIZE {
+            return Err(error_eof("truncated LZIP member header"));
+        }
 
-        if magic != LZIP_MAGIC {
+        if bytes[..LZIP_MAGIC.len()] != LZIP_MAGIC {
             return Err(error_invalid_data("invalid LZIP magic bytes"));
         }
 
-        let version = reader.read_u8()?;
-        if version != LZIP_VERSION {
+        if bytes[4] != LZIP_VERSION {
             return Err(error_invalid_data("unsupported LZIP version"));
         }
 
-        let dict_size_byte = reader.read_u8()?;
-        let dict_size = decode_dict_size(dict_size_byte)?;
+        let dict_size = decode_dict_size(bytes[5])?;
 
-        Ok(LzipHeader { version, dict_size })
+        Ok(LzipHeader { dict_size })
     }
+}
+
+/// Reads until `buffer` is full or the source has nothing left to give, and
+/// returns the number of bytes read. A count of zero means that the source
+/// ended where the read started.
+pub(crate) fn read_some<R: Read>(reader: &mut R, buffer: &mut [u8]) -> Result<usize> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        match reader.read(&mut buffer[filled..]) {
+            Ok(0) => break,
+            Ok(count) => filled += count,
+            Err(error) if is_interrupted(&error) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(filled)
+}
+
+#[cfg(feature = "std")]
+fn is_interrupted(error: &crate::Error) -> bool {
+    error.kind() == std::io::ErrorKind::Interrupted
+}
+
+#[cfg(not(feature = "std"))]
+fn is_interrupted(error: &crate::Error) -> bool {
+    matches!(error, crate::Error::Interrupted)
 }
 
 #[derive(Debug, Clone)]
