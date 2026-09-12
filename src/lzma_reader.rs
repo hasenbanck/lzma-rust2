@@ -764,7 +764,26 @@ impl LzmaCore {
         // Decode the carry against zero padding and require the stream to end
         // inside the real bytes.
         if input_ends_here && !limits.end_reached && in_pos >= input.len() {
-            produced += self.decode_finish_tail(lz, lzma, limits, input_end)?;
+            let (read_padding, result) = self.decode_finish_tail(lz, lzma, limits);
+
+            if read_padding {
+                // The decoder had to read padding to get here, so a symbol runs
+                // past the end of the input. What that means depends on who said
+                // where the end was.
+                return Err(match input_end {
+                    // A length field in the stream. Everything it declared is
+                    // here, and the data inside it does not fit, so the data is
+                    // wrong rather than missing.
+                    InputEnd::Length => {
+                        error_invalid_data("LZMA symbol runs past the compressed size")
+                    }
+                    // The caller. More bytes would have finished the symbol, so
+                    // the stream was cut short.
+                    _ => error_eof("truncated LZMA stream"),
+                });
+            }
+
+            produced += result?;
         }
 
         Ok((in_pos, produced))
@@ -773,6 +792,9 @@ impl LzmaCore {
     /// Decodes what is left of the carry with padding zeros behind it, so the
     /// decoder still sees the 20 bytes it needs to start one more symbol.
     ///
+    /// Returns whether the decode read any of that padding, along with either
+    /// the bytes decoded into the dictionary or why the decode failed.
+    ///
     /// The carry bytes were counted as consumed when they were taken in, so this
     /// adds nothing to `bytes_consumed`.
     fn decode_finish_tail(
@@ -780,12 +802,11 @@ impl LzmaCore {
         lz: &mut LzDecoder,
         lzma: &mut LzmaDecoder,
         limits: &mut Limits,
-        input_end: InputEnd,
-    ) -> crate::Result<usize> {
+    ) -> (bool, crate::Result<usize>) {
         if room_for(lz, limits.remaining_size) == 0 {
             // No output space, so we cannot yet tell whether the stream really
             // ends here. The caller has to drain first.
-            return Ok(0);
+            return (false, Ok(0));
         }
 
         let carry_len = self.carry_len;
@@ -805,27 +826,19 @@ impl LzmaCore {
         );
 
         if pos > carry_len {
-            // The decoder had to read padding to get here, so a symbol runs
-            // past the end of the input. What that means depends on who said
-            // where the end was.
-            return Err(match input_end {
-                // A length field in the stream. Everything it declared is
-                // here, and the data inside it does not fit, so the data is
-                // wrong rather than missing.
-                InputEnd::Length => error_invalid_data("LZMA symbol runs past the compressed size"),
-                // The caller. More bytes would have finished the symbol, so
-                // the stream was cut short.
-                _ => error_eof("truncated LZMA stream"),
-            });
+            return (true, result);
         }
 
-        let produced = result?;
+        let produced = match result {
+            Ok(produced) => produced,
+            Err(error) => return (false, Err(error)),
+        };
 
         // Padding bytes must never be written back into the carry.
         self.carry.copy_within(pos..carry_len, 0);
         self.carry_len = carry_len - pos;
 
-        Ok(produced)
+        (false, Ok(produced))
     }
 
     /// Tries to finish the stream from the bytes already carried, as if the
@@ -844,17 +857,17 @@ impl LzmaCore {
         lz: &mut LzDecoder,
         lzma: &mut LzmaDecoder,
         limits: &mut Limits,
-    ) -> Speculation {
+    ) -> crate::Result<Speculation> {
         // Every LZMA2 chunk header states its own compressed size, so LZMA2
         // always knows where its payload ends and never has to guess.
         if limits.compressed_left.is_some() || limits.end_reached {
-            return Speculation::NotAttempted;
+            return Ok(Speculation::NotAttempted);
         }
 
         // With nowhere to put anything the attempt cannot start, and so learns
         // nothing about the bytes: the caller has to drain and come back.
         if room_for(lz, limits.remaining_size) == 0 {
-            return Speculation::NotAttempted;
+            return Ok(Speculation::NotAttempted);
         }
 
         let spec = lz.begin_speculation(SPEC_OUTPUT_MAX);
@@ -864,7 +877,7 @@ impl LzmaCore {
         let carry_len_saved = self.carry_len;
         let remaining_saved = limits.remaining_size;
 
-        let outcome = self.decode_finish_tail(lz, lzma, limits, InputEnd::Caller);
+        let (read_padding, outcome) = self.decode_finish_tail(lz, lzma, limits);
 
         // A stream that ends here must not still be owed a byte. The last
         // normalisation of a pass is skipped when the input has nothing left to
@@ -873,11 +886,11 @@ impl LzmaCore {
         let owes_a_byte = limits.end_reached && self.rc.wants_byte();
 
         match outcome {
-            Ok(produced) if !owes_a_byte => {
+            Ok(produced) if !read_padding && !owes_a_byte => {
                 lz.commit_speculation(spec);
-                Speculation::Produced(produced)
+                Ok(Speculation::Produced(produced))
             }
-            _ => {
+            outcome => {
                 lz.rollback_speculation(spec);
                 *lzma = lzma_saved;
                 self.carry = carry_saved;
@@ -886,7 +899,11 @@ impl LzmaCore {
                 limits.remaining_size = remaining_saved;
                 // False on the way in: the early return above saw to that.
                 limits.end_reached = false;
-                Speculation::Failed
+
+                match outcome {
+                    Err(error) if !read_padding => Err(error),
+                    _ => Ok(Speculation::Failed),
+                }
             }
         }
     }
@@ -1660,7 +1677,7 @@ impl LzmaStream {
             produced += core.flush_pending(lz, lzma, limits)?;
 
             if !*spec_blocked {
-                match core.speculate_finish_tail(lz, lzma, limits) {
+                match core.speculate_finish_tail(lz, lzma, limits)? {
                     Speculation::Produced(decoded) => produced += decoded,
                     Speculation::Failed => *spec_blocked = true,
                     Speculation::NotAttempted => {}

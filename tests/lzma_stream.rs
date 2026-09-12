@@ -1509,3 +1509,11 @@ fn run_only_finishes_before_the_caller_gives_up() {
         }
     }
 }
+
+#[test]
+fn run_only_reports_invalid_distance() {
+    let input = [0, 192, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut stream = LzmaStream::new_with_props(u64::MAX, 93, 4096, None).unwrap();
+    assert!(stream.process(&input, &mut [0; 1024], Action::Run).is_err());
+    assert!(stream.process(&[], &mut [0; 1024], Action::Run).is_err());
+}
