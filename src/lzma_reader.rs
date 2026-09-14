@@ -29,7 +29,12 @@ pub fn get_memory_usage(dict_size: u32, lc: u32, lp: u32) -> crate::Result<u32> 
     if lc > 8 || lp > 4 {
         return Err(error_invalid_input("invalid lc or lp"));
     }
-    Ok(10 + get_dict_size(dict_size)? / 1024 + ((2 * 0x300) << (lc + lp)) / 1024)
+    Ok(10 + get_dict_size(dict_size)? / 1024 + probability_model_size(lc, lp) / 1024)
+}
+
+/// The size in bytes of the probability model for the given literal bits.
+fn probability_model_size(lc: u32, lp: u32) -> u32 {
+    (2 * 0x300) << (lc + lp)
 }
 
 fn get_dict_size(dict_size: u32) -> crate::Result<u32> {
@@ -529,6 +534,35 @@ pub(crate) const RC_INIT_SIZE: usize = 5;
 /// How much one drain out of the dictionary moves at most.
 const DRAIN_SIZE_MAX: usize = 4096;
 
+/// How much output one speculative tail decode may produce.
+///
+/// This bounds what a single attempt costs: the stretch of dictionary the
+/// attempt may write over has to be saved so that it can be put back, and a
+/// carry of repetitive data decodes into far more than its own length.
+///
+/// Reaching it is ordinary rather than exceptional. A pass that stops here has
+/// read nothing but bytes that really are there, so what it decoded is kept,
+/// and the repeat it was cut off in the middle of is put out by
+/// [`LzmaCore::flush_pending`] before the next attempt.
+const SPEC_OUTPUT_MAX: usize = 4096;
+
+/// The memory in KiB a speculative tail decode adds: a second probability model
+/// and the dictionary bytes it may write over.
+pub(crate) fn speculation_memory_usage(lc: u32, lp: u32) -> u32 {
+    (probability_model_size(lc, lp) + SPEC_OUTPUT_MAX as u32) / 1024
+}
+
+/// What came of asking the core to finish on the bytes it already holds.
+enum Speculation {
+    /// The attempt never ran, so nothing has been ruled out and asking again
+    /// once the stream has moved on is worth it.
+    NotAttempted,
+    /// The attempt ran and was given up on. Only bytes that are not here yet can
+    /// change that answer.
+    Failed,
+    Produced(usize),
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LzmaState {
     Header,
@@ -741,7 +775,26 @@ impl LzmaCore {
         // Decode the carry against zero padding and require the stream to end
         // inside the real bytes.
         if input_ends_here && !limits.end_reached && in_pos >= input.len() {
-            produced += self.decode_finish_tail(lz, lzma, limits, input_end)?;
+            let (read_padding, result) = self.decode_finish_tail(lz, lzma, limits);
+
+            if read_padding {
+                // The decoder had to read padding to get here, so a symbol runs
+                // past the end of the input. What that means depends on who said
+                // where the end was.
+                return Err(match input_end {
+                    // A length field in the stream. Everything it declared is
+                    // here, and the data inside it does not fit, so the data is
+                    // wrong rather than missing.
+                    InputEnd::Length => {
+                        error_invalid_data("LZMA symbol runs past the compressed size")
+                    }
+                    // The caller. More bytes would have finished the symbol, so
+                    // the stream was cut short.
+                    _ => error_eof("truncated LZMA stream"),
+                });
+            }
+
+            produced += result?;
         }
 
         Ok((in_pos, produced))
@@ -750,6 +803,9 @@ impl LzmaCore {
     /// Decodes what is left of the carry with padding zeros behind it, so the
     /// decoder still sees the 20 bytes it needs to start one more symbol.
     ///
+    /// Returns whether the decode read any of that padding, along with either
+    /// the bytes decoded into the dictionary or why the decode failed.
+    ///
     /// The carry bytes were counted as consumed when they were taken in, so this
     /// adds nothing to `bytes_consumed`.
     fn decode_finish_tail(
@@ -757,12 +813,11 @@ impl LzmaCore {
         lz: &mut LzDecoder,
         lzma: &mut LzmaDecoder,
         limits: &mut Limits,
-        input_end: InputEnd,
-    ) -> crate::Result<usize> {
+    ) -> (bool, crate::Result<usize>) {
         if room_for(lz, limits.remaining_size) == 0 {
             // No output space, so we cannot yet tell whether the stream really
             // ends here. The caller has to drain first.
-            return Ok(0);
+            return (false, Ok(0));
         }
 
         let carry_len = self.carry_len;
@@ -782,27 +837,139 @@ impl LzmaCore {
         );
 
         if pos > carry_len {
-            // The decoder had to read padding to get here, so a symbol runs
-            // past the end of the input. What that means depends on who said
-            // where the end was.
-            return Err(match input_end {
-                // A length field in the stream. Everything it declared is
-                // here, and the data inside it does not fit, so the data is
-                // wrong rather than missing.
-                InputEnd::Length => error_invalid_data("LZMA symbol runs past the compressed size"),
-                // The caller. More bytes would have finished the symbol, so
-                // the stream was cut short.
-                _ => error_eof("truncated LZMA stream"),
-            });
+            return (true, result);
         }
 
-        let produced = result?;
+        let produced = match result {
+            Ok(produced) => produced,
+            Err(error) => return (false, Err(error)),
+        };
 
         // Padding bytes must never be written back into the carry.
         self.carry.copy_within(pos..carry_len, 0);
         self.carry_len = carry_len - pos;
 
-        Ok(produced)
+        (false, Ok(produced))
+    }
+
+    /// Tries to finish the stream from the bytes already carried, as if the
+    /// caller had said that this was the last of the input, and undoes the
+    /// attempt when it turns out to want bytes that are not there.
+    ///
+    /// Nothing in an LZMA1 stream says how long its payload is, so its last
+    /// nineteen or fewer bytes can only be decoded against padding, and only
+    /// [`Action::Finish`] asks for that. Without this a caller that simply runs
+    /// out of input holds a whole stream it can never finish, while
+    /// [`LzmaReader`] takes the very same bytes to the end.
+    ///
+    /// [`Action::Finish`]: crate::Action
+    fn speculate_finish_tail(
+        &mut self,
+        lz: &mut LzDecoder,
+        lzma: &mut LzmaDecoder,
+        limits: &mut Limits,
+    ) -> crate::Result<Speculation> {
+        // Every LZMA2 chunk header states its own compressed size, so LZMA2
+        // always knows where its payload ends and never has to guess.
+        if limits.compressed_left.is_some() || limits.end_reached {
+            return Ok(Speculation::NotAttempted);
+        }
+
+        // With nowhere to put anything the attempt cannot start, and so learns
+        // nothing about the bytes: the caller has to drain and come back.
+        if room_for(lz, limits.remaining_size) == 0 {
+            return Ok(Speculation::NotAttempted);
+        }
+
+        let lzma_saved = lzma.try_clone()?;
+        let spec = lz.begin_speculation(SPEC_OUTPUT_MAX)?;
+        let rc_saved = self.rc;
+        let carry_saved = self.carry;
+        let carry_len_saved = self.carry_len;
+        let remaining_saved = limits.remaining_size;
+
+        let (read_padding, outcome) = self.decode_finish_tail(lz, lzma, limits);
+
+        // A stream that ends here must not still be owed a byte. The last
+        // normalisation of a pass is skipped when the input has nothing left to
+        // read it from, which under `Action::Finish` is the truth and here only
+        // the truth so far: the byte may still be on its way.
+        let owes_a_byte = limits.end_reached && self.rc.wants_byte();
+
+        match outcome {
+            Ok(produced) if !read_padding && !owes_a_byte => {
+                lz.commit_speculation(spec);
+                Ok(Speculation::Produced(produced))
+            }
+            outcome => {
+                lz.rollback_speculation(spec);
+                *lzma = lzma_saved;
+                self.carry = carry_saved;
+                self.carry_len = carry_len_saved;
+                self.rc = rc_saved;
+                limits.remaining_size = remaining_saved;
+                // False on the way in: the early return above saw to that.
+                limits.end_reached = false;
+
+                match outcome {
+                    Err(error) if !read_padding => Err(error),
+                    _ => Ok(Speculation::Failed),
+                }
+            }
+        }
+    }
+
+    /// Puts out what is left of a repeat that an earlier pass had to cut short.
+    ///
+    /// This is settled data, not a guess: the match was decoded in full from
+    /// bytes that really arrived, and only the copying out of it was stopped by
+    /// the room there was at the time. It must therefore happen outside a
+    /// speculative attempt, which would take it back when given up on.
+    ///
+    /// [`LzmaDecoder::decode`] finishes a pending repeat before it so much as
+    /// looks at the input, and starts no symbol while `symbol_limit` is zero, so
+    /// a pass over a one byte buffer that may neither be read from nor started
+    /// in does that and nothing else. The buffer is one byte rather than none
+    /// because [`SliceRangeReader`] does not take an empty slice.
+    ///
+    /// [`SliceRangeReader`]: crate::range_dec::SliceRangeReader
+    fn flush_pending(
+        &mut self,
+        lz: &mut LzDecoder,
+        lzma: &mut LzmaDecoder,
+        limits: &mut Limits,
+    ) -> crate::Result<usize> {
+        if !lz.has_pending() {
+            return Ok(0);
+        }
+
+        let rc_saved = self.rc;
+        let (pos, result) = self.run(lz, lzma, limits, &[0], 0, 0);
+
+        if pos > 0 {
+            // Only padding is there to normalise from, so the byte stays owed.
+            self.rc = rc_saved;
+        }
+
+        result
+    }
+
+    /// Hands the range coder the byte it is still owed, from the carry when one
+    /// waits there and from `input` otherwise.
+    ///
+    /// Returns how much of `input` that took, or `None` when neither has it.
+    fn pay_normalization(&mut self, input: &[u8]) -> Option<usize> {
+        if self.carry_len > 0 {
+            let byte = self.carry[0];
+            self.carry.copy_within(1..self.carry_len, 0);
+            self.carry_len -= 1;
+            self.rc.take_byte(byte);
+            return Some(0);
+        }
+
+        let byte = *input.first()?;
+        self.rc.take_byte(byte);
+        Some(1)
     }
 
     /// Decodes as much as fits from `buf`, returning the read position and
@@ -941,6 +1108,9 @@ pub struct LzmaStream {
     filter_pos: usize,
     mem_limit_kb: u32,
     preset_dict: Option<Vec<u8>>,
+    /// Set once a speculative tail decode has come to nothing, so that it is not
+    /// tried again on the same bytes. Cleared by fresh input.
+    spec_blocked: bool,
     /// Set once `process()` has returned an error. A failed stream stays failed.
     failed: bool,
     total_in: u64,
@@ -978,6 +1148,7 @@ impl LzmaStream {
             filter_pos: 0,
             mem_limit_kb,
             preset_dict: preset_dict.map(|dict| dict.to_vec()),
+            spec_blocked: false,
             failed: false,
             total_in: 0,
             total_out: 0,
@@ -1215,6 +1386,19 @@ impl LzmaStream {
                         });
                     }
 
+                    if self.owes_normalization(action) {
+                        let Some(consumed) = self.core.pay_normalization(&input[in_pos..]) else {
+                            return Ok(StreamResult {
+                                bytes_consumed: in_pos,
+                                bytes_produced: out_pos,
+                                status: Status::Ok,
+                            });
+                        };
+                        in_pos += consumed;
+                        self.total_in += consumed as u64;
+                        continue;
+                    }
+
                     // A stream whose declared size is zero is already over; no
                     // decode pass will ever set this for us.
                     if self.limits.remaining_size == 0 {
@@ -1249,8 +1433,8 @@ impl LzmaStream {
                     }
 
                     if self.filter.is_some() {
-                        self.drain_and_filter()?;
-                    } else if !self.flush_output(output, &mut out_pos)? {
+                        self.drain_and_filter(action)?;
+                    } else if !self.flush_output(output, &mut out_pos, action)? {
                         return Ok(StreamResult {
                             bytes_consumed: in_pos,
                             bytes_produced: out_pos,
@@ -1264,7 +1448,12 @@ impl LzmaStream {
 
     /// Hands decoded bytes straight to the caller, returning false when the
     /// output buffer filled before the dictionary ran dry.
-    fn flush_output(&mut self, output: &mut [u8], out_pos: &mut usize) -> crate::Result<bool> {
+    fn flush_output(
+        &mut self,
+        output: &mut [u8],
+        out_pos: &mut usize,
+        action: Action,
+    ) -> crate::Result<bool> {
         let (flushed, has_output) = {
             let lz = self.lz_mut()?;
             let flushed = lz.flush_partial(&mut output[*out_pos..]);
@@ -1276,7 +1465,7 @@ impl LzmaStream {
         if has_output {
             return Ok(false);
         }
-        self.finish_drain();
+        self.finish_drain(action);
         Ok(true)
     }
 
@@ -1303,7 +1492,7 @@ impl LzmaStream {
     ///
     /// The bytes are counted as produced once they reach the caller in
     /// [`Self::emit_filtered`], not here.
-    fn drain_and_filter(&mut self) -> crate::Result<()> {
+    fn drain_and_filter(&mut self, action: Action) -> crate::Result<()> {
         let filter_start = self.settled_end();
 
         let has_output = {
@@ -1330,7 +1519,7 @@ impl LzmaStream {
         };
 
         if !has_output {
-            self.finish_drain();
+            self.finish_drain(action);
         }
         Ok(())
     }
@@ -1374,12 +1563,18 @@ impl LzmaStream {
     }
 
     /// Where a finished drain leaves the stream: over, or back to decoding.
-    fn finish_drain(&mut self) {
-        self.state = if self.limits.end_reached {
+    fn finish_drain(&mut self, action: Action) {
+        self.state = if self.limits.end_reached && !self.owes_normalization(action) {
             LzmaState::Finished
         } else {
             LzmaState::Decode
         };
+    }
+
+    /// Whether the stream has all of its data out but still wants the byte the
+    /// range coder was going to normalise with, and the caller may yet have it.
+    fn owes_normalization(&self, action: Action) -> bool {
+        action == Action::Run && self.limits.end_reached && self.core.rc.wants_byte()
     }
 
     fn lz_mut(&mut self) -> crate::Result<&mut LzDecoder> {
@@ -1436,19 +1631,21 @@ impl LzmaStream {
             self.accum[12],
         ]);
 
+        let mut bits = props;
+        let pb = bits / (9 * 5);
+        bits -= pb * 9 * 5;
+        let lp = bits / 9;
+        let lc = bits - lp * 9;
+
         // Check the memory limit before allocating anything.
-        let need_mem = get_memory_usage_by_props(dict_size, props)?;
+        let need_mem = get_memory_usage_by_props(dict_size, props)?
+            + speculation_memory_usage(lc as u32, lp as u32);
         if self.mem_limit_kb < need_mem {
             return Err(error_out_of_memory(
                 "needed memory too big for mem_limit_kb",
             ));
         }
 
-        let mut props = props;
-        let pb = props / (9 * 5);
-        props -= pb * 9 * 5;
-        let lp = props / 9;
-        let lc = props - lp * 9;
         if dict_size > DICT_SIZE_MAX {
             return Err(error_invalid_input("dict size too large"));
         }
@@ -1496,6 +1693,7 @@ impl LzmaStream {
             lzma,
             core,
             limits,
+            spec_blocked,
             ..
         } = self;
 
@@ -1512,7 +1710,44 @@ impl LzmaStream {
             InputEnd::More
         };
 
-        let (consumed, produced) = core.feed(lz, lzma, &input[*in_pos..], limits, input_end)?;
+        if !input.is_empty() {
+            *spec_blocked = false;
+        }
+
+        let offered = input.len() - *in_pos;
+        let (consumed, mut produced) = core.feed(lz, lzma, &input[*in_pos..], limits, input_end)?;
+
+        // A caller that has handed over everything it had and got nothing back
+        // has run dry, and whether it will ever have more to give is the one
+        // thing it never tells us, so the core is asked to try finishing on what
+        // it already holds.
+        //
+        // The empty call is not enough to key on. A caller that has to hand its
+        // own reader at least one byte per call, and reads a call that gives it
+        // none as the end of the stream, never makes an empty call after the one
+        // that took the last of its input: it asks its source for more, is told
+        // there is none, and gives up. A small stream, whose output is still all
+        // held back when that call happens, would be lost that way.
+        //
+        // Nor is this "the last call made no progress", a state no caller ever
+        // reaches: progress on the input with none on the output is what being
+        // one call short of the end looks like.
+        let run_dry = input_end == InputEnd::More && consumed >= offered && produced == 0;
+
+        if run_dry {
+            // The repeat first, and only then a guess: finishing it can free
+            // the room the guess needs, and can reach the end by itself.
+            produced += core.flush_pending(lz, lzma, limits)?;
+
+            if !*spec_blocked {
+                match core.speculate_finish_tail(lz, lzma, limits)? {
+                    Speculation::Produced(decoded) => produced += decoded,
+                    Speculation::Failed => *spec_blocked = true,
+                    Speculation::NotAttempted => {}
+                }
+            }
+        }
+
         *in_pos += consumed;
         self.total_in += consumed as u64;
 

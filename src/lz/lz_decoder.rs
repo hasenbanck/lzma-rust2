@@ -2,6 +2,24 @@ use alloc::vec::Vec;
 
 use crate::{Read, error_invalid_data, error_other, error_out_of_memory};
 
+/// Everything a speculative decode pass may change about the dictionary, kept
+/// so that the pass can be undone.
+///
+/// `start` is not in here: only draining output moves it, and no decode pass
+/// drains.
+#[must_use]
+pub(crate) struct LzSpeculation {
+    pos: usize,
+    full: usize,
+    limit: usize,
+    pending_len: usize,
+    pending_dist: usize,
+    /// The stretch of dictionary the pass may write over, saved because it is
+    /// still live history. Empty until the dictionary has wrapped: nothing
+    /// reads the bytes from `pos` on until then.
+    saved: Vec<u8>,
+}
+
 #[derive(Default)]
 pub(crate) struct LzDecoder {
     buf: Vec<u8>,
@@ -13,6 +31,8 @@ pub(crate) struct LzDecoder {
     pending_len: usize,
     pending_dist: usize,
     allocated: bool,
+    /// While a speculative pass runs, the position it may not write past.
+    spec_end: Option<usize>,
 }
 
 impl LzDecoder {
@@ -186,7 +206,65 @@ impl LzDecoder {
     }
 
     pub(crate) fn available_space(&self) -> usize {
-        self.buf_size - self.pos
+        self.spec_end.unwrap_or(self.buf_size) - self.pos
+    }
+
+    /// Starts a speculative decode pass that may write at most `max_output`
+    /// bytes.
+    ///
+    /// Undoing one means putting the dictionary bytes back, not only the
+    /// positions. Once the dictionary has wrapped, the bytes from `pos` on are
+    /// the oldest history still in the window, and a match at a large enough
+    /// distance reads them back.
+    ///
+    /// Returns an out of memory error if reservation fails.
+    pub(crate) fn begin_speculation(&mut self, max_output: usize) -> crate::Result<LzSpeculation> {
+        debug_assert!(
+            self.spec_end.is_none(),
+            "a speculative pass is already open"
+        );
+        // What the saving below rests on: the bytes from `pos` on are either
+        // history a match can still reach or ground no read has ever covered.
+        debug_assert!(
+            self.full == self.pos || self.full == self.buf_size,
+            "the dictionary is neither still filling nor full"
+        );
+        let end = self.pos.saturating_add(max_output).min(self.buf_size);
+
+        let mut saved = Vec::new();
+        if self.full == self.buf_size {
+            saved
+                .try_reserve_exact(end - self.pos)
+                .map_err(|_| error_out_of_memory("speculation backup too large"))?;
+            saved.extend_from_slice(&self.buf[self.pos..end]);
+        }
+
+        self.spec_end = Some(end);
+
+        Ok(LzSpeculation {
+            pos: self.pos,
+            full: self.full,
+            limit: self.limit,
+            pending_len: self.pending_len,
+            pending_dist: self.pending_dist,
+            saved,
+        })
+    }
+
+    /// Takes the saved state so that a pass cannot end without saying whether
+    /// what it did is kept.
+    pub(crate) fn commit_speculation(&mut self, _spec: LzSpeculation) {
+        self.spec_end = None;
+    }
+
+    pub(crate) fn rollback_speculation(&mut self, spec: LzSpeculation) {
+        self.pos = spec.pos;
+        self.full = spec.full;
+        self.limit = spec.limit;
+        self.pending_len = spec.pending_len;
+        self.pending_dist = spec.pending_dist;
+        self.buf[spec.pos..spec.pos + spec.saved.len()].copy_from_slice(&spec.saved);
+        self.spec_end = None;
     }
 
     pub(crate) fn has_output(&self) -> bool {

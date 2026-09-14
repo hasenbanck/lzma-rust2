@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `flush()` of the multi-threaded XZ, LZMA2 and LZIP writers now waits for the pending work, so the flushed data reaches
   the inner writer.
 - Reduce stack usage of `XzWriter` by boxing `FilterWriter` enum variants.
+- Allow the user to drive `LzmaStream` using only `Action::Run`.
 
 ## 0.20.1 - 2026-08-30
 

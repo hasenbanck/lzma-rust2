@@ -2,8 +2,10 @@ use alloc::vec::Vec;
 
 use super::{HEADER_SIZE, LZIP_MAGIC, LZIP_VERSION, TRAILER_SIZE, decode_dict_size};
 use crate::{
-    Action, LzmaStream, Result, Status, StreamResult, crc::Crc32, error_eof, error_invalid_data,
-    error_out_of_memory, lzma_reader::get_memory_usage,
+    Action, LzmaStream, Result, Status, StreamResult,
+    crc::Crc32,
+    error_eof, error_invalid_data, error_out_of_memory,
+    lzma_reader::{get_memory_usage, speculation_memory_usage},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -305,7 +307,7 @@ impl LzipStream {
     /// Sets up the payload decoder for a member.
     fn start_member(&mut self, dict_size: u32) -> Result<()> {
         // Check the memory limit before allocating anything.
-        let need_mem = get_memory_usage(dict_size, 3, 0)?;
+        let need_mem = get_memory_usage(dict_size, 3, 0)? + speculation_memory_usage(3, 0);
         if self.mem_limit_kb < need_mem {
             return Err(error_out_of_memory(
                 "needed memory too big for mem_limit_kb",
