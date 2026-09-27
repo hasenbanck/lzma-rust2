@@ -104,7 +104,9 @@ impl LzEncoder {
             extra_size_before,
             extra_size_after,
             match_len_max,
-        ) + mf.get_memory_usage(dict_size)
+        )
+        .div_ceil(1024)
+            + mf.get_memory_usage(dict_size)
     }
 
     pub(crate) fn new_hc4(
@@ -571,5 +573,36 @@ unsafe fn normalize_sse41(positions: &mut [i32], norm_offset: i32) {
         }
 
         normalize_scalar(suffix, norm_offset);
+    }
+}
+
+#[cfg(test)]
+mod memory_usage_tests {
+    use super::*;
+
+    #[test]
+    fn buffer_allocation_is_reported_in_rounded_up_kibibytes() {
+        let dict_size = 16 << 20;
+        let extra_size_before = 0;
+        let extra_size_after = 0;
+        let match_len_max = 273;
+        let buffer_bytes = get_buf_size(
+            dict_size,
+            extra_size_before,
+            extra_size_after,
+            match_len_max,
+        );
+        let match_finder_kib = MfType::Bt4.get_memory_usage(dict_size);
+
+        let estimated = LzEncoder::get_memory_usage(
+            dict_size,
+            extra_size_before,
+            extra_size_after,
+            match_len_max,
+            MfType::Bt4,
+        );
+
+        assert_eq!(estimated, buffer_bytes.div_ceil(1024) + match_finder_kib);
+        assert!(estimated < buffer_bytes + match_finder_kib);
     }
 }
