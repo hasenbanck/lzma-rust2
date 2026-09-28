@@ -141,11 +141,19 @@ impl LzmaOptions {
         }
     }
 
-    /// Returns the estimated memory usage in kilobytes for these options.
+    /// Returns the estimated memory usage in KiB for these options.
     pub fn get_memory_usage(&self) -> u32 {
         let dict_size = self.dict_size;
         let extra_size_before = get_extra_size_before(dict_size);
-        70 + LzmaEncoder::get_mem_usage(self.mode, dict_size, extra_size_before, self.mf)
+        LzmaEncoder::get_mem_usage(
+            self.mode,
+            self.lc,
+            self.lp,
+            dict_size,
+            extra_size_before,
+            self.mf,
+        )
+        .saturating_add(70)
     }
 
     /// Returns the LZMA properties byte for these options.
