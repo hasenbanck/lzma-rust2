@@ -113,20 +113,22 @@ impl LzmaEncoder {
 
     pub(crate) fn get_mem_usage(
         mode: EncodeMode,
+        lc: u32,
+        lp: u32,
         dict_size: u32,
         extra_size_before: u32,
         mf: MfType,
     ) -> u32 {
-        let mut m = 80;
-        match mode {
-            EncodeMode::Fast => {
-                m += FastEncoderMode::get_memory_usage(dict_size, extra_size_before, mf);
-            }
+        // Keep the existing 80 KiB allowance for the default lc=3, lp=0,
+        // separating its 12 KiB of literal models from the fixed overhead.
+        let m = 68u32.saturating_add(LiteralEncoder::get_mem_usage(lc, lp));
+        let mode_usage = match mode {
+            EncodeMode::Fast => FastEncoderMode::get_memory_usage(dict_size, extra_size_before, mf),
             EncodeMode::Normal => {
-                m += NormalEncoderMode::get_memory_usage(dict_size, extra_size_before, mf);
+                NormalEncoderMode::get_memory_usage(dict_size, extra_size_before, mf)
             }
-        }
-        m
+        };
+        m.saturating_add(mode_usage)
     }
 }
 
@@ -618,6 +620,12 @@ struct LiteralSubEncoder {
 }
 
 impl LiteralEncoder {
+    fn get_mem_usage(lc: u32, lp: u32) -> u32 {
+        1u32.checked_shl(lc.saturating_add(lp))
+            .and_then(|count| count.checked_mul(size_of::<LiteralSubEncoder>() as u32))
+            .map_or(u32::MAX, |bytes| bytes.div_ceil(1024))
+    }
+
     pub(crate) fn new(lc: u32, lp: u32) -> Self {
         Self {
             coder: LiteralCoder::new(lc, lp),
@@ -871,6 +879,27 @@ impl LengthEncoder {
             self.prices[pos_state][i] = choice0_price
                 + choice1_price
                 + RangeEncoder::get_bit_tree_price(&mut self.coder.high, (i - start) as u32)
+        }
+    }
+}
+
+#[cfg(test)]
+mod memory_usage_tests {
+    use super::*;
+
+    #[test]
+    fn literal_memory_estimate_covers_allocated_models() {
+        for lc in 0..=8 {
+            for lp in 0..=4 {
+                let encoder = LiteralEncoder::new(lc, lp);
+                let allocated_bytes =
+                    encoder.sub_encoders.capacity() * size_of::<LiteralSubEncoder>();
+                assert_eq!(
+                    LiteralEncoder::get_mem_usage(lc, lp) as usize,
+                    allocated_bytes.div_ceil(1024),
+                    "lc={lc}, lp={lp}"
+                );
+            }
         }
     }
 }

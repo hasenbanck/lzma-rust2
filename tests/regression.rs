@@ -191,6 +191,48 @@ mod allocation_tracking {
 }
 
 #[test]
+fn encoder_memory_estimate_covers_custom_literal_context_peak() {
+    fn peak(options: &LzmaOptions) -> usize {
+        allocation_tracking::peak(|| {
+            let mut writer = LzmaWriter::new_use_header(std::io::sink(), options, None).unwrap();
+            writer.write_all(include_bytes!("../LICENSE")).unwrap();
+            writer.finish().unwrap();
+        })
+    }
+
+    for preset in [0, 5] {
+        let mut default = LzmaOptions::with_preset(preset);
+        default.dict_size = 1 << 16;
+        let mut custom = default.clone();
+        custom.lc = 8;
+        custom.lp = 4;
+
+        let default_peak = peak(&default);
+        let custom_peak = peak(&custom);
+        // Hold the mode and dictionary constant to isolate literal-model growth.
+        let measured_growth = custom_peak
+            .checked_sub(default_peak)
+            .expect("custom literal contexts used less memory than the default");
+        let estimated_growth =
+            (custom.get_memory_usage() - default.get_memory_usage()) as usize * 1024;
+
+        assert!(
+            measured_growth.abs_diff(estimated_growth) <= 64 * 1024,
+            "preset {preset}: peak grew by {measured_growth} bytes, estimate grew by {estimated_growth} bytes"
+        );
+        for (options, measured_peak) in [(&default, default_peak), (&custom, custom_peak)] {
+            assert!(
+                measured_peak <= options.get_memory_usage() as usize * 1024,
+                "preset {preset}, lc={}, lp={}: peak {measured_peak} bytes exceeds estimate {} KiB",
+                options.lc,
+                options.lp,
+                options.get_memory_usage()
+            );
+        }
+    }
+}
+
+#[test]
 fn xz_rejects_multiple_lzma2_filters() {
     let mut input = b"\xfd7zXZ\0\0\0".to_vec();
     input.extend_from_slice(&crc32(&[0, 0]).to_le_bytes());
