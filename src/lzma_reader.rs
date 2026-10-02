@@ -572,9 +572,19 @@ enum LzmaState {
     Finished,
 }
 
+/// The most output one decode pass of the sans-I/O decoders may produce.
+///
+/// The dictionary window grows with the output (`LzDecoder::set_limit` makes the
+/// pass's limit addressable), so a pass that may fill all of the free dictionary
+/// makes the window as large as the size the stream header declares, before a
+/// single byte is decoded. The `Read` adapters bound a pass by the caller's
+/// buffer; this bounds the streaming passes the same way. The caller drains
+/// between passes, so the bound only sets how much is decoded per round.
+const PASS_OUTPUT_MAX: usize = 64 << 10;
+
 /// Output space the decoder may fill before it has to stop.
 fn room_for(lz: &LzDecoder, remaining_size: u64) -> usize {
-    let mut room = lz.available_space();
+    let mut room = lz.available_space().min(PASS_OUTPUT_MAX);
     if remaining_size <= u64::MAX / 2 {
         room = room.min(remaining_size.min(usize::MAX as u64) as usize);
     }

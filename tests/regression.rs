@@ -697,6 +697,43 @@ mod dictionary_follows_output {
         (out, peak)
     }
 
+    /// The same through the sans-I/O decoders (`XzStream`, `LzmaStream`), which share the
+    /// dictionary code with the readers: input in small slices, output into a small buffer.
+    fn decode_peak_stream(input: &[u8], xz: bool) -> (Vec<u8>, usize) {
+        use lzma_rust2::{Action, LzmaStream, Status, XzStream};
+        let mut out = Vec::new();
+        let peak = allocation_tracking::peak(|| {
+            let mut xz_stream = XzStream::new(false);
+            let mut lzma_stream = LzmaStream::new_mem_limit(u32::MAX, None);
+            let mut buf = [0u8; 4096];
+            let mut pos = 0;
+            loop {
+                let end = (pos + 64).min(input.len());
+                let action = if end == input.len() {
+                    Action::Finish
+                } else {
+                    Action::Run
+                };
+                let r = if xz {
+                    xz_stream.process(&input[pos..end], &mut buf, action)
+                } else {
+                    lzma_stream.process(&input[pos..end], &mut buf, action)
+                }
+                .unwrap();
+                pos += r.bytes_consumed;
+                out.extend_from_slice(&buf[..r.bytes_produced]);
+                if r.status == Status::StreamEnd {
+                    break;
+                }
+                assert!(
+                    r.bytes_consumed > 0 || r.bytes_produced > 0,
+                    "no progress at input {pos}"
+                );
+            }
+        });
+        (out, peak)
+    }
+
     const DATA: &[u8] = b"hello world, hello world, hello world, hello world";
     const LIMIT: usize = 4 << 20;
 
@@ -718,13 +755,17 @@ mod dictionary_follows_output {
         let crc = crc32(&compressed[12..12 + header_len - 4]);
         compressed[12 + header_len - 4..12 + header_len].copy_from_slice(&crc.to_le_bytes());
 
-        let (out, peak) = decode_peak(&compressed, true);
-        assert_eq!(out, DATA);
-        assert!(
-            peak < LIMIT,
-            "peak {peak} bytes for {} bytes of output",
-            out.len()
-        );
+        for (name, (out, peak)) in [
+            ("XzReader", decode_peak(&compressed, true)),
+            ("XzStream", decode_peak_stream(&compressed, true)),
+        ] {
+            assert_eq!(out, DATA, "{name}");
+            assert!(
+                peak < LIMIT,
+                "{name}: peak {peak} bytes for {} bytes of output",
+                out.len()
+            );
+        }
     }
 
     #[test]
@@ -739,13 +780,17 @@ mod dictionary_follows_output {
         compressed[1..5].copy_from_slice(&lzma_rust2::DICT_SIZE_MAX.to_le_bytes());
         compressed[5..13].copy_from_slice(&u64::MAX.to_le_bytes());
 
-        let (out, peak) = decode_peak(&compressed, false);
-        assert_eq!(out, DATA);
-        assert!(
-            peak < LIMIT,
-            "peak {peak} bytes for {} bytes of output",
-            out.len()
-        );
+        for (name, (out, peak)) in [
+            ("LzmaReader", decode_peak(&compressed, false)),
+            ("LzmaStream", decode_peak_stream(&compressed, false)),
+        ] {
+            assert_eq!(out, DATA, "{name}");
+            assert!(
+                peak < LIMIT,
+                "{name}: peak {peak} bytes for {} bytes of output",
+                out.len()
+            );
+        }
     }
 
     /// Output larger than the initial growth step, with matches reaching back across the
@@ -773,6 +818,9 @@ mod dictionary_follows_output {
             let (out, peak) = decode_peak(&compressed, xz);
             assert!(out == data, "xz={xz}: output differs");
             assert!(peak < 64 << 20, "xz={xz}: peak {peak} bytes");
+            let (out, peak) = decode_peak_stream(&compressed, xz);
+            assert!(out == data, "xz={xz} stream: output differs");
+            assert!(peak < 64 << 20, "xz={xz} stream: peak {peak} bytes");
         }
     }
 }
