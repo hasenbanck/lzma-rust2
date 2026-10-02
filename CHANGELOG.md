@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `LzmaOptions::get_memory_usage()` underestimating memory for custom `lc` and `lp` values.
 - Fix the decoder allocating and zero-filling the whole dictionary size declared in the stream header before
   decoding anything.
+- Fix `LzmaStream` growing the dictionary to the size declared in the header within its first decode pass.
 
 ## 0.21.0 - 2026-09-18
 
