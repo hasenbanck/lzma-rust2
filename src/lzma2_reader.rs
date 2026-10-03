@@ -243,7 +243,7 @@ impl<R: Read> Read for Lzma2Reader<R> {
             if !self.is_lzma_chunk {
                 self.lz.copy_uncompressed(&mut self.inner, copy_size_max)?;
             } else {
-                self.lz.set_limit(copy_size_max);
+                self.lz.set_limit(copy_size_max)?;
                 if let Some(lzma) = self.lzma.as_mut() {
                     lzma.decode(&mut self.lz, &mut self.rc)?;
                 }

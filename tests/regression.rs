@@ -669,3 +669,110 @@ fn repeated_flush_reports_worker_failure() {
         );
     }
 }
+
+/// The decoder's dictionary must grow with the decoded data, not be allocated at the size the
+/// stream header declares: a few bytes of input could otherwise make the reader commit up to
+/// 4 GiB before it decodes anything.
+mod dictionary_follows_output {
+    use super::*;
+
+    /// Decodes `input` completely and returns (output, peak live heap bytes).
+    fn decode_peak(input: &[u8], xz: bool) -> (Vec<u8>, usize) {
+        let mut out = Vec::new();
+        let peak = allocation_tracking::peak(|| {
+            let mut reader: Box<dyn Read> = if xz {
+                Box::new(XzReader::new(input, false))
+            } else {
+                Box::new(LzmaReader::new_mem_limit(input, u32::MAX, None).unwrap())
+            };
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = reader.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                out.extend_from_slice(&buf[..n]);
+            }
+        });
+        (out, peak)
+    }
+
+    const DATA: &[u8] = b"hello world, hello world, hello world, hello world";
+    const LIMIT: usize = 4 << 20;
+
+    /// Header-declared dictionary sizes are what an attacker controls; the encoder can't build
+    /// such a dictionary, so encode with a small one and patch the header.
+    #[test]
+    fn xz_small_stream_declaring_a_3_gib_dictionary() {
+        let mut options = XzOptions::with_preset(0);
+        options.lzma_options.dict_size = 4096;
+        let mut writer = lzma_rust2::XzWriter::new(Vec::new(), options).unwrap();
+        writer.write_all(DATA).unwrap();
+        let mut compressed = writer.finish().unwrap();
+
+        // Block header after the 12-byte stream header: size, flags, filter id 0x21,
+        // properties size 1, LZMA2 dictionary byte, padding, CRC32.
+        let header_len = (usize::from(compressed[12]) + 1) * 4;
+        assert_eq!(&compressed[14..16], &[0x21, 0x01]);
+        compressed[16] = 39; // 3 GiB
+        let crc = crc32(&compressed[12..12 + header_len - 4]);
+        compressed[12 + header_len - 4..12 + header_len].copy_from_slice(&crc.to_le_bytes());
+
+        let (out, peak) = decode_peak(&compressed, true);
+        assert_eq!(out, DATA);
+        assert!(
+            peak < LIMIT,
+            "peak {peak} bytes for {} bytes of output",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn lzma_small_stream_declaring_a_4_gib_dictionary_and_unknown_size() {
+        let mut options = LzmaOptions::with_preset(0);
+        options.dict_size = 4096;
+        let mut writer = LzmaWriter::new_use_header(Vec::new(), &options, None).unwrap();
+        writer.write_all(DATA).unwrap();
+        let mut compressed = writer.finish().unwrap();
+
+        // .lzma header: properties byte, dictionary size (u32 LE), uncompressed size (u64 LE).
+        compressed[1..5].copy_from_slice(&lzma_rust2::DICT_SIZE_MAX.to_le_bytes());
+        compressed[5..13].copy_from_slice(&u64::MAX.to_le_bytes());
+
+        let (out, peak) = decode_peak(&compressed, false);
+        assert_eq!(out, DATA);
+        assert!(
+            peak < LIMIT,
+            "peak {peak} bytes for {} bytes of output",
+            out.len()
+        );
+    }
+
+    /// Output larger than the initial growth step, with matches reaching back across the
+    /// growth boundaries, still decodes to the same bytes.
+    #[test]
+    fn grows_across_many_steps() {
+        let data: Vec<u8> = (0..3_000_000u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8 ^ (i / 1000) as u8)
+            .chain((0..2_000_000u32).map(|i| (i % 251) as u8))
+            .collect();
+        for xz in [false, true] {
+            let compressed = if xz {
+                let mut options = XzOptions::with_preset(6);
+                options.lzma_options.dict_size = 64 << 20;
+                let mut w = lzma_rust2::XzWriter::new(Vec::new(), options).unwrap();
+                w.write_all(&data).unwrap();
+                w.finish().unwrap()
+            } else {
+                let mut options = LzmaOptions::with_preset(6);
+                options.dict_size = 64 << 20;
+                let mut w = LzmaWriter::new_use_header(Vec::new(), &options, None).unwrap();
+                w.write_all(&data).unwrap();
+                w.finish().unwrap()
+            };
+            let (out, peak) = decode_peak(&compressed, xz);
+            assert!(out == data, "xz={xz}: output differs");
+            assert!(peak < 64 << 20, "xz={xz}: peak {peak} bytes");
+        }
+    }
+}

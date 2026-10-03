@@ -61,15 +61,43 @@ impl LzDecoder {
 
     /// Grows the preset buffer to the dictionary size on first use.
     /// Returns an out of memory error if reservation fails.
+    ///
+    /// The window is not allocated up front: it grows with the decoded data (see
+    /// [`Self::grow_to`]), so memory follows the output rather than the dictionary size
+    /// declared in the stream header. Bytes never written read as zero either way.
     pub(crate) fn ensure_capacity(&mut self) -> crate::Result<()> {
         if self.allocated {
             return Ok(());
         }
-        self.buf
-            .try_reserve_exact(self.buf_size - self.buf.len())
-            .map_err(|_| error_out_of_memory("dictionary allocation too large"))?;
-        self.buf.resize(self.buf_size, 0);
+        if self.buf_size > isize::MAX as usize {
+            return Err(error_out_of_memory("dictionary allocation too large"));
+        }
         self.allocated = true;
+        Ok(())
+    }
+
+    /// Makes `buf[..len]` addressable, growing the window geometrically (zero-filled),
+    /// never past `buf_size`.
+    #[inline]
+    fn grow_to(&mut self, len: usize) -> crate::Result<()> {
+        if len <= self.buf.len() {
+            return Ok(());
+        }
+        self.grow_slow(len)
+    }
+
+    #[cold]
+    fn grow_slow(&mut self, len: usize) -> crate::Result<()> {
+        const MIN_GROWTH: usize = 64 * 1024;
+        let target = len
+            .max(self.buf.len().saturating_mul(2))
+            .max(MIN_GROWTH)
+            .min(self.buf_size);
+        debug_assert!(target >= len);
+        self.buf
+            .try_reserve_exact(target - self.buf.len())
+            .map_err(|_| error_out_of_memory("dictionary allocation too large"))?;
+        self.buf.resize(target, 0);
         Ok(())
     }
 
@@ -78,11 +106,16 @@ impl LzDecoder {
         self.pos = 0;
         self.full = 0;
         self.limit = 0;
-        self.buf[self.buf_size - 1] = 0;
+        // `get_byte` at position 0 reads the last byte of the window. Bytes past
+        // `buf.len()` were never written and already read as zero.
+        if let Some(last) = self.buf.get_mut(self.buf_size - 1) {
+            *last = 0;
+        }
     }
 
-    pub(crate) fn set_limit(&mut self, out_max: usize) {
+    pub(crate) fn set_limit(&mut self, out_max: usize) -> crate::Result<()> {
         self.limit = (out_max + self.pos).min(self.buf_size);
+        self.grow_to(self.limit)
     }
 
     pub(crate) fn has_space(&self) -> bool {
@@ -186,6 +219,7 @@ impl LzDecoder {
         len: usize,
     ) -> crate::Result<()> {
         let copy_size = (self.buf_size - self.pos).min(len);
+        self.grow_to(self.pos + copy_size)?;
         let buf = &mut self.buf[self.pos..(self.pos + copy_size)];
         in_data.read_exact(buf)?;
         self.pos += copy_size;
@@ -197,6 +231,7 @@ impl LzDecoder {
 
     pub(crate) fn copy_uncompressed_from_slice(&mut self, data: &[u8]) -> crate::Result<()> {
         let copy_size = (self.buf_size - self.pos).min(data.len());
+        self.grow_to(self.pos + copy_size)?;
         self.buf[self.pos..self.pos + copy_size].copy_from_slice(&data[..copy_size]);
         self.pos += copy_size;
         if self.full < self.pos {

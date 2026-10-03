@@ -468,7 +468,7 @@ impl<R: Read> LzmaReader<R> {
             if self.remaining_size <= u64::MAX / 2 && self.remaining_size < len {
                 copy_size_max = self.remaining_size;
             }
-            self.lz.set_limit(copy_size_max as usize);
+            self.lz.set_limit(copy_size_max as usize)?;
 
             match self.decode_buffered() {
                 Ok(_) => {}
@@ -992,7 +992,9 @@ impl LzmaCore {
         }
 
         let pos_before = lz.get_pos();
-        lz.set_limit(room);
+        if let Err(error) = lz.set_limit(room) {
+            return (0, Err(error));
+        }
 
         let mut rc =
             RangeDecoder::from_parts(SliceRangeReader::new(buf, real_len, symbol_limit), self.rc);
