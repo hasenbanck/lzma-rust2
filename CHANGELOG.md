@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `Bcj2Reader::try_new` for checked stream counts.
 ### Fixed
 
+- Retry interrupted BCJ2 reads without losing fragmented branch addresses.
 - Reject truncated BCJ2 streams and incomplete branch addresses.
 - Validate the BCJ2 range stream even when the declared output is empty.
 - Preserve BCJ2 input errors after returning decoded bytes.

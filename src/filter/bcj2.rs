@@ -1,4 +1,10 @@
 //! The BCJ2 filter is a branch converter for 32-bit x86 executables (version 2).
+//!
+//! BCJ2 splits input into four raw streams: MAIN holds literal bytes, CALL and
+//! JUMP hold converted absolute addresses in big-endian order, and RC holds
+//! range-coded conversion decisions. The original relative addresses are
+//! little-endian. These streams are not compressed; callers can compress each
+//! one separately. Decoding uses a starting position of zero.
 
 mod decode;
 
@@ -63,6 +69,11 @@ impl Default for Bcj2Coder {
 }
 
 /// Reader for BCJ2-filtered data with multiple input streams.
+///
+/// The inputs contain the raw MAIN, CALL, JUMP and RC streams, in that order.
+/// Reading stops at the declared output size. Call [`Self::finish`] to also
+/// check that all four input streams have been consumed. A decoding or input
+/// error is reported again on later reads.
 pub struct Bcj2Reader<R> {
     base: Bcj2Coder,
     inputs: Vec<R>,
@@ -163,6 +174,7 @@ impl<R: Read> Read for Bcj2Reader<R> {
                 break;
             }
             let mut total_read = self.extra_read_sizes[self.decoder.state];
+            self.extra_read_sizes[self.decoder.state] = 0;
             {
                 let buf_index = self.decoder.state * BUF_SIZE;
                 let from = self.decoder.bufs[self.decoder.state];
@@ -181,6 +193,14 @@ impl<R: Read> Read for Bcj2Reader<R> {
                 let cur_size = match read {
                     Ok(size) => size,
                     Err(error) => {
+                        #[cfg(feature = "std")]
+                        if error.kind() == std::io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                        #[cfg(not(feature = "std"))]
+                        if matches!(error, crate::Error::Interrupted) {
+                            continue;
+                        }
                         return self.fail(result_size, error);
                     }
                 };
@@ -212,19 +232,6 @@ impl<R: Read> Read for Bcj2Reader<R> {
     }
 }
 
-impl<R> Bcj2Reader<R> {
-    fn fail(&mut self, result_size: usize, error: crate::Error) -> crate::Result<usize> {
-        let failure = StickyError::new(error);
-        let reported = failure.report();
-        self.failure = Some(failure);
-        if result_size == 0 {
-            Err(reported)
-        } else {
-            Ok(result_size)
-        }
-    }
-}
-
 impl<R: Read> Bcj2Reader<R> {
     /// Checks that the output and all four input streams have ended, returning the inputs.
     ///
@@ -249,11 +256,32 @@ impl<R: Read> Bcj2Reader<R> {
                     Ok(0) => break,
                     Ok(_) => return Err(error_invalid_data("trailing BCJ2 input")),
                     Err(error) => {
+                        #[cfg(feature = "std")]
+                        if error.kind() == std::io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                        #[cfg(not(feature = "std"))]
+                        if matches!(error, crate::Error::Interrupted) {
+                            continue;
+                        }
                         return Err(error);
                     }
                 }
             }
         }
         Ok(self.inputs)
+    }
+}
+
+impl<R> Bcj2Reader<R> {
+    fn fail(&mut self, result_size: usize, error: crate::Error) -> crate::Result<usize> {
+        let failure = StickyError::new(error);
+        let reported = failure.report();
+        self.failure = Some(failure);
+        if result_size == 0 {
+            Err(reported)
+        } else {
+            Ok(result_size)
+        }
     }
 }

@@ -220,3 +220,95 @@ fn truncated_reference_streams_and_wrong_sizes_are_rejected() {
         }
     }
 }
+
+struct Fragmented<R> {
+    inner: R,
+    chunk_size: usize,
+    interrupt: bool,
+}
+
+impl<R: Read> Read for Fragmented<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.interrupt = !self.interrupt;
+        if self.interrupt {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
+        let size = buf.len().min(self.chunk_size);
+        self.inner.read(&mut buf[..size])
+    }
+}
+
+#[test]
+fn reference_streams_decode_across_buffer_boundaries() {
+    for vector in reference_vectors() {
+        for input_size in [1, 3, 5, 1 << 18] {
+            for output_size in [1, 4, 4096] {
+                let inputs = vector
+                    .streams
+                    .iter()
+                    .map(|part| Fragmented {
+                        inner: part.as_slice(),
+                        chunk_size: input_size,
+                        interrupt: false,
+                    })
+                    .collect();
+                let mut reader = Bcj2Reader::new(inputs, vector.original.len() as u64);
+                let mut output = Vec::new();
+                let mut buf = vec![0; output_size];
+                loop {
+                    let size = reader.read(&mut buf).unwrap_or_else(|error| {
+                        panic!(
+                            "{} input={input_size} output={output_size}: {error}",
+                            vector.name
+                        )
+                    });
+                    if size == 0 {
+                        break;
+                    }
+                    output.extend_from_slice(&buf[..size]);
+                }
+                assert_eq!(output, vector.original, "{}", vector.name);
+                reader.finish().unwrap_or_else(|error| {
+                    panic!(
+                        "{} input={input_size} output={output_size}: {error}",
+                        vector.name
+                    )
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn fragmented_and_interrupted_address_words_preserve_output() {
+    let parts = [
+        &[0xE8][..],
+        &[0, 0, 0, 9][..],
+        &[][..],
+        &[0, 0x7F, 0xFF, 0xFC, 0][..],
+    ];
+    for input_size in [1, 2, 3, 5] {
+        for output_size in [1, 2, 3, 5] {
+            let inputs = parts
+                .iter()
+                .map(|part| Fragmented {
+                    inner: *part,
+                    chunk_size: input_size,
+                    interrupt: false,
+                })
+                .collect();
+            let mut reader = Bcj2Reader::new(inputs, 5);
+            let mut output = Vec::new();
+            let mut buf = vec![0; output_size];
+            loop {
+                let size = reader.read(&mut buf).unwrap();
+                if size == 0 {
+                    break;
+                }
+                output.extend_from_slice(&buf[..size]);
+            }
+            assert_eq!(output, [0xE8, 4, 0, 0, 0]);
+            reader.finish().unwrap();
+        }
+    }
+}
