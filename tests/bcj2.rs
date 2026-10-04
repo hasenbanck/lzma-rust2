@@ -170,6 +170,7 @@ fn reference_vectors() -> Vec<ReferenceVector> {
     }
     include_str!("fixtures/bcj2.txt")
         .lines()
+        .chain(include_str!("fixtures/bcj2-scanning.txt").lines())
         .filter(|line| !line.starts_with('#'))
         .map(|line| {
             let fields: Vec<_> = line.split('\t').collect();

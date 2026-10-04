@@ -16,6 +16,17 @@ use crate::{Read, StickyError, error_eof, error_invalid_data, error_invalid_inpu
 
 const BUF_SIZE: usize = 1 << 18;
 
+// Keep the fixed-width reduction separate from the stateful codec loops.
+#[inline(never)]
+fn contains_marker(block: &[u8; 16], prev: u8) -> bool {
+    let mut found = ((block[0] & 0xFE) == 0xE8) | ((prev == 0x0F) & ((block[0] & 0xF0) == 0x80));
+    for i in 1..16 {
+        found |=
+            ((block[i] & 0xFE) == 0xE8) | ((block[i - 1] == 0x0F) & ((block[i] & 0xF0) == 0x80));
+    }
+    found
+}
+
 const BCJ2_NUM_STREAMS: usize = 4;
 
 const BCJ2_STREAM_MAIN: usize = 0;
@@ -283,5 +294,34 @@ impl<R> Bcj2Reader<R> {
         } else {
             Ok(result_size)
         }
+    }
+}
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marker_blocks_preserve_previous_byte_context() {
+        assert!(!contains_marker(&[0x90; 16], 0x0F));
+        for position in 0..16 {
+            for byte in 0..=u8::MAX {
+                let mut block = [0x90; 16];
+                block[position] = byte;
+                assert_eq!(contains_marker(&block, 0), matches!(byte, 0xE8 | 0xE9));
+                if position != 0 {
+                    block[position - 1] = 0x0F;
+                }
+                assert_eq!(
+                    contains_marker(&block, 0x0F),
+                    matches!(byte, 0x80..=0x8F | 0xE8 | 0xE9),
+                    "position={position} byte={byte:02x}"
+                );
+            }
+        }
+        let mut block = [0x90; 16];
+        block[15] = 0x0F;
+        assert!(!contains_marker(&block, 0));
+        block[0] = 0x85;
+        assert!(contains_marker(&block, 0x0F));
     }
 }

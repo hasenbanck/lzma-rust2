@@ -42,7 +42,18 @@ impl Bcj2Decoder {
         self.dest = dest;
     }
 
+    #[inline(never)]
     pub(crate) fn decode(&mut self, src_bufs: &mut [u8], dest_buf: &mut [u8]) -> bool {
+        // A block scan follows one scalar byte; short calls need no scan bookkeeping.
+        if dest_buf.len() - self.dest >= 17 {
+            self.decode_inner::<true>(src_bufs, dest_buf)
+        } else {
+            self.decode_inner::<false>(src_bufs, dest_buf)
+        }
+    }
+
+    #[inline(never)]
+    fn decode_inner<const SCAN: bool>(&mut self, src_bufs: &mut [u8], dest_buf: &mut [u8]) -> bool {
         let dest_lim = dest_buf.len();
         if self.range <= 5 {
             self.state = BCJ2_DEC_STATE_OK;
@@ -114,6 +125,7 @@ impl Bcj2Decoder {
                     if self.temp[3] == 0x0F && (src_bufs[src] & 0xF0) == 0x80 {
                         dest_buf[dest] = src_bufs[src];
                     } else {
+                        let mut scan_end = if num >= 17 { 0 } else { src_lim };
                         loop {
                             let b = src_bufs[src];
                             dest_buf[dest] = b;
@@ -123,6 +135,24 @@ impl Bcj2Decoder {
                                 }
                                 dest += 1;
                                 src += 1;
+                                if SCAN && src >= scan_end {
+                                    scan_end = src_lim;
+                                    while src_lim - src >= 16 {
+                                        let block = &src_bufs[src..src + 16];
+                                        // Leave a trailing 0F for the scalar scan to inspect its next byte.
+                                        if contains_marker(
+                                            block.try_into().unwrap(),
+                                            src_bufs[src - 1],
+                                        ) || block[15] == 0x0F
+                                        {
+                                            scan_end = src + 16;
+                                            break;
+                                        }
+                                        dest_buf[dest..dest + 16].copy_from_slice(block);
+                                        src += 16;
+                                        dest += 16;
+                                    }
+                                }
                                 if src != src_lim {
                                     continue;
                                 }
