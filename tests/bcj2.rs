@@ -72,3 +72,51 @@ fn empty_output_still_requires_a_valid_range_stream() {
     assert!(decode([&[], &[], &[], &[1, 0, 0, 0, 0]], 0).is_err());
     assert!(decode([&[], &[], &[], &[0; 5]], 0).unwrap().is_empty());
 }
+
+#[test]
+fn truncated_inputs_are_rejected() {
+    let converted = [0, 0x7F, 0xFF, 0xFC, 0];
+    for (inputs, size) in [
+        ([&[0x90][..], &[][..], &[][..], &[0; 5][..]], 2),
+        ([&[0x90][..], &[][..], &[][..], &[0; 4][..]], 1),
+        ([&[0xE8][..], &[][..], &[][..], &converted[..]], 5),
+        ([&[0xE9][..], &[][..], &[][..], &converted[..]], 5),
+    ] {
+        assert_eq!(
+            decode(inputs, size).unwrap_err().kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+    }
+}
+
+#[test]
+fn output_before_an_error_is_returned_and_the_error_persists() {
+    let inputs = vec![&[0x90][..], &[][..], &[][..], &[0; 5][..]];
+    let mut reader = Bcj2Reader::new(inputs, 2);
+    let mut buf = [0; 16];
+    assert_eq!(reader.read(&mut buf).unwrap(), 1);
+    assert_eq!(buf[0], 0x90);
+    for _ in 0..3 {
+        assert_eq!(
+            reader.read(&mut buf).unwrap_err().kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+    }
+}
+
+#[test]
+fn valid_call_and_jump_use_their_own_streams() {
+    let absolute = 9u32.to_be_bytes();
+    let control = [0, 0x7F, 0xFF, 0xFC, 0];
+    for opcode in [0xE8, 0xE9] {
+        let (call, jump) = if opcode == 0xE8 {
+            (&absolute[..], &[][..])
+        } else {
+            (&[][..], &absolute[..])
+        };
+        assert_eq!(
+            decode([&[opcode], call, jump, &control], 5).unwrap(),
+            [opcode, 4, 0, 0, 0]
+        );
+    }
+}

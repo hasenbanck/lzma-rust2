@@ -194,20 +194,14 @@ impl<R: Read> Read for Bcj2Reader<R> {
             }
 
             if total_read == 0 {
-                if self.uncompressed_size == 0 {
-                    return self.fail(result_size, error_eof("unexpected end of BCJ2 input"));
-                }
-                break;
+                return self.fail(result_size, error_eof("unexpected end of BCJ2 input"));
             }
 
             if bcj2_is_32bit_stream(self.decoder.state) {
                 let extra_size = total_read & 3;
                 self.extra_read_sizes[self.decoder.state] = extra_size;
                 if total_read < 4 {
-                    if result_size != 0 {
-                        return Ok(result_size);
-                    }
-                    return self.fail(result_size, error_invalid_data("bcj2 decode error:3"));
+                    return self.fail(result_size, error_eof("incomplete BCJ2 address"));
                 }
                 total_read -= extra_size;
             }
