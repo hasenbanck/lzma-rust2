@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Allow the range encoder to defer more than 4 GiB of bytes in very long streams.
 - Bound pending worker jobs and ordered results in multi-threaded writers and the LZIP reader.
 - Join workers after completion, errors, and drop; return thread-spawn failures as I/O errors.
 - Synchronize worker queue closure to prevent missed shutdown wakeups.

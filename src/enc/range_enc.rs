@@ -21,7 +21,7 @@ static PRICES: &[u8; 128] = &[
 pub(crate) struct RangeEncoder<W> {
     low: u64,
     range: u32,
-    cache_size: u32,
+    cache_size: u64,
     cache: u8,
     inner: W,
 }
@@ -241,7 +241,8 @@ impl RangeEncoder<RangeEncoderBuffer> {
 
     #[inline]
     pub(crate) fn get_pending_size(&self) -> u32 {
-        self.inner.pos as u32 + self.cache_size + 5 - 1
+        let size = self.inner.pos as u64 + self.cache_size + 5 - 1;
+        u32::try_from(size).unwrap_or(u32::MAX)
     }
 }
 
@@ -278,5 +279,20 @@ impl Write for RangeEncoderBuffer {
 
     fn flush(&mut self) -> crate::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deferred_bytes_can_exceed_u32() {
+        let mut encoder = RangeEncoder::new(Vec::new());
+        encoder.cache_size = u32::MAX.into();
+        encoder.low = 0xFF000000;
+        encoder.shift_low().unwrap();
+        assert_eq!(encoder.cache_size.checked_sub(u32::MAX.into()), Some(1));
+        assert!(encoder.inner().is_empty());
     }
 }
