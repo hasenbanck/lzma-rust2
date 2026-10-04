@@ -91,6 +91,7 @@ impl<W: Write> RangeEncoder<W> {
         Ok(())
     }
 
+    #[inline]
     pub(crate) fn encode_bit(
         &mut self,
         probs: &mut [u16],
