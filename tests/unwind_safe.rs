@@ -42,6 +42,8 @@ fn filter_readers_are_unwind_safe() {
 fn filter_writers_are_unwind_safe() {
     assert_unwind_safe::<lzma_rust2::filter::bcj::BcjWriter<Vec<u8>>>();
     assert_unwind_safe::<lzma_rust2::filter::delta::DeltaWriter<Vec<u8>>>();
+    #[cfg(feature = "encoder")]
+    assert_unwind_safe::<lzma_rust2::filter::bcj2::Bcj2Writer<Vec<u8>>>();
 }
 
 #[test]

@@ -40,6 +40,8 @@ jobs:
         run: cargo build --workspace --release --all-features
       - name: Build (no_std)
         run: cargo build --workspace --release --no-default-features --features=encoder,optimization
+      - name: Build (safe no_std)
+        run: cargo build --workspace --release --no-default-features --features=encoder
       - name: Build (safe)
         run: cargo build --workspace --no-default-features --features std,encoder,lzip,xz
       - name: Build (decoder)

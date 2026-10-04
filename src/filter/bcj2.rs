@@ -4,13 +4,17 @@
 //! JUMP hold converted absolute addresses in big-endian order, and RC holds
 //! range-coded conversion decisions. The original relative addresses are
 //! little-endian. These streams are not compressed; callers can compress each
-//! one separately. Decoding uses a starting position of zero.
+//! one separately. Encoding and decoding use a starting position of zero.
 
 mod decode;
+#[cfg(feature = "encoder")]
+mod encode;
 
 use alloc::{vec, vec::Vec};
 
 use decode::Bcj2Decoder;
+#[cfg(feature = "encoder")]
+pub use encode::{Bcj2Options, Bcj2Writer};
 
 use crate::{Read, StickyError, error_eof, error_invalid_data, error_invalid_input};
 

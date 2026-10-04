@@ -16,6 +16,7 @@ jobs:
       matrix:
         target:
           - bcj2_decode
+          - bcj2_roundtrip
           - lzip
           - lzip_stream
           - lzma
