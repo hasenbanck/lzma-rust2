@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `Bcj2Reader::try_new` for checked stream counts.
 ### Fixed
 
+- Validate the BCJ2 range stream even when the declared output is empty.
 - Preserve BCJ2 input errors after returning decoded bytes.
 - Reject invalid BCJ2 stream counts without panicking.
 - Keep BCJ2 output sizes above 4 GiB intact on 32-bit targets.

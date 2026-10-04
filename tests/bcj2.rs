@@ -57,3 +57,18 @@ fn input_errors_keep_their_operating_system_code_after_progress() {
         );
     }
 }
+
+fn decode(inputs: [&[u8]; 4], size: u64) -> io::Result<Vec<u8>> {
+    let mut reader = Bcj2Reader::new(inputs.to_vec(), size);
+    let mut output = Vec::new();
+    reader.read_to_end(&mut output)?;
+    Ok(output)
+}
+
+#[test]
+fn empty_output_still_requires_a_valid_range_stream() {
+    assert!(decode([&[], &[], &[], &[]], 0).is_err());
+    assert!(decode([&[], &[], &[], &[0; 4]], 0).is_err());
+    assert!(decode([&[], &[], &[], &[1, 0, 0, 0, 0]], 0).is_err());
+    assert!(decode([&[], &[], &[], &[0; 5]], 0).unwrap().is_empty());
+}
