@@ -224,3 +224,36 @@ impl<R> Bcj2Reader<R> {
         }
     }
 }
+
+impl<R: Read> Bcj2Reader<R> {
+    /// Checks that the output and all four input streams have ended, returning the inputs.
+    ///
+    /// Read the declared output before calling this method. For empty output,
+    /// this method initializes and validates the RC stream. The input readers
+    /// must be limited to their BCJ2 stream lengths: checking for trailing data
+    /// can read one further byte from each input.
+    pub fn finish(mut self) -> crate::Result<Vec<R>> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.report());
+        }
+        if self.uncompressed_size != 0 {
+            return Err(error_invalid_input("BCJ2 output has not been fully read"));
+        }
+        let _ = self.read(&mut [0])?;
+        for i in 0..BCJ2_NUM_STREAMS {
+            if self.decoder.bufs[i] != self.decoder.lims[i] || self.extra_read_sizes[i] != 0 {
+                return Err(error_invalid_data("trailing BCJ2 input"));
+            }
+            loop {
+                match self.inputs[i].read(&mut [0]) {
+                    Ok(0) => break,
+                    Ok(_) => return Err(error_invalid_data("trailing BCJ2 input")),
+                    Err(error) => {
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        Ok(self.inputs)
+    }
+}

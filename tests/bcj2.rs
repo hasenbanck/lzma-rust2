@@ -56,6 +56,7 @@ fn input_errors_keep_their_operating_system_code_after_progress() {
             Some(13)
         );
     }
+    assert_eq!(reader.finish().err().unwrap().raw_os_error(), Some(13));
 }
 
 fn decode(inputs: [&[u8]; 4], size: u64) -> io::Result<Vec<u8>> {
@@ -118,5 +119,104 @@ fn valid_call_and_jump_use_their_own_streams() {
             decode([&[opcode], call, jump, &control], 5).unwrap(),
             [opcode, 4, 0, 0, 0]
         );
+    }
+}
+
+#[test]
+fn checked_construction_and_strict_finish() {
+    assert!(Bcj2Reader::<&[u8]>::try_new(vec![&[][..]; 3], 0).is_err());
+    for inputs in [
+        [&[0x90, 0x90][..], &[][..], &[][..], &[0; 5][..]],
+        [&[0x90][..], &[0][..], &[][..], &[0; 5][..]],
+        [&[0x90][..], &[][..], &[0][..], &[0; 5][..]],
+        [&[0x90][..], &[][..], &[][..], &[0; 6][..]],
+    ] {
+        let mut reader = Bcj2Reader::try_new(inputs.to_vec(), 1).unwrap();
+        let mut buf = [0];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, [0x90]);
+        assert_eq!(
+            reader.finish().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+    let mut reader = Bcj2Reader::try_new(vec![&[0x90][..], &[], &[], &[0; 5]], 1).unwrap();
+    reader.read_exact(&mut [0]).unwrap();
+    assert_eq!(reader.finish().unwrap().len(), 4);
+    assert!(
+        Bcj2Reader::new(vec![&[0x90][..], &[], &[], &[0; 5]], 1)
+            .finish()
+            .is_err()
+    );
+    assert!(
+        Bcj2Reader::new(vec![&[][..], &[], &[], &[0; 5]], 0)
+            .finish()
+            .is_ok()
+    );
+}
+
+struct ReferenceVector {
+    name: String,
+    original: Vec<u8>,
+    streams: [Vec<u8>; 4],
+}
+
+fn reference_vectors() -> Vec<ReferenceVector> {
+    fn bytes(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
+    }
+    include_str!("fixtures/bcj2.txt")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .map(|line| {
+            let fields: Vec<_> = line.split('\t').collect();
+            ReferenceVector {
+                name: fields[0].to_owned(),
+                original: bytes(fields[3]),
+                streams: std::array::from_fn(|i| bytes(fields[i + 4])),
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn truncated_reference_streams_and_wrong_sizes_are_rejected() {
+    for vector in reference_vectors() {
+        for stream in 0..4 {
+            if vector.streams[stream].is_empty() {
+                continue;
+            }
+            let mut streams = vector.streams.clone();
+            streams[stream].pop();
+            let mut reader = Bcj2Reader::new(
+                streams.iter().map(Vec::as_slice).collect(),
+                vector.original.len() as u64,
+            );
+            let mut output = Vec::new();
+            let result = reader
+                .read_to_end(&mut output)
+                .and_then(|_| reader.finish().map(|_| ()));
+            assert!(result.is_err(), "{} stream={stream}", vector.name);
+        }
+        for size in [
+            vector.original.len().saturating_sub(1),
+            vector.original.len() + 1,
+        ] {
+            if size == vector.original.len() {
+                continue;
+            }
+            let mut reader = Bcj2Reader::new(
+                vector.streams.iter().map(Vec::as_slice).collect(),
+                size as u64,
+            );
+            let mut output = Vec::new();
+            let result = reader
+                .read_to_end(&mut output)
+                .and_then(|_| reader.finish().map(|_| ()));
+            assert!(result.is_err(), "{} size={size}", vector.name);
+        }
     }
 }
