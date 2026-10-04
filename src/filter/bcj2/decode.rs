@@ -146,7 +146,7 @@ impl Bcj2Decoder {
                     if src == src_lim {
                         self.temp[3] = src_bufs[src - 1];
                         self.bufs[BCJ2_STREAM_MAIN] = src;
-                        self.ip += num as u32;
+                        self.ip = self.ip.wrapping_add(num as u32);
                         self.dest += num;
                         self.state = if self.bufs[BCJ2_STREAM_MAIN] == self.lims[BCJ2_STREAM_MAIN] {
                             BCJ2_STREAM_MAIN
@@ -167,7 +167,7 @@ impl Bcj2Decoder {
                         self.temp[3] = b;
                         self.bufs[BCJ2_STREAM_MAIN] = src + 1;
                         num += 1;
-                        self.ip += num as u32;
+                        self.ip = self.ip.wrapping_add(num as u32);
                         self.dest += num;
 
                         let prob = &mut self.probs[if b == 0xE8 {
@@ -215,7 +215,7 @@ impl Bcj2Decoder {
                 };
                 self.bufs[cj] = cur + 4;
 
-                self.ip += 4;
+                self.ip = self.ip.wrapping_add(4);
                 val = val.wrapping_sub(self.ip);
                 let dest = self.dest;
                 let rem = dest_lim - dest;
@@ -255,5 +255,38 @@ impl Bcj2Decoder {
         }
 
         true
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instruction_position_wraps() {
+        for (main, call, control, ip, expected) in [
+            (&[0x90][..], &[][..], &[0; 5][..], u32::MAX, &[0x90][..]),
+            (&[0xE8][..], &[][..], &[0; 5][..], u32::MAX, &[0xE8][..]),
+            (
+                &[0xE8][..],
+                &[0, 0, 0, 9][..],
+                &[0, 0x7F, 0xFF, 0xFC, 0][..],
+                u32::MAX - 4,
+                &[0xE8, 9, 0, 0, 0][..],
+            ),
+        ] {
+            let mut decoder = Bcj2Decoder::new();
+            decoder.ip = ip;
+            let mut source = [main, call, &[][..], control].concat();
+            let mut offset = 0;
+            for (i, stream) in [main, call, &[][..], control].iter().enumerate() {
+                decoder.bufs[i] = offset;
+                offset += stream.len();
+                decoder.lims[i] = offset;
+            }
+            let mut output = vec![0; expected.len()];
+            assert!(decoder.decode(&mut source, &mut output));
+            assert_eq!(output, expected);
+        }
     }
 }
