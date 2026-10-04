@@ -33,3 +33,27 @@ fn checked_construction_rejects_invalid_stream_counts() {
     }
     assert!(Bcj2Reader::<&[u8]>::try_new(vec![&[][..]; 4], 0).is_ok());
 }
+
+#[test]
+fn input_errors_keep_their_operating_system_code_after_progress() {
+    struct Source<'a>(&'a [u8]);
+    impl Read for Source<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.0.is_empty() {
+                return Err(io::Error::from_raw_os_error(13));
+            }
+            self.0.read(buf)
+        }
+    }
+    let inputs = vec![Source(&[0x90]), Source(&[]), Source(&[]), Source(&[0; 5])];
+    let mut reader = Bcj2Reader::new(inputs, 2);
+    let mut output = [0; 8];
+    assert_eq!(reader.read(&mut output).unwrap(), 1);
+    assert_eq!(output[0], 0x90);
+    for _ in 0..2 {
+        assert_eq!(
+            reader.read(&mut output).unwrap_err().raw_os_error(),
+            Some(13)
+        );
+    }
+}

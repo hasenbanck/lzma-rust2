@@ -6,7 +6,7 @@ use alloc::{vec, vec::Vec};
 
 use decode::Bcj2Decoder;
 
-use crate::{Read, error_invalid_data, error_invalid_input};
+use crate::{Read, StickyError, error_invalid_data, error_invalid_input};
 
 const BUF_SIZE: usize = 1 << 18;
 
@@ -70,6 +70,7 @@ pub struct Bcj2Reader<R> {
     extra_read_sizes: [usize; BCJ2_NUM_STREAMS],
     read_res: [bool; BCJ2_NUM_STREAMS],
     uncompressed_size: u64,
+    failure: Option<StickyError>,
 }
 
 impl<R> Bcj2Reader<R> {
@@ -82,6 +83,7 @@ impl<R> Bcj2Reader<R> {
             extra_read_sizes: [0; BCJ2_NUM_STREAMS],
             read_res: [true; BCJ2_NUM_STREAMS],
             uncompressed_size,
+            failure: None,
         }
         .init()
     }
@@ -110,6 +112,11 @@ impl<R> Bcj2Reader<R> {
 
 impl<R: Read> Read for Bcj2Reader<R> {
     fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
+        if !buf.is_empty() {
+            if let Some(failure) = &self.failure {
+                return Err(failure.report());
+            }
+        }
         if !buf.is_empty() && self.inputs.len() != BCJ2_NUM_STREAMS {
             return Err(error_invalid_input("BCJ2 requires four input streams"));
         }
@@ -125,7 +132,7 @@ impl<R: Read> Read for Bcj2Reader<R> {
         let mut offset = 0;
         loop {
             if !self.decoder.decode(&mut self.base.bufs, dest_buf) {
-                return Err(error_invalid_data("bcj2 decode error"));
+                return self.fail(result_size, error_invalid_data("bcj2 decode error"));
             }
 
             {
@@ -152,14 +159,18 @@ impl<R: Read> Read for Bcj2Reader<R> {
                 self.decoder.bufs[self.decoder.state] = buf_index;
             }
             if !self.read_res[self.decoder.state] {
-                return Err(error_invalid_data("bcj2 decode error:2"));
+                return self.fail(result_size, error_invalid_data("bcj2 decode error:2"));
             }
 
             loop {
                 let cur_size = BUF_SIZE - total_read;
-                let cur_size = self.inputs[self.decoder.state].read(
+                let read = self.inputs[self.decoder.state].read(
                     &mut self.base.buf_at(self.decoder.state)[total_read..total_read + cur_size],
-                )?;
+                );
+                let cur_size = match read {
+                    Ok(size) => size,
+                    Err(error) => return self.fail(result_size, error),
+                };
                 if cur_size == 0 {
                     break;
                 }
@@ -180,7 +191,7 @@ impl<R: Read> Read for Bcj2Reader<R> {
                     if result_size != 0 {
                         return Ok(result_size);
                     }
-                    return Err(error_invalid_data("bcj2 decode error:3"));
+                    return self.fail(result_size, error_invalid_data("bcj2 decode error:3"));
                 }
                 total_read -= extra_size;
             }
@@ -189,12 +200,25 @@ impl<R: Read> Read for Bcj2Reader<R> {
 
         if self.uncompressed_size == 0 {
             if self.decoder.code != 0 {
-                return Err(error_invalid_data("bcj2 decode error:4"));
+                return self.fail(result_size, error_invalid_data("bcj2 decode error:4"));
             }
             if self.decoder.state != BCJ2_STREAM_MAIN && self.decoder.state != BCJ2_DEC_STATE_ORIG {
-                return Err(error_invalid_data("bcj2 decode error:5"));
+                return self.fail(result_size, error_invalid_data("bcj2 decode error:5"));
             }
         }
         Ok(result_size)
+    }
+}
+
+impl<R> Bcj2Reader<R> {
+    fn fail(&mut self, result_size: usize, error: crate::Error) -> crate::Result<usize> {
+        let failure = StickyError::new(error);
+        let reported = failure.report();
+        self.failure = Some(failure);
+        if result_size == 0 {
+            Err(reported)
+        } else {
+            Ok(result_size)
+        }
     }
 }
