@@ -18,6 +18,12 @@ test = false
 doc = false
 
 [[bin]]
+name = "bcj2_roundtrip"
+path = "fuzz_targets/bcj2_roundtrip.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "bcj2_decode"
 path = "fuzz_targets/bcj2_decode.rs"
 test = false

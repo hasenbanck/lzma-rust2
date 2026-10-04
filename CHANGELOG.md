@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add a bounded, streaming `Bcj2Writer` with four raw outputs and configurable branch conversion limits.
 - Add `Bcj2Reader::finish` for strict input completion.
 - Add `Bcj2Reader::try_new` for checked stream counts.
 - Add `LzipReaderMt::new_mem_limit` to limit decoder and member-buffer memory per LZIP member.
