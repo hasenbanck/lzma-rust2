@@ -138,19 +138,35 @@ impl Bcj2Decoder {
                                 if SCAN && src >= scan_end {
                                     scan_end = src_lim;
                                     while src_lim - src >= 16 {
-                                        let block = &src_bufs[src..src + 16];
-                                        // Leave a trailing 0F for the scalar scan to inspect its next byte.
-                                        if contains_marker(
-                                            block.try_into().unwrap(),
-                                            src_bufs[src - 1],
-                                        ) || block[15] == 0x0F
-                                        {
-                                            scan_end = src + 16;
-                                            break;
+                                        if src_lim - src >= 32 {
+                                            let block = &src_bufs[src..src + 32];
+                                            // The scalar byte and every copied block end without 0F.
+                                            let size = literal_prefix(block.try_into().unwrap(), 0);
+                                            if size != 32 || block[31] == 0x0F {
+                                                if size >= 16 && block[15] != 0x0F {
+                                                    dest_buf[dest..dest + 16]
+                                                        .copy_from_slice(&block[..16]);
+                                                    src += 16;
+                                                    dest += 16;
+                                                }
+                                                scan_end = src + 16;
+                                                break;
+                                            }
+                                            dest_buf[dest..dest + 32].copy_from_slice(block);
+                                            src += 32;
+                                            dest += 32;
+                                        } else {
+                                            let block = &src_bufs[src..src + 16];
+                                            if contains_marker(block.try_into().unwrap(), 0)
+                                                || block[15] == 0x0F
+                                            {
+                                                scan_end = src + 16;
+                                                break;
+                                            }
+                                            dest_buf[dest..dest + 16].copy_from_slice(block);
+                                            src += 16;
+                                            dest += 16;
                                         }
-                                        dest_buf[dest..dest + 16].copy_from_slice(block);
-                                        src += 16;
-                                        dest += 16;
                                     }
                                 }
                                 if src != src_lim {

@@ -27,6 +27,26 @@ fn contains_marker(block: &[u8; 16], prev: u8) -> bool {
     found
 }
 
+// Return whole 16-byte halves before a marker. Separate reductions retain vectorization.
+#[inline(never)]
+fn literal_prefix(block: &[u8; 32], prev: u8) -> usize {
+    let mut first = ((block[0] & 0xFE) == 0xE8) | ((prev == 0x0F) & ((block[0] & 0xF0) == 0x80));
+    for i in 1..16 {
+        first |=
+            ((block[i] & 0xFE) == 0xE8) | ((block[i - 1] == 0x0F) & ((block[i] & 0xF0) == 0x80));
+    }
+    if first {
+        return 0;
+    }
+    let mut second =
+        ((block[16] & 0xFE) == 0xE8) | ((block[15] == 0x0F) & ((block[16] & 0xF0) == 0x80));
+    for i in 17..32 {
+        second |=
+            ((block[i] & 0xFE) == 0xE8) | ((block[i - 1] == 0x0F) & ((block[i] & 0xF0) == 0x80));
+    }
+    if second { 16 } else { 32 }
+}
+
 const BCJ2_NUM_STREAMS: usize = 4;
 
 const BCJ2_STREAM_MAIN: usize = 0;
@@ -299,6 +319,42 @@ impl<R> Bcj2Reader<R> {
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_prefix_stops_before_marker_half() {
+        for position in 0..32 {
+            for byte in 0..=u8::MAX {
+                let mut block = [0x90; 32];
+                block[position] = byte;
+                let marker_half = if position < 16 { 0 } else { 16 };
+                assert_eq!(
+                    literal_prefix(&block, 0),
+                    if matches!(byte, 0xE8 | 0xE9) {
+                        marker_half
+                    } else {
+                        32
+                    }
+                );
+                if position != 0 {
+                    block[position - 1] = 0x0F;
+                }
+                assert_eq!(
+                    literal_prefix(&block, 0x0F),
+                    if matches!(byte, 0x80..=0x8F | 0xE8 | 0xE9) {
+                        marker_half
+                    } else {
+                        32
+                    },
+                    "position={position} byte={byte:02x}"
+                );
+            }
+        }
+        let mut block = [0x90; 32];
+        block[31] = 0x0F;
+        assert_eq!(literal_prefix(&block, 0), 32);
+        block[0] = 0x85;
+        assert_eq!(literal_prefix(&block, 0x0F), 0);
+    }
 
     #[test]
     fn marker_blocks_preserve_previous_byte_context() {
