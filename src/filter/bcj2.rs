@@ -6,7 +6,7 @@ use alloc::{vec, vec::Vec};
 
 use decode::Bcj2Decoder;
 
-use crate::{Read, error_invalid_data};
+use crate::{Read, error_invalid_data, error_invalid_input};
 
 const BUF_SIZE: usize = 1 << 18;
 
@@ -86,6 +86,16 @@ impl<R> Bcj2Reader<R> {
         .init()
     }
 
+    /// Creates a reader after checking that exactly four inputs were provided.
+    ///
+    /// [`Self::new`] reports an invalid input count on the first nonempty read.
+    pub fn try_new(inputs: Vec<R>, uncompressed_size: u64) -> crate::Result<Self> {
+        if inputs.len() != BCJ2_NUM_STREAMS {
+            return Err(error_invalid_input("BCJ2 requires four input streams"));
+        }
+        Ok(Self::new(inputs, uncompressed_size))
+    }
+
     fn init(mut self) -> Self {
         let mut v = 0;
         for i in 0..BCJ2_NUM_STREAMS {
@@ -100,6 +110,9 @@ impl<R> Bcj2Reader<R> {
 
 impl<R: Read> Read for Bcj2Reader<R> {
     fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
+        if !buf.is_empty() && self.inputs.len() != BCJ2_NUM_STREAMS {
+            return Err(error_invalid_input("BCJ2 requires four input streams"));
+        }
         let mut dest_buf = buf;
         if dest_buf.len() as u64 > self.uncompressed_size {
             dest_buf = &mut dest_buf[..self.uncompressed_size as usize];
