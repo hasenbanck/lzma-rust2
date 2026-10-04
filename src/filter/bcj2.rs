@@ -16,33 +16,32 @@ use crate::{Read, StickyError, error_eof, error_invalid_data, error_invalid_inpu
 
 const BUF_SIZE: usize = 1 << 18;
 
-// Keep the fixed-width reduction separate from the stateful codec loops.
+// Include the preceding byte so both contexts use contiguous vector loads.
 #[inline(never)]
-fn contains_marker(block: &[u8; 16], prev: u8) -> bool {
-    let mut found = ((block[0] & 0xFE) == 0xE8) | ((prev == 0x0F) & ((block[0] & 0xF0) == 0x80));
-    for i in 1..16 {
-        found |=
-            ((block[i] & 0xFE) == 0xE8) | ((block[i - 1] == 0x0F) & ((block[i] & 0xF0) == 0x80));
+fn contains_marker(window: &[u8; 17]) -> bool {
+    let mut found = false;
+    for i in 0..16 {
+        found |= ((window[i + 1] & 0xFE) == 0xE8)
+            | ((window[i] == 0x0F) & ((window[i + 1] & 0xF0) == 0x80));
     }
     found
 }
 
 // Return whole 16-byte halves before a marker. Separate reductions retain vectorization.
 #[inline(never)]
-fn literal_prefix(block: &[u8; 32], prev: u8) -> usize {
-    let mut first = ((block[0] & 0xFE) == 0xE8) | ((prev == 0x0F) & ((block[0] & 0xF0) == 0x80));
-    for i in 1..16 {
-        first |=
-            ((block[i] & 0xFE) == 0xE8) | ((block[i - 1] == 0x0F) & ((block[i] & 0xF0) == 0x80));
+fn literal_prefix(window: &[u8; 33]) -> usize {
+    let mut first = false;
+    for i in 0..16 {
+        first |= ((window[i + 1] & 0xFE) == 0xE8)
+            | ((window[i] == 0x0F) & ((window[i + 1] & 0xF0) == 0x80));
     }
     if first {
         return 0;
     }
-    let mut second =
-        ((block[16] & 0xFE) == 0xE8) | ((block[15] == 0x0F) & ((block[16] & 0xF0) == 0x80));
-    for i in 17..32 {
-        second |=
-            ((block[i] & 0xFE) == 0xE8) | ((block[i - 1] == 0x0F) & ((block[i] & 0xF0) == 0x80));
+    let mut second = false;
+    for i in 16..32 {
+        second |= ((window[i + 1] & 0xFE) == 0xE8)
+            | ((window[i] == 0x0F) & ((window[i + 1] & 0xF0) == 0x80));
     }
     if second { 16 } else { 32 }
 }
@@ -316,6 +315,7 @@ impl<R> Bcj2Reader<R> {
         }
     }
 }
+
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
@@ -324,22 +324,21 @@ mod tests {
     fn literal_prefix_stops_before_marker_half() {
         for position in 0..32 {
             for byte in 0..=u8::MAX {
-                let mut block = [0x90; 32];
-                block[position] = byte;
+                let mut window = [0x90; 33];
+                window[0] = 0;
+                window[position + 1] = byte;
                 let marker_half = if position < 16 { 0 } else { 16 };
                 assert_eq!(
-                    literal_prefix(&block, 0),
+                    literal_prefix(&window),
                     if matches!(byte, 0xE8 | 0xE9) {
                         marker_half
                     } else {
                         32
                     }
                 );
-                if position != 0 {
-                    block[position - 1] = 0x0F;
-                }
+                window[position] = 0x0F;
                 assert_eq!(
-                    literal_prefix(&block, 0x0F),
+                    literal_prefix(&window),
                     if matches!(byte, 0x80..=0x8F | 0xE8 | 0xE9) {
                         marker_half
                     } else {
@@ -349,35 +348,38 @@ mod tests {
                 );
             }
         }
-        let mut block = [0x90; 32];
-        block[31] = 0x0F;
-        assert_eq!(literal_prefix(&block, 0), 32);
-        block[0] = 0x85;
-        assert_eq!(literal_prefix(&block, 0x0F), 0);
+        let mut window = [0x90; 33];
+        window[32] = 0x0F;
+        assert_eq!(literal_prefix(&window), 32);
+        window[0] = 0x0F;
+        window[1] = 0x85;
+        assert_eq!(literal_prefix(&window), 0);
     }
 
     #[test]
     fn marker_blocks_preserve_previous_byte_context() {
-        assert!(!contains_marker(&[0x90; 16], 0x0F));
+        let mut window = [0x90; 17];
+        window[0] = 0x0F;
+        assert!(!contains_marker(&window));
         for position in 0..16 {
             for byte in 0..=u8::MAX {
-                let mut block = [0x90; 16];
-                block[position] = byte;
-                assert_eq!(contains_marker(&block, 0), matches!(byte, 0xE8 | 0xE9));
-                if position != 0 {
-                    block[position - 1] = 0x0F;
-                }
+                let mut window = [0x90; 17];
+                window[0] = 0;
+                window[position + 1] = byte;
+                assert_eq!(contains_marker(&window), matches!(byte, 0xE8 | 0xE9));
+                window[position] = 0x0F;
                 assert_eq!(
-                    contains_marker(&block, 0x0F),
+                    contains_marker(&window),
                     matches!(byte, 0x80..=0x8F | 0xE8 | 0xE9),
                     "position={position} byte={byte:02x}"
                 );
             }
         }
-        let mut block = [0x90; 16];
-        block[15] = 0x0F;
-        assert!(!contains_marker(&block, 0));
-        block[0] = 0x85;
-        assert!(contains_marker(&block, 0x0F));
+        let mut window = [0x90; 17];
+        window[16] = 0x0F;
+        assert!(!contains_marker(&window));
+        window[0] = 0x0F;
+        window[1] = 0x85;
+        assert!(contains_marker(&window));
     }
 }

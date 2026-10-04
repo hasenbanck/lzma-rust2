@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add `Bcj2Reader::finish` for strict input completion.
 - Add `Bcj2Reader::try_new` for checked stream counts.
+
 ### Fixed
 
 - Retry interrupted BCJ2 reads without losing fragmented branch addresses.
