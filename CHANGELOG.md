@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep BCJ2 output sizes above 4 GiB intact on 32-bit targets.
 - Wrap BCJ2 instruction positions at 32 bits.
 - Fix `LzmaOptions::get_memory_usage()` mixing bytes with KiB and undercounting hash-table memory.
 - Fix `LzmaOptions::get_memory_usage()` underestimating memory for custom `lc` and `lp` values.

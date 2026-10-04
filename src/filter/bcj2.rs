@@ -101,7 +101,7 @@ impl<R> Bcj2Reader<R> {
 impl<R: Read> Read for Bcj2Reader<R> {
     fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
         let mut dest_buf = buf;
-        if dest_buf.len() > self.uncompressed_size as usize {
+        if dest_buf.len() as u64 > self.uncompressed_size {
             dest_buf = &mut dest_buf[..self.uncompressed_size as usize];
         }
         if dest_buf.is_empty() {
