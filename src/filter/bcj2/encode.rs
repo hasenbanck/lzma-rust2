@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec};
 
 use super::{BCJ2_NUM_STREAMS, BIT_MODEL_TOTAL};
 use crate::{StickyError, Write, enc::range_enc::RangeEncoder, error_invalid_input};
@@ -235,33 +235,92 @@ impl<W: Write> Bcj2Encoder<W> {
         self.rc.inner_mut().flush()
     }
 
+    #[inline]
     fn encode(&mut self, buf: &[u8], finish: bool) -> crate::Result<usize> {
+        // A block scan follows one scalar byte; short calls need no scan bookkeeping.
+        if buf.len() >= 17 {
+            self.encode_inner::<true>(buf, finish)
+        } else {
+            self.encode_inner::<false>(buf, finish)
+        }
+    }
+
+    #[inline(never)]
+    fn encode_inner<const SCAN: bool>(&mut self, buf: &[u8], finish: bool) -> crate::Result<usize> {
         let mut offset = 0;
+        let mut ip = self.ip;
         let mut start = 0;
         let mut prev = self.prev_byte;
-        while offset < buf.len() {
-            let byte = buf[offset];
-            let marker = (byte & 0xFE) == 0xE8 || (prev == 0x0F && (byte & 0xF0) == 0x80);
-            if !marker {
+        let mut scan_end = if buf.len() >= 17 { 0 } else { buf.len() };
+        'input: loop {
+            let byte = 'marker: loop {
+                if offset >= buf.len() {
+                    break 'input;
+                }
+                let byte = buf[offset];
+                let marker = (byte & 0xFE) == 0xE8 || (prev == 0x0F && (byte & 0xF0) == 0x80);
+                if marker {
+                    break 'marker byte;
+                }
                 prev = byte;
                 offset += 1;
-                continue;
-            }
+                if SCAN && byte != 0x0F && offset >= scan_end {
+                    scan_end = buf.len();
+                    while buf.len() - offset >= 16 {
+                        if buf.len() - offset >= 32 {
+                            let block = &buf[offset - 1..offset + 32];
+                            let size = super::literal_prefix_exact(block.try_into().unwrap());
+                            if size != 32 {
+                                prev = block[size];
+                                offset += size;
+                                scan_end = offset + 16;
+                                break 'marker buf[offset];
+                            }
+                            prev = block[32];
+                            offset += 32;
+                            while buf.len() - offset >= 64 {
+                                let window: &[u8; 65] =
+                                    buf[offset - 1..offset + 64].try_into().unwrap();
+                                let size = super::literal_prefix_64(window);
+                                if size != 64 {
+                                    prev = window[size];
+                                    offset += size;
+                                    scan_end = offset + 16;
+                                    break 'marker buf[offset];
+                                }
+                                prev = window[64];
+                                offset += 64;
+                            }
+                        } else {
+                            let block = &buf[offset - 1..offset + 16];
+                            let size = super::first_marker(block.try_into().unwrap());
+                            if size != 16 {
+                                prev = block[size];
+                                offset += size;
+                                scan_end = offset + 16;
+                                break 'marker buf[offset];
+                            }
+                            prev = block[16];
+                            offset += 16;
+                        }
+                    }
+                }
+            };
             if buf.len() - offset < 5 && !finish {
                 break;
             }
-            self.outputs[0].write_all(&buf[start..offset + 1])?;
-            self.ip += (offset + 1 - start) as u64;
+            self.outputs[0].write_main(&buf[start..offset + 1], byte)?;
+            ip += (offset + 1 - start) as u64;
             let mut relative = 0;
             let mut convert = false;
             if buf.len() - offset >= 5 {
                 relative = u32::from_le_bytes(buf[offset + 1..offset + 5].try_into().unwrap());
-                let signed = relative as i32 as i64;
-                let limit = self.options.relative_limit as i64;
-                convert = signed >= -limit && signed < limit;
+                // Test the signed interval [-limit, limit) with wrapping unsigned arithmetic.
+                convert = (relative.wrapping_add(self.options.relative_limit) >> 1)
+                    < self.options.relative_limit;
                 if let Some(size) = self.options.uncompressed_size {
-                    convert &= self
-                        .ip
+                    let signed = relative as i32 as i64;
+                    convert &= ip
                         .checked_add_signed(signed + 4)
                         .is_some_and(|target| target < size);
                 }
@@ -273,23 +332,24 @@ impl<W: Write> Bcj2Encoder<W> {
             } else {
                 0
             };
-            self.rc
-                .encode_bit(&mut self.probs, index, u32::from(convert))?;
             if convert {
-                self.ip += 4;
-                let target = (self.ip as u32).wrapping_add(relative);
+                self.rc.encode_bit(&mut self.probs, index, 1)?;
+                ip += 4;
+                let target = (ip as u32).wrapping_add(relative);
                 let stream = if byte == 0xE8 { 1 } else { 2 };
                 self.outputs[stream].write_u32_be(target)?;
-                prev = buf[offset + 4];
+                prev = (relative >> 24) as u8;
                 offset += 5;
             } else {
+                self.rc.encode_bit(&mut self.probs, index, 0)?;
                 prev = byte;
                 offset += 1;
             }
             start = offset;
         }
         self.outputs[0].write_all(&buf[start..offset])?;
-        self.ip += (offset - start) as u64;
+        ip += (offset - start) as u64;
+        self.ip = ip;
         self.prev_byte = prev;
         Ok(offset)
     }
@@ -297,43 +357,112 @@ impl<W: Write> Bcj2Encoder<W> {
 
 struct BufferedOutput<W> {
     inner: W,
-    buffer: Vec<u8>,
+    buffer: Box<[u8; OUTPUT_BUF_SIZE]>,
+    pos: usize,
 }
 
 impl<W: Write> BufferedOutput<W> {
     fn new(inner: W) -> Self {
         Self {
             inner,
-            buffer: Vec::with_capacity(OUTPUT_BUF_SIZE),
+            buffer: vec![0; OUTPUT_BUF_SIZE]
+                .into_boxed_slice()
+                .try_into()
+                .unwrap(),
+            pos: 0,
         }
     }
 
+    #[cold]
+    #[inline(never)]
     fn flush_buffer(&mut self) -> crate::Result<()> {
-        self.inner.write_all(&self.buffer)?;
-        self.buffer.clear();
+        self.inner.write_all(&self.buffer[..self.pos])?;
+        self.pos = 0;
         Ok(())
     }
 
     #[inline]
     fn write_u32_be(&mut self, value: u32) -> crate::Result<()> {
-        if OUTPUT_BUF_SIZE - self.buffer.len() < 4 {
+        if self.pos > OUTPUT_BUF_SIZE - 4 {
             self.flush_buffer()?;
         }
-        self.buffer.extend_from_slice(&value.to_be_bytes());
+        self.buffer[self.pos..self.pos + 4].copy_from_slice(&value.to_be_bytes());
+        self.pos += 4;
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn write_main(&mut self, buf: &[u8], marker: u8) -> crate::Result<()> {
+        match buf {
+            [_] => {
+                if self.pos >= OUTPUT_BUF_SIZE {
+                    self.flush_buffer()?;
+                }
+                self.buffer[self.pos] = marker;
+                self.pos += 1;
+            }
+            [first, second] => {
+                if self.pos > OUTPUT_BUF_SIZE - 2 {
+                    self.flush_buffer()?;
+                }
+                self.buffer[self.pos..self.pos + 2].copy_from_slice(&[*first, *second]);
+                self.pos += 2;
+            }
+            _ if buf.len() <= 32 => {
+                let size = buf.len();
+                if self.pos > OUTPUT_BUF_SIZE - size {
+                    self.flush_buffer()?;
+                }
+                let output = &mut self.buffer[self.pos..self.pos + size];
+                // Overlapping fixed-size copies cover short spans without a variable-size memcpy.
+                if size >= 16 {
+                    output[..16].copy_from_slice(&buf[..16]);
+                    output[size - 16..].copy_from_slice(&buf[size - 16..]);
+                } else if size >= 8 {
+                    output[..8].copy_from_slice(&buf[..8]);
+                    output[size - 8..].copy_from_slice(&buf[size - 8..]);
+                } else if size >= 4 {
+                    output[..4].copy_from_slice(&buf[..4]);
+                    output[size - 4..].copy_from_slice(&buf[size - 4..]);
+                } else if size >= 2 {
+                    output[..2].copy_from_slice(&buf[..2]);
+                    output[size - 2..].copy_from_slice(&buf[size - 2..]);
+                }
+                self.pos += size;
+            }
+            _ => self.write_all(buf)?,
+        }
         Ok(())
     }
 }
 
 impl<W: Write> Write for BufferedOutput<W> {
+    #[inline]
+    fn write_all(&mut self, buf: &[u8]) -> crate::Result<()> {
+        if buf.len() <= OUTPUT_BUF_SIZE - self.pos {
+            self.buffer[self.pos..self.pos + buf.len()].copy_from_slice(buf);
+            self.pos += buf.len();
+            return Ok(());
+        }
+        self.flush_buffer()?;
+        if buf.len() >= OUTPUT_BUF_SIZE {
+            return self.inner.write_all(buf);
+        }
+        self.buffer[..buf.len()].copy_from_slice(buf);
+        self.pos = buf.len();
+        Ok(())
+    }
+
     fn write(&mut self, buf: &[u8]) -> crate::Result<usize> {
-        if self.buffer.len() == OUTPUT_BUF_SIZE {
+        if self.pos >= OUTPUT_BUF_SIZE {
             self.flush_buffer()?;
         }
-        if self.buffer.is_empty() && buf.len() >= OUTPUT_BUF_SIZE {
+        if self.pos == 0 && buf.len() >= OUTPUT_BUF_SIZE {
             return self.inner.write(buf);
         }
-        let size = buf.len().min(OUTPUT_BUF_SIZE - self.buffer.len());
-        self.buffer.extend_from_slice(&buf[..size]);
+        let size = buf.len().min(OUTPUT_BUF_SIZE - self.pos);
+        self.buffer[self.pos..self.pos + size].copy_from_slice(&buf[..size]);
+        self.pos += size;
         Ok(size)
     }
 
@@ -345,6 +474,8 @@ impl<W: Write> Write for BufferedOutput<W> {
 
 #[cfg(all(test, feature = "std"))]
 mod tests {
+    use alloc::vec::Vec;
+
     use super::*;
 
     #[test]

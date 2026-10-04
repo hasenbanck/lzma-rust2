@@ -352,6 +352,177 @@ fn encoder_matches_reference_streams() {
 
 #[test]
 #[cfg(feature = "encoder")]
+fn short_main_spans_and_large_literals_preserve_streams() {
+    fn literals(size: usize, seed: usize) -> Vec<u8> {
+        (0..size)
+            .map(|i| 0x20 + ((i + seed) % 0x60) as u8)
+            .collect()
+    }
+    let mut input = literals(16383, 0);
+    let mut expected: [Vec<u8>; 4] = std::array::from_fn(|_| Vec::new());
+    expected[0] = input.clone();
+    for repeat in 0..192 {
+        for span in 1..=65 {
+            let opcode: &[u8] = match span % 3 {
+                1 => &[0xE8],
+                2 => &[0xE9],
+                _ => &[0x0F, 0x85],
+            };
+            let prefix = literals(span - opcode.len(), repeat + span);
+            input.extend_from_slice(&prefix);
+            input.extend_from_slice(opcode);
+            expected[0].extend_from_slice(&prefix);
+            expected[0].extend_from_slice(opcode);
+            input.extend_from_slice(&[0; 4]);
+            let stream = if opcode == [0xE8] { 1 } else { 2 };
+            expected[stream].extend_from_slice(&(input.len() as u32).to_be_bytes());
+        }
+        if repeat % 16 == 0 {
+            let block = literals(16387, repeat);
+            input.extend_from_slice(&block);
+            expected[0].extend_from_slice(&block);
+        }
+    }
+    input.push(0x90);
+    expected[0].push(0x90);
+    let rc = include_str!("fixtures/bcj2-short-main-rc.txt")
+        .lines()
+        .find(|line| !line.starts_with('#'))
+        .unwrap();
+    expected[3] = (0..rc.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&rc[i..i + 2], 16).unwrap())
+        .collect();
+    for uncompressed_size in [None, Some(input.len() as u64)] {
+        let options = Bcj2Options {
+            uncompressed_size,
+            ..Bcj2Options::default()
+        };
+        for chunk_size in [1, 7, 17, 16383, 16384, 16385, input.len()] {
+            let mut writer =
+                Bcj2Writer::new(std::array::from_fn(|_| Vec::new()), &options).unwrap();
+            for chunk in input.chunks(chunk_size) {
+                writer.write_all(chunk).unwrap();
+            }
+            assert_eq!(writer.finish().unwrap(), expected, "chunk={chunk_size}");
+        }
+    }
+    assert_eq!(
+        decode(expected.each_ref().map(Vec::as_slice), input.len() as u64).unwrap(),
+        input
+    );
+}
+
+#[test]
+#[cfg(feature = "encoder")]
+fn partial_buffer_flush_and_large_write_failures_are_sticky() {
+    let short_spans = (3..=32).map(|size| {
+        let mut input = vec![0x91; size - 1];
+        input.extend_from_slice(&[0xE8, 0, 0, 0, 0]);
+        (16384 - size + 1, input, 5)
+    });
+    let large_span = std::iter::once((17, vec![0x91; 16385], 22));
+    for (prefix_size, input, fail_after) in short_spans.chain(large_span) {
+        for finish in [false, true] {
+            let mut sinks = test_sinks();
+            sinks[0].fail_after = Some(fail_after);
+            let mut writer = Bcj2Writer::new(sinks, &Bcj2Options::default()).unwrap();
+            writer.write_all(&vec![0x90; prefix_size]).unwrap();
+            assert_eq!(
+                writer.write_all(&input).unwrap_err().kind(),
+                io::ErrorKind::BrokenPipe
+            );
+            assert_eq!(writer.get_uncompressed_size(), prefix_size as u64);
+            assert_eq!(
+                writer.write_all(&[0x90]).unwrap_err().kind(),
+                io::ErrorKind::BrokenPipe
+            );
+            assert_eq!(
+                writer.flush().unwrap_err().kind(),
+                io::ErrorKind::BrokenPipe
+            );
+            if finish {
+                assert_eq!(
+                    writer.finish().err().unwrap().kind(),
+                    io::ErrorKind::BrokenPipe
+                );
+            } else {
+                let output = writer.into_inner()[0].data.clone();
+                assert_eq!(output.len(), fail_after);
+                assert!(
+                    output[..prefix_size.min(fail_after)]
+                        .iter()
+                        .all(|&b| b == 0x90)
+                );
+                assert!(
+                    output[prefix_size.min(fail_after)..]
+                        .iter()
+                        .all(|&b| b == 0x91)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "encoder")]
+fn single_branches_after_literal_prefixes() {
+    let opcodes: Vec<_> = [vec![0xE8], vec![0xE9]]
+        .into_iter()
+        .chain((0x80..=0x8F).map(|byte| vec![0x0F, byte]))
+        .collect();
+    for prefix in 0..=129 {
+        for opcode in &opcodes {
+            let mut input = vec![0x90; prefix];
+            input.extend_from_slice(opcode);
+            input.extend_from_slice(&4u32.to_le_bytes());
+            input.extend_from_slice(&[0x90; 64]);
+            let mut expected: [Vec<u8>; 4] = std::array::from_fn(|_| Vec::new());
+            expected[0].extend_from_slice(&input[..prefix + opcode.len()]);
+            expected[0].extend_from_slice(&[0x90; 64]);
+            let stream = if opcode[0] == 0xE8 { 1 } else { 2 };
+            expected[stream].extend_from_slice(&((prefix + opcode.len() + 8) as u32).to_be_bytes());
+            expected[3].extend_from_slice(&[0, 0x7F, 0xFF, 0xFC, 0]);
+            for chunk in [
+                1, 15, 16, 17, 31, 32, 33, 63, 64, 65, 96, 97, 98, 127, 128, 129, 4096,
+            ] {
+                let mut writer =
+                    Bcj2Writer::new(std::array::from_fn(|_| Vec::new()), &Default::default())
+                        .unwrap();
+                for part in input.chunks(chunk) {
+                    writer.write_all(part).unwrap();
+                }
+                assert_eq!(
+                    writer.finish().unwrap(),
+                    expected,
+                    "prefix={prefix} chunk={chunk}"
+                );
+            }
+            for output_size in [15, 16, 17, 31, 32, 33, 64, 128] {
+                let mut reader = Bcj2Reader::new(
+                    expected.iter().map(Vec::as_slice).collect(),
+                    input.len() as u64,
+                );
+                let mut output = Vec::new();
+                let mut buf = vec![0; output_size];
+                loop {
+                    let size = reader.read(&mut buf).unwrap_or_else(|error| {
+                        panic!("prefix={prefix} opcode={opcode:02x?} output_size={output_size}: {error}")
+                    });
+                    if size == 0 {
+                        break;
+                    }
+                    output.extend_from_slice(&buf[..size]);
+                }
+                reader.finish().unwrap();
+                assert_eq!(output, input);
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "encoder")]
 fn flush_does_not_finish_a_held_instruction() {
     for vector in reference_vectors() {
         let options = Bcj2Options {
@@ -564,4 +735,3 @@ fn randomized_chunks_round_trip_and_do_not_change_streams() {
         }
     }
 }
-

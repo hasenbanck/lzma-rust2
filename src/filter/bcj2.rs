@@ -31,6 +31,38 @@ fn contains_marker(window: &[u8; 17]) -> bool {
     found
 }
 
+// One bit per byte locates the first marker without rescanning the matching block.
+#[cfg(feature = "encoder")]
+#[inline(always)]
+fn marker_mask(window: &[u8; 17]) -> u16 {
+    let mut mask = 0u16;
+    for i in 0..16 {
+        let marker = ((window[i + 1] & 0xFE) == 0xE8)
+            | ((window[i] == 0x0F) & ((window[i + 1] & 0xF0) == 0x80));
+        mask |= u16::from(marker) << i;
+    }
+    mask
+}
+
+// Keep each ARM64 half contiguous instead of rebuilding context across inlined halves.
+#[cfg(feature = "encoder")]
+#[cfg_attr(target_arch = "aarch64", inline(never))]
+#[cfg_attr(not(target_arch = "aarch64"), inline(always))]
+fn first_marker(window: &[u8; 17]) -> usize {
+    marker_mask(window).trailing_zeros() as usize
+}
+
+#[cfg(feature = "encoder")]
+#[inline(always)]
+fn literal_prefix_exact(window: &[u8; 33]) -> usize {
+    let mask = marker_mask(window[..17].try_into().unwrap());
+    if mask != 0 {
+        mask.trailing_zeros() as usize
+    } else {
+        16 + first_marker(window[16..].try_into().unwrap())
+    }
+}
+
 // Return whole 16-byte halves before a marker. Separate reductions retain vectorization.
 #[inline(never)]
 fn literal_prefix(window: &[u8; 33]) -> usize {
@@ -48,6 +80,43 @@ fn literal_prefix(window: &[u8; 33]) -> usize {
             | ((window[i] == 0x0F) & ((window[i + 1] & 0xF0) == 0x80));
     }
     if second { 16 } else { 32 }
+}
+
+// Test each mask before locating a marker so empty halves need no bit scan.
+#[cfg(all(feature = "encoder", not(target_arch = "aarch64")))]
+#[inline(always)]
+fn literal_prefix_64(window: &[u8; 65]) -> usize {
+    let mask = marker_mask(window[..17].try_into().unwrap());
+    if mask != 0 {
+        return mask.trailing_zeros() as usize;
+    }
+    let mask = marker_mask(window[16..33].try_into().unwrap());
+    if mask != 0 {
+        return 16 + mask.trailing_zeros() as usize;
+    }
+    let mask = marker_mask(window[32..49].try_into().unwrap());
+    if mask != 0 {
+        return 32 + mask.trailing_zeros() as usize;
+    }
+    let mask = marker_mask(window[48..].try_into().unwrap());
+    if mask != 0 {
+        return 48 + mask.trailing_zeros() as usize;
+    }
+    64
+}
+
+// Outlining also keeps wide-scan constants out of the converted-branch path on ARM64.
+#[cfg(all(feature = "encoder", target_arch = "aarch64"))]
+#[inline(never)]
+fn literal_prefix_64(window: &[u8; 65]) -> usize {
+    for offset in [0, 16, 32, 48] {
+        let half: &[u8; 17] = window[offset..offset + 17].try_into().unwrap();
+        let size = first_marker(half);
+        if size != 16 {
+            return offset + size;
+        }
+    }
+    64
 }
 
 const BCJ2_NUM_STREAMS: usize = 4;
@@ -323,6 +392,85 @@ impl<R> Bcj2Reader<R> {
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "encoder")]
+    #[test]
+    fn wide_literal_prefix_stops_at_first_marker() {
+        for position in 0..64 {
+            for byte in 0..=u8::MAX {
+                let mut window = [0x90; 65];
+                window[0] = 0;
+                window[position + 1] = byte;
+                assert_eq!(
+                    literal_prefix_64(&window),
+                    if matches!(byte, 0xE8 | 0xE9) {
+                        position
+                    } else {
+                        64
+                    }
+                );
+                window[position] = 0x0F;
+                assert_eq!(
+                    literal_prefix_64(&window),
+                    if matches!(byte, 0x80..=0x8F | 0xE8 | 0xE9) {
+                        position
+                    } else {
+                        64
+                    },
+                    "position={position} byte={byte:02x}"
+                );
+            }
+        }
+        let mut window = [0x90; 65];
+        window[64] = 0x0F;
+        assert_eq!(literal_prefix_64(&window), 64);
+        window[0] = 0x0F;
+        window[1] = 0x85;
+        assert_eq!(literal_prefix_64(&window), 0);
+        window = [0x90; 65];
+        for position in (0..64).rev() {
+            window[position + 1] = 0xE9;
+            assert_eq!(literal_prefix_64(&window), position);
+        }
+    }
+
+    #[cfg(feature = "encoder")]
+    #[test]
+    fn exact_marker_prefix_preserves_context_and_first_match() {
+        for position in 0..32 {
+            for byte in 0..=u8::MAX {
+                for previous in [0, 0x0F] {
+                    let mut window = [0x90; 33];
+                    window[position] = previous;
+                    window[position + 1] = byte;
+                    let expected = if matches!(byte, 0xE8 | 0xE9)
+                        || (previous == 0x0F && matches!(byte, 0x80..=0x8F))
+                    {
+                        position
+                    } else {
+                        32
+                    };
+                    assert_eq!(literal_prefix_exact(&window), expected);
+                    for start in [0, 16] {
+                        let half = window[start..start + 17].try_into().unwrap();
+                        let expected = if (start..start + 16).contains(&expected) {
+                            expected - start
+                        } else {
+                            16
+                        };
+                        assert_eq!(first_marker(half), expected);
+                    }
+                }
+            }
+        }
+        let mut window = [0x90; 33];
+        window[32] = 0x0F;
+        assert_eq!(literal_prefix_exact(&window), 32);
+        for position in (0..32).rev() {
+            window[position + 1] = 0xE8;
+            assert_eq!(literal_prefix_exact(&window), position);
+        }
+    }
 
     #[test]
     fn literal_prefix_stops_before_marker_half() {
