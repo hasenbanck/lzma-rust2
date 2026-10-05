@@ -15,15 +15,60 @@ static ALLOCATOR: Allocator = Allocator;
 
 thread_local! {
     static USAGE: Cell<Option<(usize, usize)>> = const { Cell::new(None) };
+    static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
 fn update(added: usize, removed: usize) {
+    if added != 0 {
+        let _ = ALLOCATIONS.try_with(|allocations| {
+            if let Some(count) = allocations.get() {
+                allocations.set(Some(count + 1));
+            }
+        });
+    }
     let _ = USAGE.try_with(|usage| {
         if let Some((current, peak)) = usage.get() {
             let current = current + added - removed;
             usage.set(Some((current, peak.max(current))));
         }
     });
+}
+
+#[test]
+fn repeated_streams_reuse_internal_buffers_without_allocating() {
+    let pattern = [0xE8, 0, 0, 0, 0, 0xE9, 0xFB, 0xFF, 0xFF, 0xFF];
+    let data = pattern.repeat(1 << 16);
+    let options = Bcj2Options {
+        uncompressed_size: Some(data.len() as u64),
+        ..Default::default()
+    };
+    let mut fresh = Bcj2Writer::new(std::array::from_fn(|_| Vec::new()), &options).unwrap();
+    fresh.write_all(&data).unwrap();
+    let expected = fresh.finish().unwrap();
+    let mut writer = Bcj2Writer::new(
+        std::array::from_fn(|i| Vec::with_capacity(expected[i].len())),
+        &options,
+    )
+    .unwrap();
+    ALLOCATIONS.with(|allocations| allocations.set(Some(0)));
+    for _ in 0..8 {
+        writer.write_all(&data).unwrap();
+        for (output, expected) in writer
+            .finish_and_reset()
+            .unwrap()
+            .into_iter()
+            .zip(&expected)
+        {
+            assert_eq!(output, expected);
+            output.clear();
+        }
+        assert_eq!(writer.get_uncompressed_size(), 0);
+    }
+    let allocations = ALLOCATIONS.with(|allocations| allocations.replace(None).unwrap());
+    assert_eq!(
+        allocations, 0,
+        "reusing BCJ2 allocated or reallocated memory"
+    );
 }
 
 // The allocator forwards each operation and its original layout to System.

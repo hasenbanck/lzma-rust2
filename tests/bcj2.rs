@@ -350,6 +350,56 @@ fn encoder_matches_reference_streams() {
     }
 }
 
+#[cfg(feature = "encoder")]
+#[test]
+fn reusable_writer_matches_reference_streams() {
+    for vector in reference_vectors() {
+        let options = Bcj2Options {
+            relative_limit: vector.relative_limit,
+            uncompressed_size: vector.uncompressed_size,
+        };
+        let mut writer = Bcj2Writer::new(std::array::from_fn(|_| Vec::new()), &options).unwrap();
+        for chunk_size in [1, 17, 4096] {
+            for chunk in vector.original.chunks(chunk_size) {
+                writer.write_all(chunk).unwrap();
+            }
+            for (output, expected) in writer
+                .finish_and_reset()
+                .unwrap()
+                .into_iter()
+                .zip(&vector.streams)
+            {
+                assert_eq!(output, expected, "{} chunk={chunk_size}", vector.name);
+                output.clear();
+            }
+            assert_eq!(writer.get_uncompressed_size(), 0);
+        }
+    }
+}
+
+#[cfg(feature = "encoder")]
+#[test]
+fn reusable_writer_resets_context_and_does_not_clear_outputs() {
+    let mut writer =
+        Bcj2Writer::new(std::array::from_fn(|_| Vec::new()), &Bcj2Options::default()).unwrap();
+    writer.write_all(&[0x0F]).unwrap();
+    let [main, call, jump, rc] = writer.finish_and_reset().unwrap();
+    assert_eq!(main, &[0x0F]);
+    assert!(call.is_empty() && jump.is_empty());
+    assert_eq!(rc, &[0; 5]);
+    // Leaving the outputs in place appends the next independent stream.
+    writer.write_all(&[0x80, 0, 0, 0, 0]).unwrap();
+    let [main, call, jump, rc] = writer.finish_and_reset().unwrap();
+    assert_eq!(main, &[0x0F, 0x80, 0, 0, 0, 0]);
+    assert!(call.is_empty() && jump.is_empty());
+    assert_eq!(rc, &[0; 10]);
+    for output in [main, call, jump, rc] {
+        output.clear();
+    }
+    let empty = writer.finish().unwrap();
+    assert_eq!(empty, [vec![], vec![], vec![], vec![0; 5]]);
+}
+
 #[test]
 #[cfg(feature = "encoder")]
 fn short_main_spans_and_large_literals_preserve_streams() {
@@ -682,6 +732,47 @@ fn write_zero_and_finish_errors_are_reported() {
             io::ErrorKind::BrokenPipe
         );
     }
+}
+
+#[test]
+#[cfg(feature = "encoder")]
+fn reusable_finish_errors_are_sticky() {
+    for stream in 0..4 {
+        for fail_flush in [false, true] {
+            let mut sinks = test_sinks();
+            if fail_flush {
+                sinks[stream].fail_flush = true;
+            } else {
+                sinks[stream].fail_after = Some(1);
+            }
+            let mut writer = Bcj2Writer::new(sinks, &Bcj2Options::default()).unwrap();
+            let data = [0x90, 0xE8, 0, 0, 0, 0, 0xE9, 0, 0, 0, 0];
+            writer.write_all(&data).unwrap();
+            let error = writer.finish_and_reset().err().unwrap();
+            assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+            assert_eq!(writer.get_uncompressed_size(), data.len() as u64);
+            assert_eq!(writer.write(&[0x90]).unwrap_err().kind(), error.kind());
+            assert_eq!(writer.flush().unwrap_err().kind(), error.kind());
+            assert_eq!(
+                writer.finish_and_reset().err().unwrap().to_string(),
+                error.to_string()
+            );
+            assert_eq!(writer.finish().err().unwrap().kind(), error.kind());
+        }
+    }
+    let mut writer = Bcj2Writer::new(
+        std::array::from_fn(|_| Vec::new()),
+        &Bcj2Options {
+            uncompressed_size: Some(2),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    writer.write_all(&[0x90]).unwrap();
+    let error = writer.finish_and_reset().unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(writer.get_uncompressed_size(), 1);
+    assert_eq!(writer.write(&[0x90]).unwrap_err().kind(), error.kind());
 }
 
 #[test]

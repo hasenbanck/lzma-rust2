@@ -118,6 +118,39 @@ impl<W: Write> Bcj2Writer<W> {
     /// If the outputs are compressors, finish each returned compressor as
     /// well: flushing an output does not end that compressor's stream.
     pub fn finish(mut self) -> crate::Result<[W; BCJ2_NUM_STREAMS]> {
+        self.finish_stream()?;
+        Ok(self.encoder.into_inner())
+    }
+
+    /// Finishes the current stream and resets the encoder, retaining its buffers.
+    ///
+    /// Returns mutable outputs in MAIN, CALL, JUMP and RC order. Clear, rewind or
+    /// replace them before writing the next independent stream: resetting the
+    /// encoder does not change the outputs' contents or positions. The options
+    /// apply to each stream, and the accepted input size returns to zero.
+    /// Truncate rewound files if the next output is shorter. Finish and replace
+    /// compressor outputs before starting another stream.
+    /// A finishing error persists on subsequent operations.
+    pub fn finish_and_reset(&mut self) -> crate::Result<[&mut W; BCJ2_NUM_STREAMS]> {
+        if let Err(error) = self.finish_stream() {
+            return Err(self.fail(error));
+        }
+        self.pending_size = 0;
+        self.uncompressed_size = 0;
+        self.encoder.ip = 0;
+        self.encoder.prev_byte = 0;
+        self.encoder.probs.fill(BIT_MODEL_TOTAL >> 1);
+        self.encoder.rc.reset();
+        let [main, call, jump] = &mut self.encoder.outputs;
+        Ok([
+            &mut main.inner,
+            &mut call.inner,
+            &mut jump.inner,
+            &mut self.encoder.rc.inner_mut().inner,
+        ])
+    }
+
+    fn finish_stream(&mut self) -> crate::Result<()> {
         self.check_failure()?;
         if let Some(expected) = self.encoder.options.uncompressed_size {
             if expected != self.uncompressed_size {
@@ -129,8 +162,7 @@ impl<W: Write> Bcj2Writer<W> {
         self.encoder
             .encode(&self.pending[..self.pending_size], true)?;
         self.encoder.rc.finish()?;
-        self.encoder.flush()?;
-        Ok(self.encoder.into_inner())
+        self.encoder.flush()
     }
 
     fn check_failure(&self) -> crate::Result<()> {
