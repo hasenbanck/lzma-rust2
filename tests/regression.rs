@@ -824,3 +824,21 @@ mod dictionary_follows_output {
         }
     }
 }
+
+/// An XZ index declaring a huge record count must not make the reader reserve memory for it.
+#[test]
+fn xz_index_record_count_does_not_size_the_reservation() {
+    let input = [
+        0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00, 0x00, 0x04, 0xE6, 0xD6, 0xB4, 0x46, 0x00, 0x9E, 0xCE,
+        0xEC, 0x5F, 0xB7, 0xDB, 0xFF, 0xFF, 0xE0, 0x25,
+    ];
+
+    let mut result = None;
+    let peak = allocation_tracking::peak(|| {
+        let mut uncompressed = Vec::new();
+        result = Some(XzReader::new(input.as_slice(), true).read_to_end(&mut uncompressed));
+    });
+
+    assert!(result.unwrap().is_err());
+    assert!(peak < 1 << 20, "peak {peak} bytes for 23 bytes of input");
+}

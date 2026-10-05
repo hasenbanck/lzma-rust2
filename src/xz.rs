@@ -792,7 +792,7 @@ impl Index {
         // sic! index indicator already consumed
         let number_of_records = parse_multibyte_integer_from_reader(reader)?;
         let mut records = Vec::new();
-        records.try_reserve_exact(number_of_records as usize)?;
+        records.try_reserve_exact(number_of_records.min(1024) as usize)?;
 
         for _ in 0..number_of_records {
             let unpadded_size = parse_multibyte_integer_from_reader(reader)?;
