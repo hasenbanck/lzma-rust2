@@ -9,7 +9,8 @@ use std::{
 
 use super::Lzma2Writer;
 use crate::{
-    AutoFinish, AutoFinisher, ByteWriter, Lzma2Options, error_invalid_input, set_error,
+    AutoFinish, AutoFinisher, ByteWriter, EncoderCancelled, Lzma2Options, error_invalid_input,
+    set_error,
     work_pool::{WorkPool, WorkPoolConfig},
     work_queue::WorkerHandle,
 };
@@ -19,6 +20,7 @@ use crate::{
 struct WorkUnit {
     data: Vec<u8>,
     options: Lzma2Options,
+    cancellation: Option<Arc<AtomicBool>>,
 }
 
 /// A multi-threaded LZMA2 compressor.
@@ -28,6 +30,7 @@ pub struct Lzma2WriterMt<W: Write> {
     chunk_size: usize,
     current_work_unit: Vec<u8>,
     work_pool: WorkPool<WorkUnit, Vec<u8>>,
+    cancellation: Option<Arc<AtomicBool>>,
 }
 
 impl<W: Write> Lzma2WriterMt<W> {
@@ -59,7 +62,14 @@ impl<W: Write> Lzma2WriterMt<W> {
                 WorkPoolConfig::new(num_workers, num_work),
                 worker_thread_logic,
             ),
+            cancellation: None,
         })
+    }
+
+    /// Sets a shared flag checked during worker input and while waiting for results.
+    pub fn set_cancellation(&mut self, flag: Arc<AtomicBool>) {
+        self.work_pool.set_cancellation(Arc::clone(&flag));
+        self.cancellation = Some(flag);
     }
 
     /// Sends the current work unit to the workers.
@@ -93,6 +103,7 @@ impl<W: Write> Lzma2WriterMt<W> {
             Ok(WorkUnit {
                 data,
                 options: single_chunk_options.clone(),
+                cancellation: self.cancellation.clone(),
             })
         })?;
 
@@ -211,7 +222,18 @@ fn worker_thread_logic(
 
         let mut writer = Lzma2Writer::new(&mut compressed_buffer, work_unit.options);
 
-        let result = match writer.write_all(&work_unit.data) {
+        let encoded = work_unit.data.chunks(64 * 1024).try_for_each(|chunk| {
+            if shutdown_flag.load(Ordering::Acquire)
+                || work_unit
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            {
+                return Err(io::Error::other(EncoderCancelled));
+            }
+            writer.write_all(chunk)
+        });
+        let result = match encoded {
             Ok(_) => match writer.flush() {
                 Ok(_) => compressed_buffer,
                 Err(error) => {
