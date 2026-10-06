@@ -173,6 +173,16 @@ const RC_BIT_MODEL_OFFSET: u32 = (1u32 << MOVE_BITS)
     .wrapping_sub(1)
     .wrapping_sub(BIT_MODEL_TOTAL);
 
+/// Recover queue and error-store guards after a panic.
+/// These locks protect container updates and never run user code while locked.
+#[cfg(feature = "std")]
+fn recover_lock<T>(result: std::sync::LockResult<T>) -> T {
+    match result {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 /// Helper to set the shared error state and trigger shutdown.
 #[cfg(feature = "std")]
 fn set_error(
@@ -180,7 +190,7 @@ fn set_error(
     error_store: &std::sync::Arc<std::sync::Mutex<Option<Error>>>,
     shutdown_flag: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
-    let mut guard = error_store.lock().unwrap();
+    let mut guard = recover_lock(error_store.lock());
     if guard.is_none() {
         *guard = Some(error);
     }

@@ -3,6 +3,8 @@ use std::{
     sync::{Arc, Condvar, Mutex},
 };
 
+use crate::recover_lock;
+
 /// A work-stealing queue that supports multiple workers taking work from a shared queue.
 ///
 /// Will be removed once core::sync::mpsc is stable.
@@ -43,7 +45,7 @@ impl<T> WorkStealingQueue<T> {
 
     /// Pushes work to the queue. Returns false if the queue is closed.
     pub(crate) fn push(&self, item: T) -> bool {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = recover_lock(self.inner.state.lock());
         if state.closed {
             return false;
         }
@@ -60,25 +62,25 @@ impl<T> WorkStealingQueue<T> {
     pub(crate) fn close(&self) {
         // Serialize with the worker predicate check and Condvar::wait so that
         // closure cannot notify in the gap before a worker goes to sleep.
-        self.inner.state.lock().unwrap().closed = true;
+        recover_lock(self.inner.state.lock()).closed = true;
         // Wake up all waiting workers so they can check the closed status
         self.inner.condvar.notify_all();
     }
 
     /// Release queued work after shutdown, outside the queue lock.
     pub(crate) fn discard_pending(&self) {
-        let pending = core::mem::take(&mut self.inner.state.lock().unwrap().queue);
+        let pending = core::mem::take(&mut recover_lock(self.inner.state.lock()).queue);
         drop(pending);
     }
 
     /// Returns the current number of items in the queue.
     pub(crate) fn len(&self) -> usize {
-        self.inner.state.lock().unwrap().queue.len()
+        recover_lock(self.inner.state.lock()).queue.len()
     }
 
     /// Returns true if the queue is empty.
     pub(crate) fn is_empty(&self) -> bool {
-        self.inner.state.lock().unwrap().queue.is_empty()
+        recover_lock(self.inner.state.lock()).queue.is_empty()
     }
 }
 
@@ -97,7 +99,7 @@ impl<T> WorkerHandle<T> {
     /// Attempts to steal work from the queue. Blocks until work is available or the queue is closed.
     /// Returns `None` if the queue is closed and empty.
     pub(crate) fn steal(&self) -> Option<T> {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = recover_lock(self.inner.state.lock());
 
         loop {
             if let Some(item) = state.queue.pop_front() {
@@ -108,19 +110,19 @@ impl<T> WorkerHandle<T> {
                 return None;
             }
 
-            state = self.inner.condvar.wait(state).unwrap();
+            state = recover_lock(self.inner.condvar.wait(state));
         }
     }
 
     /// Attempts to steal work without blocking.
     /// Returns `None` if no work is currently available.
     pub(crate) fn try_steal(&self) -> Option<T> {
-        self.inner.state.lock().unwrap().queue.pop_front()
+        recover_lock(self.inner.state.lock()).queue.pop_front()
     }
 
     /// Returns `true` if the queue is closed and empty (no more work will ever be available).
     pub(crate) fn is_closed_and_empty(&self) -> bool {
-        let state = self.inner.state.lock().unwrap();
+        let state = recover_lock(self.inner.state.lock());
         state.closed && state.queue.is_empty()
     }
 }
@@ -135,9 +137,84 @@ impl<T> Clone for WorkerHandle<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::mpsc, thread, time::Duration};
+    use std::{
+        io,
+        panic::{AssertUnwindSafe, catch_unwind},
+        sync::{
+            atomic::{AtomicBool, AtomicU32},
+            mpsc::{self, SyncSender},
+        },
+        thread,
+        time::Duration,
+    };
 
     use super::*;
+    use crate::work_pool::{WorkPool, WorkPoolConfig};
+
+    #[test]
+    fn poisoned_queue_preserves_work_and_can_close() {
+        let queue = WorkStealingQueue::new();
+        assert!(queue.push(1));
+        let worker = queue.worker();
+        assert!(
+            thread::spawn(move || {
+                let _state = worker.inner.state.lock().unwrap();
+                panic!("poison queue lock");
+            })
+            .join()
+            .is_err()
+        );
+
+        assert!(queue.inner.state.is_poisoned());
+        assert_eq!(queue.len(), 1);
+        assert!(!queue.is_empty());
+        assert!(queue.push(2));
+        let worker = queue.worker();
+        assert_eq!(worker.try_steal(), Some(1));
+        assert_eq!(worker.steal(), Some(2));
+        assert!(queue.push(3));
+        queue.discard_pending();
+        assert!(queue.is_empty());
+        queue.close();
+        assert!(!queue.push(4));
+        assert_eq!(worker.steal(), None);
+        assert!(worker.is_closed_and_empty());
+    }
+
+    #[test]
+    fn pool_drop_recovers_poisoned_queue_during_unwinding() {
+        fn worker(
+            queue: WorkerHandle<(u64, mpsc::Sender<()>)>,
+            _results: SyncSender<(u64, ())>,
+            _shutdown: Arc<AtomicBool>,
+            _errors: Arc<Mutex<Option<io::Error>>>,
+            _active: Arc<AtomicU32>,
+        ) {
+            let (_, poisoned) = queue.steal().unwrap();
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    let _state = queue.inner.state.lock().unwrap();
+                    panic!("poison queue lock");
+                }))
+                .is_err()
+            );
+            poisoned.send(()).unwrap();
+        }
+
+        let mut pool = WorkPool::new(WorkPoolConfig::new(1, 1), worker);
+        let (poisoned_tx, poisoned_rx) = mpsc::channel();
+        let mut poisoned_tx = Some(poisoned_tx);
+        pool.dispatch_next_work(&mut |_| Ok(poisoned_tx.take().unwrap()))
+            .unwrap();
+        poisoned_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let panic = catch_unwind(AssertUnwindSafe(move || {
+            let _pool = pool;
+            panic!("caller panic");
+        }))
+        .unwrap_err();
+        assert_eq!(panic.downcast_ref::<&str>(), Some(&"caller panic"));
+    }
 
     #[test]
     fn closing_waits_for_worker_predicate_lock() {
