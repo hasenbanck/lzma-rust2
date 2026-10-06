@@ -1,6 +1,6 @@
 use std::{
     collections::VecDeque,
-    sync::{Arc, Condvar, Mutex, atomic::AtomicBool},
+    sync::{Arc, Condvar, Mutex},
 };
 
 /// A work-stealing queue that supports multiple workers taking work from a shared queue.
@@ -11,9 +11,13 @@ pub(crate) struct WorkStealingQueue<T> {
 }
 
 struct Inner<T> {
-    queue: Mutex<VecDeque<T>>,
+    state: Mutex<QueueState<T>>,
     condvar: Condvar,
-    closed: AtomicBool,
+}
+
+struct QueueState<T> {
+    queue: VecDeque<T>,
+    closed: bool,
 }
 
 impl<T> WorkStealingQueue<T> {
@@ -21,9 +25,11 @@ impl<T> WorkStealingQueue<T> {
     pub(crate) fn new() -> Self {
         Self {
             inner: Arc::new(Inner {
-                queue: Mutex::new(VecDeque::new()),
+                state: Mutex::new(QueueState {
+                    queue: VecDeque::new(),
+                    closed: false,
+                }),
                 condvar: Condvar::new(),
-                closed: AtomicBool::new(false),
             }),
         }
     }
@@ -37,18 +43,12 @@ impl<T> WorkStealingQueue<T> {
 
     /// Pushes work to the queue. Returns false if the queue is closed.
     pub(crate) fn push(&self, item: T) -> bool {
-        if self
-            .inner
-            .closed
-            .load(core::sync::atomic::Ordering::Acquire)
-        {
+        let mut state = self.inner.state.lock().unwrap();
+        if state.closed {
             return false;
         }
-
-        {
-            let mut queue = self.inner.queue.lock().unwrap();
-            queue.push_back(item);
-        }
+        state.queue.push_back(item);
+        drop(state);
 
         // Notify one waiting worker
         self.inner.condvar.notify_one();
@@ -58,21 +58,27 @@ impl<T> WorkStealingQueue<T> {
     /// Closes the queue, preventing new work from being added.
     /// Workers will continue to process remaining work until the queue is empty.
     pub(crate) fn close(&self) {
-        self.inner
-            .closed
-            .store(true, core::sync::atomic::Ordering::Release);
+        // Serialize with the worker predicate check and Condvar::wait so that
+        // closure cannot notify in the gap before a worker goes to sleep.
+        self.inner.state.lock().unwrap().closed = true;
         // Wake up all waiting workers so they can check the closed status
         self.inner.condvar.notify_all();
     }
 
+    /// Release queued work after shutdown, outside the queue lock.
+    pub(crate) fn discard_pending(&self) {
+        let pending = core::mem::take(&mut self.inner.state.lock().unwrap().queue);
+        drop(pending);
+    }
+
     /// Returns the current number of items in the queue.
     pub(crate) fn len(&self) -> usize {
-        self.inner.queue.lock().unwrap().len()
+        self.inner.state.lock().unwrap().queue.len()
     }
 
     /// Returns true if the queue is empty.
     pub(crate) fn is_empty(&self) -> bool {
-        self.inner.queue.lock().unwrap().is_empty()
+        self.inner.state.lock().unwrap().queue.is_empty()
     }
 }
 
@@ -91,42 +97,31 @@ impl<T> WorkerHandle<T> {
     /// Attempts to steal work from the queue. Blocks until work is available or the queue is closed.
     /// Returns `None` if the queue is closed and empty.
     pub(crate) fn steal(&self) -> Option<T> {
-        let mut queue = self.inner.queue.lock().unwrap();
+        let mut state = self.inner.state.lock().unwrap();
 
         loop {
-            // Try to get work
-            if let Some(item) = queue.pop_front() {
+            if let Some(item) = state.queue.pop_front() {
                 return Some(item);
             }
 
-            // Check if queue is closed
-            if self
-                .inner
-                .closed
-                .load(core::sync::atomic::Ordering::Acquire)
-            {
+            if state.closed {
                 return None;
             }
 
-            // Wait for new work or closure
-            queue = self.inner.condvar.wait(queue).unwrap();
+            state = self.inner.condvar.wait(state).unwrap();
         }
     }
 
     /// Attempts to steal work without blocking.
     /// Returns `None` if no work is currently available.
     pub(crate) fn try_steal(&self) -> Option<T> {
-        self.inner.queue.lock().unwrap().pop_front()
+        self.inner.state.lock().unwrap().queue.pop_front()
     }
 
     /// Returns `true` if the queue is closed and empty (no more work will ever be available).
     pub(crate) fn is_closed_and_empty(&self) -> bool {
-        let queue = self.inner.queue.lock().unwrap();
-        let closed = self
-            .inner
-            .closed
-            .load(core::sync::atomic::Ordering::Acquire);
-        closed && queue.is_empty()
+        let state = self.inner.state.lock().unwrap();
+        state.closed && state.queue.is_empty()
     }
 }
 
@@ -140,9 +135,85 @@ impl<T> Clone for WorkerHandle<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::{thread, time::Duration};
+    use std::{sync::mpsc, thread, time::Duration};
 
     use super::*;
+
+    #[test]
+    fn closing_waits_for_worker_predicate_lock() {
+        let queue = WorkStealingQueue::<u8>::new();
+        let worker = queue.worker();
+        // Hold the lock at the point where a worker has checked the predicate
+        // but has not yet entered Condvar::wait. Close must not notify here.
+        let guard = queue.inner.state.lock().unwrap();
+        let closing_queue = WorkStealingQueue {
+            inner: Arc::clone(&queue.inner),
+        };
+        let (started_tx, started_rx) = mpsc::channel();
+        let (closed_tx, closed_rx) = mpsc::channel();
+        let closer = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            closing_queue.close();
+            closed_tx.send(()).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let closed_before_unlock = closed_rx.recv_timeout(Duration::from_millis(100));
+        drop(guard);
+        if matches!(closed_before_unlock, Err(mpsc::RecvTimeoutError::Timeout)) {
+            closed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        closer.join().unwrap();
+        assert!(
+            matches!(closed_before_unlock, Err(mpsc::RecvTimeoutError::Timeout)),
+            "close notified before the worker could atomically enter its wait"
+        );
+        assert_eq!(worker.steal(), None);
+    }
+
+    #[test]
+    fn closing_preserves_queued_work_and_rejects_new_work() {
+        let queue = WorkStealingQueue::new();
+        let worker = queue.worker();
+        assert!(queue.push(1));
+        assert!(queue.push(2));
+        queue.close();
+        assert!(!queue.push(3));
+        assert_eq!(worker.steal(), Some(1));
+        assert_eq!(worker.steal(), Some(2));
+        assert_eq!(worker.steal(), None);
+        assert!(worker.is_closed_and_empty());
+    }
+
+    #[test]
+    fn closing_releases_all_workers() {
+        let queue = WorkStealingQueue::<u8>::new();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let worker = queue.worker();
+                let ready = ready_tx.clone();
+                let finished = finished_tx.clone();
+                thread::spawn(move || {
+                    ready.send(()).unwrap();
+                    assert_eq!(worker.steal(), None);
+                    finished.send(()).unwrap();
+                })
+            })
+            .collect();
+        drop(ready_tx);
+        drop(finished_tx);
+        for _ in &workers {
+            ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        queue.close();
+        for _ in &workers {
+            finished_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+    }
 
     #[test]
     fn test_basic_functionality() {

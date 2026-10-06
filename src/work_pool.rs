@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     io,
+    panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -62,7 +63,6 @@ pub(crate) struct WorkPool<W, R> {
     result_tx: SyncSender<(u64, R)>,
     next_index_to_dispatch: u64,
     next_index_to_return: u64,
-    last_sequence_id: Option<u64>,
     out_of_order_results: BTreeMap<u64, R>,
     shutdown_flag: Arc<AtomicBool>,
     error_store: Arc<Mutex<Option<io::Error>>>,
@@ -89,7 +89,6 @@ where
             result_tx,
             next_index_to_dispatch: 0,
             next_index_to_return: 0,
-            last_sequence_id: None,
             out_of_order_results: BTreeMap::new(),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             error_store: Arc::new(Mutex::new(None)),
@@ -110,16 +109,47 @@ where
         self.next_index_to_dispatch
     }
 
+    /// Includes queued jobs, active workers and results waiting for their turn.
+    pub(crate) fn is_full(&self) -> bool {
+        self.next_index_to_dispatch - self.next_index_to_return > u64::from(self.num_workers)
+    }
+
+    pub(crate) fn check_error(&mut self) -> io::Result<()> {
+        let error = self.error_store.lock().unwrap().take();
+        if let Some(error) = error {
+            self.abort();
+            return Err(error);
+        }
+        if self.state == WorkPoolState::Error {
+            return Err(io::Error::other("work pool has failed"));
+        }
+        Ok(())
+    }
+
     /// Submit work to the pool. Returns `false` if there is no more work to work on.
     pub(crate) fn dispatch_next_work<F>(&mut self, next_work_function: &mut F) -> io::Result<bool>
     where
         F: FnMut(u64) -> io::Result<W>,
     {
+        self.check_error()?;
+        if self.state != WorkPoolState::Dispatching {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "work pool is closed",
+            ));
+        }
         let next_index = self.next_index_to_dispatch;
 
         if next_index >= self.num_work {
             // No more members to dispatch.
             return Ok(false);
+        }
+
+        if self.is_full() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "work pool is full",
+            ));
         }
 
         let work = next_work_function(next_index)?;
@@ -147,16 +177,11 @@ where
 
     /// Try to get the next result in sequence order. Returns None if no result is ready.
     pub(crate) fn try_get_result(&mut self) -> io::Result<Option<R>> {
+        self.check_error()?;
         // Check if we have the next result in sequence.
         if let Some(result) = self.out_of_order_results.remove(&self.next_index_to_return) {
             self.next_index_to_return += 1;
             return Ok(Some(result));
-        }
-
-        // Check for errors.
-        if let Some(err) = self.error_store.lock().unwrap().take() {
-            self.state = WorkPoolState::Error;
-            return Err(err);
         }
 
         // Try to receive a result without blocking.
@@ -182,34 +207,22 @@ where
 
     /// Get the next result of the already dispatched work, blocking until available.
     ///
-    /// Returns `None` once everything that was dispatched has been returned. Unlike
-    /// `get_result` this never asks for new work and never ends the pool, so more
-    /// work can be dispatched afterwards.
+    /// Returns `None` once everything that was dispatched has been returned. This
+    /// never asks for new work, so more work can be dispatched afterwards.
     pub(crate) fn get_dispatched_result(&mut self) -> io::Result<Option<R>> {
         loop {
-            if self.state == WorkPoolState::Error {
-                return Err(self
-                    .error_store
-                    .lock()
-                    .unwrap()
-                    .take()
-                    .unwrap_or_else(|| io::Error::other("work pool failed with unknown error")));
-            }
+            self.check_error()?;
 
-            // Always check for already-received results first.
             if let Some(result) = self.out_of_order_results.remove(&self.next_index_to_return) {
                 self.next_index_to_return += 1;
                 return Ok(Some(result));
             }
 
-            // Check for a globally stored error.
-            if let Some(err) = self.error_store.lock().unwrap().take() {
-                self.state = WorkPoolState::Error;
-                return Err(err);
-            }
-
-            // Everything that was handed out has come back.
-            if self.next_index_to_return >= self.next_index_to_dispatch {
+            if self.next_index_to_return == self.next_index_to_dispatch {
+                if self.state == WorkPoolState::Draining {
+                    self.state = WorkPoolState::Finished;
+                    self.shutdown();
+                }
                 return Ok(None);
             }
 
@@ -224,18 +237,12 @@ where
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    // The workers are gone while results are still outstanding.
-                    if let Some(err) = self.error_store.lock().unwrap().take() {
-                        self.state = WorkPoolState::Error;
-                        return Err(err);
-                    }
-
-                    let error = io::Error::new(
+                    self.check_error()?;
+                    self.abort();
+                    return Err(io::Error::new(
                         io::ErrorKind::BrokenPipe,
                         "worker threads have shut down with work outstanding",
-                    );
-                    self.state = WorkPoolState::Error;
-                    return Err(error);
+                    ));
                 }
             }
         }
@@ -247,16 +254,11 @@ where
         F: FnMut(u64) -> io::Result<W>,
     {
         loop {
+            self.check_error()?;
             // Always check for already-received results first.
             if let Some(result) = self.out_of_order_results.remove(&self.next_index_to_return) {
                 self.next_index_to_return += 1;
                 return Ok(Some(result));
-            }
-
-            // Check for a globally stored error.
-            if let Some(err) = self.error_store.lock().unwrap().take() {
-                self.state = WorkPoolState::Error;
-                return Err(err);
             }
 
             match self.state {
@@ -283,9 +285,8 @@ where
                         }
                     }
 
-                    // Dispatch ahead while fewer items are queued than there are workers. Blocking
-                    // as soon as the queue is non-empty stalls dispatch behind a single worker.
-                    if self.work_queue.len() < self.num_workers as usize {
+                    // If the work queue has capacity, try to read more from the source.
+                    if !self.is_full() && self.work_queue.len() < self.num_workers as usize {
                         match self.dispatch_next_work(&mut next_work_function) {
                             Ok(true) => {
                                 // Successfully read and dispatched a chunk, loop to continue.
@@ -318,10 +319,7 @@ where
                                 }
                             }
                             Err(mpsc::RecvTimeoutError::Timeout) => {
-                                if let Some(err) = self.error_store.lock().unwrap().take() {
-                                    self.state = WorkPoolState::Error;
-                                    return Err(err);
-                                }
+                                self.check_error()?;
                             }
                             Err(mpsc::RecvTimeoutError::Disconnected) => {
                                 // All workers are done.
@@ -332,11 +330,10 @@ where
                     }
                 }
                 WorkPoolState::Draining => {
-                    if let Some(last_seq) = self.last_sequence_id {
-                        if self.next_index_to_return > last_seq {
-                            self.state = WorkPoolState::Finished;
-                            continue;
-                        }
+                    if self.next_index_to_return == self.next_index_to_dispatch {
+                        self.state = WorkPoolState::Finished;
+                        self.shutdown();
+                        continue;
                     }
 
                     // In Draining state, we only wait for results.
@@ -352,10 +349,7 @@ where
                                 }
                             }
                             Err(mpsc::RecvTimeoutError::Timeout) => {
-                                if let Some(err) = self.error_store.lock().unwrap().take() {
-                                    self.state = WorkPoolState::Error;
-                                    return Err(err);
-                                }
+                                self.check_error()?;
                             }
                             Err(mpsc::RecvTimeoutError::Disconnected) => {
                                 // All workers finished, and channel is empty. We are done.
@@ -380,8 +374,8 @@ where
     /// Mark that no more work will be submitted and begin draining.
     pub(crate) fn finish(&mut self) {
         if matches!(self.state, WorkPoolState::Dispatching) {
-            self.last_sequence_id = Some(self.next_index_to_dispatch.saturating_sub(1));
             self.state = WorkPoolState::Draining;
+            self.work_queue.close();
         }
     }
 
@@ -403,18 +397,16 @@ where
         let active_workers = Arc::clone(&self.active_workers);
         let worker_fn = self.worker_fn;
 
-        let handle = thread::spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let handle = thread::Builder::new().spawn(move || {
+            let result = catch_unwind(AssertUnwindSafe(|| {
                 worker_fn(
                     worker_handle,
                     result_tx,
                     Arc::clone(&shutdown_flag),
                     Arc::clone(&error_store),
                     active_workers,
-                );
+                )
             }));
-
-            // A panicking worker never sends a result, so report it like any other error.
             if result.is_err() {
                 set_error(
                     io::Error::other("worker thread panicked"),
@@ -424,7 +416,10 @@ where
             }
         });
 
-        self.worker_handles.push(handle);
+        match handle {
+            Ok(handle) => self.worker_handles.push(handle),
+            Err(error) => set_error(error, &self.error_store, &self.shutdown_flag),
+        }
     }
 
     fn maybe_spawn_worker(&mut self) {
@@ -441,11 +436,32 @@ where
     }
 }
 
-impl<W, R> Drop for WorkPool<W, R> {
-    fn drop(&mut self) {
+impl<W, R> WorkPool<W, R> {
+    pub(crate) fn abort(&mut self) {
+        self.state = WorkPoolState::Error;
+        self.shutdown();
+    }
+
+    fn shutdown(&mut self) {
         self.shutdown_flag.store(true, Ordering::Release);
         self.work_queue.close();
-        // Worker threads will exit when the work queue is closed
-        // JoinHandles will be dropped, which is fine since we set the shutdown flag
+
+        // Disconnect before joining: workers may be blocked sending a result.
+        let (_, disconnected_rx) = mpsc::channel();
+        drop(core::mem::replace(&mut self.result_rx, disconnected_rx));
+        for handle in self.worker_handles.drain(..) {
+            let _ = handle.join();
+        }
+        self.work_queue.discard_pending();
+        self.out_of_order_results.clear();
     }
 }
+
+impl<W, R> Drop for WorkPool<W, R> {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bound pending worker jobs and ordered results in multi-threaded writers and the LZIP reader.
+- Join workers after completion, errors, and drop; return thread-spawn failures as I/O errors.
+- Synchronize worker queue closure to prevent missed shutdown wakeups.
 - Retry interrupted BCJ2 reads without losing fragmented branch addresses.
 - Reject truncated BCJ2 streams and incomplete branch addresses.
 - Validate the BCJ2 range stream even when the declared output is empty.

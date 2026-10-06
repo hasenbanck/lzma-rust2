@@ -131,6 +131,16 @@ impl<W: Write> XzWriterMt<W> {
 
         self.drain_available_results()?;
 
+        while self.work_pool.is_full() {
+            if let Some(result) = self.work_pool.get_dispatched_result()? {
+                self.write_compressed_block(
+                    result.compressed_data,
+                    result.checksum,
+                    result.uncompressed_size,
+                )?;
+            }
+        }
+
         let work_data = core::mem::take(&mut self.current_work_unit);
         let mut work_data_opt = Some(work_data);
 
@@ -190,6 +200,52 @@ impl<W: Write> XzWriterMt<W> {
         Ok(())
     }
 
+    fn write_inner(&mut self, buf: &[u8]) -> Result<usize> {
+        self.work_pool.check_error()?;
+
+        let mut total_written = 0;
+        let mut remaining_buf = buf;
+
+        while !remaining_buf.is_empty() {
+            let block_remaining = self.block_size.saturating_sub(self.current_work_unit.len());
+            let to_write = remaining_buf.len().min(block_remaining);
+
+            if to_write > 0 {
+                self.current_work_unit
+                    .extend_from_slice(&remaining_buf[..to_write]);
+                total_written += to_write;
+                remaining_buf = &remaining_buf[to_write..];
+            }
+
+            if self.current_work_unit.len() >= self.block_size {
+                self.send_work_unit()?;
+            }
+
+            self.drain_available_results()?;
+        }
+
+        Ok(total_written)
+    }
+
+    fn flush_inner(&mut self) -> Result<()> {
+        self.work_pool.check_error()?;
+
+        if !self.current_work_unit.is_empty() {
+            self.send_work_unit()?;
+        }
+
+        // Wait for all pending work to complete and write the results.
+        while let Some(result) = self.work_pool.get_dispatched_result()? {
+            self.write_compressed_block(
+                result.compressed_data,
+                result.checksum,
+                result.uncompressed_size,
+            )?;
+        }
+
+        self.inner.flush()
+    }
+
     /// Returns a wrapper around `self` that will finish the stream on drop.
     pub fn auto_finish(self) -> AutoFinisher<Self> {
         AutoFinisher(Some(self))
@@ -216,6 +272,7 @@ impl<W: Write> XzWriterMt<W> {
 
     /// Finishes the compression and returns the underlying writer.
     pub fn finish(mut self) -> Result<W> {
+        self.work_pool.check_error()?;
         self.write_stream_header()?;
 
         if !self.current_work_unit.is_empty() {
@@ -237,12 +294,7 @@ impl<W: Write> XzWriterMt<W> {
         self.work_pool.finish();
 
         // Wait for all remaining work to complete.
-        while let Some(result) = self.work_pool.get_result(|_| {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "no more work to dispatch",
-            ))
-        })? {
+        while let Some(result) = self.work_pool.get_dispatched_result()? {
             self.write_compressed_block(
                 result.compressed_data,
                 result.checksum,
@@ -323,49 +375,19 @@ fn worker_thread_logic(
 
 impl<W: Write> Write for XzWriterMt<W> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        if buf.is_empty() {
-            return Ok(0);
+        let result = self.write_inner(buf);
+        if result.is_err() {
+            self.work_pool.abort();
         }
-
-        let mut total_written = 0;
-        let mut remaining_buf = buf;
-
-        while !remaining_buf.is_empty() {
-            let block_remaining = self.block_size.saturating_sub(self.current_work_unit.len());
-            let to_write = remaining_buf.len().min(block_remaining);
-
-            if to_write > 0 {
-                self.current_work_unit
-                    .extend_from_slice(&remaining_buf[..to_write]);
-                total_written += to_write;
-                remaining_buf = &remaining_buf[to_write..];
-            }
-
-            if self.current_work_unit.len() >= self.block_size {
-                self.send_work_unit()?;
-            }
-
-            self.drain_available_results()?;
-        }
-
-        Ok(total_written)
+        result
     }
 
     fn flush(&mut self) -> Result<()> {
-        if !self.current_work_unit.is_empty() {
-            self.send_work_unit()?;
+        let result = self.flush_inner();
+        if result.is_err() {
+            self.work_pool.abort();
         }
-
-        // Wait for all pending work to complete and write the results.
-        while let Some(result) = self.work_pool.get_dispatched_result()? {
-            self.write_compressed_block(
-                result.compressed_data,
-                result.checksum,
-                result.uncompressed_size,
-            )?;
-        }
-
-        self.inner.flush()
+        result
     }
 }
 
