@@ -19,6 +19,18 @@ use crate::{
     work_queue::{WorkStealingQueue, WorkerHandle},
 };
 
+/// Cooperative encoder cancellation, carried through the writer's I/O result.
+#[derive(Debug)]
+pub struct EncoderCancelled;
+
+impl std::fmt::Display for EncoderCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("encoder cancelled")
+    }
+}
+
+impl std::error::Error for EncoderCancelled {}
+
 /// Configuration for a work pool.
 #[derive(Debug, Clone)]
 pub(crate) struct WorkPoolConfig {
@@ -65,6 +77,7 @@ pub(crate) struct WorkPool<W, R> {
     next_index_to_return: u64,
     out_of_order_results: BTreeMap<u64, R>,
     shutdown_flag: Arc<AtomicBool>,
+    cancellation: Option<Arc<AtomicBool>>,
     error_store: Arc<Mutex<Option<io::Error>>>,
     state: WorkPoolState,
     active_workers: Arc<AtomicU32>,
@@ -91,6 +104,7 @@ where
             next_index_to_return: 0,
             out_of_order_results: BTreeMap::new(),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
+            cancellation: None,
             error_store: Arc::new(Mutex::new(None)),
             state: WorkPoolState::Dispatching,
             active_workers: Arc::new(AtomicU32::new(0)),
@@ -121,10 +135,22 @@ where
             self.abort();
             return Err(error);
         }
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            self.abort();
+            return Err(io::Error::other(EncoderCancelled));
+        }
         if self.state == WorkPoolState::Error {
             return Err(io::Error::other("work pool has failed"));
         }
         Ok(())
+    }
+
+    pub(crate) fn set_cancellation(&mut self, flag: Arc<AtomicBool>) {
+        self.cancellation = Some(flag);
     }
 
     /// Submit work to the pool. Returns `false` if there is no more work to work on.
@@ -812,6 +838,19 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn cancellation_rejects_work_before_calling_the_producer() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let mut pool = WorkPool::new(WorkPoolConfig::new(2, 10), worker);
+        pool.set_cancellation(flag);
+        let error = pool
+            .dispatch_next_work(&mut |_| panic!("cancelled producer called"))
+            .unwrap_err();
+        assert!(error.get_ref().unwrap().is::<EncoderCancelled>());
+        assert!(pool.worker_handles.is_empty());
+        assert!(pool.work_queue.is_empty());
     }
 
     #[test]

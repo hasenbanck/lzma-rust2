@@ -117,6 +117,8 @@ pub use no_std::Read;
 pub use no_std::Write;
 use state::*;
 pub use stream::{Action, Status, StreamResult};
+#[cfg(feature = "std")]
+pub use work_pool::EncoderCancelled;
 #[cfg(all(feature = "xz", feature = "std"))]
 pub use xz::XzReaderMt;
 #[cfg(all(feature = "xz", feature = "encoder", feature = "std"))]

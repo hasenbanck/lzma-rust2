@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `Bcj2Reader::finish` for strict input completion.
 - Add `Bcj2Reader::try_new` for checked stream counts.
 - Add `LzipReaderMt::new_mem_limit` to limit decoder and member-buffer memory per LZIP member.
+- Add cooperative cancellation to `Lzma2WriterMt`, reported as `EncoderCancelled`.
 
 ### Fixed
 
