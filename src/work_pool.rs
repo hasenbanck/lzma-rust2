@@ -15,7 +15,7 @@ use std::{
 const ERROR_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
 use crate::{
-    set_error,
+    recover_lock, set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
 };
 
@@ -115,7 +115,7 @@ where
     }
 
     pub(crate) fn check_error(&mut self) -> io::Result<()> {
-        let error = self.error_store.lock().unwrap().take();
+        let error = recover_lock(self.error_store.lock()).take();
         if let Some(error) = error {
             self.abort();
             return Err(error);
@@ -363,9 +363,9 @@ where
                     return Ok(None);
                 }
                 WorkPoolState::Error => {
-                    return Err(self.error_store.lock().unwrap().take().unwrap_or_else(|| {
-                        io::Error::other("work pool failed with unknown error")
-                    }));
+                    return Err(recover_lock(self.error_store.lock()).take().unwrap_or_else(
+                        || io::Error::other("work pool failed with unknown error"),
+                    ));
                 }
             }
         }

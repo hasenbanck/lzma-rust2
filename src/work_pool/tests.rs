@@ -2,6 +2,48 @@ use super::*;
 
 const DEADLINE: Duration = Duration::from_secs(5);
 
+#[test]
+fn stored_worker_error_survives_poisoned_error_lock() {
+    let mut pool = WorkPool::new(WorkPoolConfig::new(1, 0), worker);
+    let errors = Arc::clone(&pool.error_store);
+    assert!(
+        thread::spawn(move || {
+            let mut guard = errors.lock().unwrap();
+            *guard = Some(io::Error::new(io::ErrorKind::InvalidData, "bad block"));
+            panic!("poison error lock");
+        })
+        .join()
+        .is_err()
+    );
+
+    let error = pool.check_error().unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(error.to_string(), "bad block");
+    assert!(pool.worker_handles.is_empty());
+}
+
+#[test]
+fn worker_panic_is_reported_after_poisoning_error_lock() {
+    fn worker(
+        _queue: WorkerHandle<(u64, ())>,
+        _results: SyncSender<(u64, ())>,
+        _shutdown: Arc<AtomicBool>,
+        errors: Arc<Mutex<Option<io::Error>>>,
+        _active: Arc<AtomicU32>,
+    ) {
+        let _guard = errors.lock().unwrap();
+        panic!("poison error lock");
+    }
+
+    let mut pool = WorkPool::new(WorkPoolConfig::new(1, 0), worker);
+    assert!(pool.worker_handles.pop().unwrap().join().is_ok());
+    assert_eq!(
+        pool.check_error().unwrap_err().to_string(),
+        "worker thread panicked"
+    );
+    assert_eq!(pool.state(), WorkPoolState::Error);
+}
+
 struct Job {
     run: Box<dyn FnOnce() -> io::Result<u64> + Send>,
     sent: Option<mpsc::Sender<()>>,
