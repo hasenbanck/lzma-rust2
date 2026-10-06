@@ -217,6 +217,64 @@ fn drop_disconnects_blocked_result_sender_and_joins_it() {
 }
 
 #[test]
+fn abort_discards_queued_work_before_worker_resumes() {
+    fn waiting_worker(
+        queue: WorkerHandle<(u64, Job)>,
+        _results: SyncSender<(u64, u64)>,
+        shutdown: Arc<AtomicBool>,
+        _errors: Arc<Mutex<Option<io::Error>>>,
+        _active: Arc<AtomicU32>,
+    ) {
+        let (_, control) = queue.steal().unwrap();
+        // Park after checking shutdown, before stealing the next job.
+        assert!(!shutdown.load(Ordering::Acquire));
+        (control.run)().unwrap();
+        if let Some((_, job)) = queue.steal() {
+            (job.run)().unwrap();
+        }
+    }
+
+    let mut pool = WorkPool::new(WorkPoolConfig::new(1, u64::MAX), waiting_worker);
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (discarded_tx, discarded_rx) = mpsc::channel();
+    submit(
+        &mut pool,
+        Job {
+            run: Box::new(move || {
+                ready_tx.send(()).unwrap();
+                // Discarding the queued closure releases this worker. The timeout
+                // lets the old shutdown order finish and expose the extra job.
+                let _ = discarded_rx.recv_timeout(DEADLINE);
+                Ok(0)
+            }),
+            sent: None,
+        },
+    );
+    ready_rx.recv_timeout(DEADLINE).unwrap();
+
+    let processed = Arc::new(AtomicBool::new(false));
+    let processed_job = Arc::clone(&processed);
+    let discarded = ExitSignal(discarded_tx);
+    submit(
+        &mut pool,
+        Job {
+            run: Box::new(move || {
+                let _discarded = discarded;
+                processed_job.store(true, Ordering::SeqCst);
+                Ok(1)
+            }),
+            sent: None,
+        },
+    );
+
+    pool.abort();
+    assert!(
+        !processed.load(Ordering::SeqCst),
+        "aborted pool ran a queued job"
+    );
+}
+
+#[test]
 fn repeated_abort_disconnects_blocked_sender_and_rejects_work() {
     let mut pool = WorkPool::new(WorkPoolConfig::new(1, u64::MAX), blocked_sender);
     let (ready_tx, ready_rx) = mpsc::channel();

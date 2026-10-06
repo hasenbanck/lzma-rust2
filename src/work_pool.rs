@@ -462,6 +462,7 @@ impl<W, R> WorkPool<W, R> {
         };
 
         self.shutdown_flag.store(true, Ordering::Release);
+        self.work_queue.discard_pending();
         self.work_queue.close();
 
         // Disconnect before joining: workers may be blocked sending a result.
@@ -469,7 +470,6 @@ impl<W, R> WorkPool<W, R> {
         for handle in self.worker_handles.drain(..) {
             let _ = handle.join();
         }
-        self.work_queue.discard_pending();
         self.out_of_order_results.clear();
     }
 }
