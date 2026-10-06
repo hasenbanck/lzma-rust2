@@ -201,21 +201,17 @@ impl<W: Write> XzWriterMt<W> {
     }
 
     fn write_inner(&mut self, buf: &[u8]) -> Result<usize> {
-        self.work_pool.check_error()?;
+        self.work_pool.check_error_and_abort()?;
 
-        let mut total_written = 0;
+        let total_written = buf.len();
         let mut remaining_buf = buf;
 
         while !remaining_buf.is_empty() {
-            let block_remaining = self.block_size.saturating_sub(self.current_work_unit.len());
-            let to_write = remaining_buf.len().min(block_remaining);
-
-            if to_write > 0 {
-                self.current_work_unit
-                    .extend_from_slice(&remaining_buf[..to_write]);
-                total_written += to_write;
-                remaining_buf = &remaining_buf[to_write..];
-            }
+            let remaining = self.block_size.saturating_sub(self.current_work_unit.len());
+            let to_write = remaining_buf.len().min(remaining);
+            self.current_work_unit
+                .extend_from_slice(&remaining_buf[..to_write]);
+            remaining_buf = &remaining_buf[to_write..];
 
             if self.current_work_unit.len() >= self.block_size {
                 self.send_work_unit()?;
@@ -228,7 +224,7 @@ impl<W: Write> XzWriterMt<W> {
     }
 
     fn flush_inner(&mut self) -> Result<()> {
-        self.work_pool.check_error()?;
+        self.work_pool.check_error_and_abort()?;
 
         if !self.current_work_unit.is_empty() {
             self.send_work_unit()?;
@@ -272,7 +268,7 @@ impl<W: Write> XzWriterMt<W> {
 
     /// Finishes the compression and returns the underlying writer.
     pub fn finish(mut self) -> Result<W> {
-        self.work_pool.check_error()?;
+        self.work_pool.check_error_and_abort()?;
         self.write_stream_header()?;
 
         if !self.current_work_unit.is_empty() {
