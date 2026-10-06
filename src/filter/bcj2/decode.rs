@@ -42,7 +42,18 @@ impl Bcj2Decoder {
         self.dest = dest;
     }
 
+    #[inline(never)]
     pub(crate) fn decode(&mut self, src_bufs: &mut [u8], dest_buf: &mut [u8]) -> bool {
+        // A block scan follows one scalar byte; short calls need no scan bookkeeping.
+        if dest_buf.len() - self.dest >= 17 {
+            self.decode_inner::<true>(src_bufs, dest_buf)
+        } else {
+            self.decode_inner::<false>(src_bufs, dest_buf)
+        }
+    }
+
+    #[inline(never)]
+    fn decode_inner<const SCAN: bool>(&mut self, src_bufs: &mut [u8], dest_buf: &mut [u8]) -> bool {
         let dest_lim = dest_buf.len();
         if self.range <= 5 {
             self.state = BCJ2_DEC_STATE_OK;
@@ -114,6 +125,7 @@ impl Bcj2Decoder {
                     if self.temp[3] == 0x0F && (src_bufs[src] & 0xF0) == 0x80 {
                         dest_buf[dest] = src_bufs[src];
                     } else {
+                        let mut scan_end = if num >= 17 { 0 } else { src_lim };
                         loop {
                             let b = src_bufs[src];
                             dest_buf[dest] = b;
@@ -123,6 +135,41 @@ impl Bcj2Decoder {
                                 }
                                 dest += 1;
                                 src += 1;
+                                if SCAN && src >= scan_end {
+                                    scan_end = src_lim;
+                                    while src_lim - src >= 16 {
+                                        if src_lim - src >= 32 {
+                                            let window = &src_bufs[src - 1..src + 32];
+                                            let size = literal_prefix(window.try_into().unwrap());
+                                            let block = &window[1..];
+                                            if size != 32 || block[31] == 0x0F {
+                                                if size >= 16 && block[15] != 0x0F {
+                                                    dest_buf[dest..dest + 16]
+                                                        .copy_from_slice(&block[..16]);
+                                                    src += 16;
+                                                    dest += 16;
+                                                }
+                                                scan_end = src + 16;
+                                                break;
+                                            }
+                                            dest_buf[dest..dest + 32].copy_from_slice(block);
+                                            src += 32;
+                                            dest += 32;
+                                        } else {
+                                            let window = &src_bufs[src - 1..src + 16];
+                                            let block = &window[1..];
+                                            if contains_marker(window.try_into().unwrap())
+                                                || block[15] == 0x0F
+                                            {
+                                                scan_end = src + 16;
+                                                break;
+                                            }
+                                            dest_buf[dest..dest + 16].copy_from_slice(block);
+                                            src += 16;
+                                            dest += 16;
+                                        }
+                                    }
+                                }
                                 if src != src_lim {
                                     continue;
                                 }
@@ -146,7 +193,7 @@ impl Bcj2Decoder {
                     if src == src_lim {
                         self.temp[3] = src_bufs[src - 1];
                         self.bufs[BCJ2_STREAM_MAIN] = src;
-                        self.ip += num as u32;
+                        self.ip = self.ip.wrapping_add(num as u32);
                         self.dest += num;
                         self.state = if self.bufs[BCJ2_STREAM_MAIN] == self.lims[BCJ2_STREAM_MAIN] {
                             BCJ2_STREAM_MAIN
@@ -167,7 +214,7 @@ impl Bcj2Decoder {
                         self.temp[3] = b;
                         self.bufs[BCJ2_STREAM_MAIN] = src + 1;
                         num += 1;
-                        self.ip += num as u32;
+                        self.ip = self.ip.wrapping_add(num as u32);
                         self.dest += num;
 
                         let prob = &mut self.probs[if b == 0xE8 {
@@ -215,7 +262,7 @@ impl Bcj2Decoder {
                 };
                 self.bufs[cj] = cur + 4;
 
-                self.ip += 4;
+                self.ip = self.ip.wrapping_add(4);
                 val = val.wrapping_sub(self.ip);
                 let dest = self.dest;
                 let rem = dest_lim - dest;
@@ -255,5 +302,38 @@ impl Bcj2Decoder {
         }
 
         true
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instruction_position_wraps() {
+        for (main, call, control, ip, expected) in [
+            (&[0x90][..], &[][..], &[0; 5][..], u32::MAX, &[0x90][..]),
+            (&[0xE8][..], &[][..], &[0; 5][..], u32::MAX, &[0xE8][..]),
+            (
+                &[0xE8][..],
+                &[0, 0, 0, 9][..],
+                &[0, 0x7F, 0xFF, 0xFC, 0][..],
+                u32::MAX - 4,
+                &[0xE8, 9, 0, 0, 0][..],
+            ),
+        ] {
+            let mut decoder = Bcj2Decoder::new();
+            decoder.ip = ip;
+            let mut source = [main, call, &[][..], control].concat();
+            let mut offset = 0;
+            for (i, stream) in [main, call, &[][..], control].iter().enumerate() {
+                decoder.bufs[i] = offset;
+                offset += stream.len();
+                decoder.lims[i] = offset;
+            }
+            let mut output = vec![0; expected.len()];
+            assert!(decoder.decode(&mut source, &mut output));
+            assert_eq!(output, expected);
+        }
     }
 }

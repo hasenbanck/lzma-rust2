@@ -15,6 +15,7 @@ jobs:
     strategy:
       matrix:
         target:
+          - bcj2_decode
           - lzip
           - lzip_stream
           - lzma

@@ -1,4 +1,10 @@
 //! The BCJ2 filter is a branch converter for 32-bit x86 executables (version 2).
+//!
+//! BCJ2 splits input into four raw streams: MAIN holds literal bytes, CALL and
+//! JUMP hold converted absolute addresses in big-endian order, and RC holds
+//! range-coded conversion decisions. The original relative addresses are
+//! little-endian. These streams are not compressed; callers can compress each
+//! one separately. Decoding uses a starting position of zero.
 
 mod decode;
 
@@ -6,9 +12,39 @@ use alloc::{vec, vec::Vec};
 
 use decode::Bcj2Decoder;
 
-use crate::{Read, error_invalid_data};
+use crate::{Read, StickyError, error_eof, error_invalid_data, error_invalid_input};
 
 const BUF_SIZE: usize = 1 << 18;
+
+// Include the preceding byte so both contexts use contiguous vector loads.
+#[inline(never)]
+fn contains_marker(window: &[u8; 17]) -> bool {
+    let mut found = false;
+    for i in 0..16 {
+        found |= ((window[i + 1] & 0xFE) == 0xE8)
+            | ((window[i] == 0x0F) & ((window[i + 1] & 0xF0) == 0x80));
+    }
+    found
+}
+
+// Return whole 16-byte halves before a marker. Separate reductions retain vectorization.
+#[inline(never)]
+fn literal_prefix(window: &[u8; 33]) -> usize {
+    let mut first = false;
+    for i in 0..16 {
+        first |= ((window[i + 1] & 0xFE) == 0xE8)
+            | ((window[i] == 0x0F) & ((window[i + 1] & 0xF0) == 0x80));
+    }
+    if first {
+        return 0;
+    }
+    let mut second = false;
+    for i in 16..32 {
+        second |= ((window[i + 1] & 0xFE) == 0xE8)
+            | ((window[i] == 0x0F) & ((window[i + 1] & 0xF0) == 0x80));
+    }
+    if second { 16 } else { 32 }
+}
 
 const BCJ2_NUM_STREAMS: usize = 4;
 
@@ -63,13 +99,19 @@ impl Default for Bcj2Coder {
 }
 
 /// Reader for BCJ2-filtered data with multiple input streams.
+///
+/// The inputs contain the raw MAIN, CALL, JUMP and RC streams, in that order.
+/// Reading stops at the declared output size. Call [`Self::finish`] to also
+/// check that all four input streams have been consumed. A decoding or input
+/// error is reported again on later reads.
 pub struct Bcj2Reader<R> {
     base: Bcj2Coder,
     inputs: Vec<R>,
     decoder: Bcj2Decoder,
     extra_read_sizes: [usize; BCJ2_NUM_STREAMS],
-    read_res: [bool; BCJ2_NUM_STREAMS],
     uncompressed_size: u64,
+    finished: bool,
+    failure: Option<StickyError>,
 }
 
 impl<R> Bcj2Reader<R> {
@@ -80,10 +122,21 @@ impl<R> Bcj2Reader<R> {
             inputs,
             decoder: Bcj2Decoder::new(),
             extra_read_sizes: [0; BCJ2_NUM_STREAMS],
-            read_res: [true; BCJ2_NUM_STREAMS],
             uncompressed_size,
+            finished: false,
+            failure: None,
         }
         .init()
+    }
+
+    /// Creates a reader after checking that exactly four inputs were provided.
+    ///
+    /// [`Self::new`] reports an invalid input count on the first nonempty read.
+    pub fn try_new(inputs: Vec<R>, uncompressed_size: u64) -> crate::Result<Self> {
+        if inputs.len() != BCJ2_NUM_STREAMS {
+            return Err(error_invalid_input("BCJ2 requires four input streams"));
+        }
+        Ok(Self::new(inputs, uncompressed_size))
     }
 
     fn init(mut self) -> Self {
@@ -100,19 +153,28 @@ impl<R> Bcj2Reader<R> {
 
 impl<R: Read> Read for Bcj2Reader<R> {
     fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
-        let mut dest_buf = buf;
-        if dest_buf.len() > self.uncompressed_size as usize {
-            dest_buf = &mut dest_buf[..self.uncompressed_size as usize];
-        }
-        if dest_buf.is_empty() {
+        if buf.is_empty() {
             return Ok(0);
+        }
+        if let Some(failure) = &self.failure {
+            return Err(failure.report());
+        }
+        if self.inputs.len() != BCJ2_NUM_STREAMS {
+            return self.fail(0, error_invalid_input("BCJ2 requires four input streams"));
+        }
+        if self.finished {
+            return Ok(0);
+        }
+        let mut dest_buf = buf;
+        if dest_buf.len() as u64 > self.uncompressed_size {
+            dest_buf = &mut dest_buf[..self.uncompressed_size as usize];
         }
         let mut result_size = 0;
         self.decoder.set_dest(0);
         let mut offset = 0;
         loop {
             if !self.decoder.decode(&mut self.base.bufs, dest_buf) {
-                return Err(error_invalid_data("bcj2 decode error"));
+                return self.fail(result_size, error_invalid_data("bcj2 decode error"));
             }
 
             {
@@ -124,10 +186,25 @@ impl<R: Read> Read for Bcj2Reader<R> {
                 }
             }
 
+            if self.uncompressed_size == 0 {
+                if self.decoder.state == BCJ2_STREAM_MAIN
+                    || self.decoder.state == BCJ2_DEC_STATE_ORIG
+                {
+                    if self.decoder.code != 0 {
+                        return self.fail(result_size, error_invalid_data("bcj2 decode error:4"));
+                    }
+                    self.finished = true;
+                    break;
+                }
+                if self.decoder.state >= BCJ2_NUM_STREAMS {
+                    return self.fail(result_size, error_invalid_data("bcj2 decode error:5"));
+                }
+            }
             if self.decoder.state >= BCJ2_NUM_STREAMS {
                 break;
             }
             let mut total_read = self.extra_read_sizes[self.decoder.state];
+            self.extra_read_sizes[self.decoder.state] = 0;
             {
                 let buf_index = self.decoder.state * BUF_SIZE;
                 let from = self.decoder.bufs[self.decoder.state];
@@ -138,15 +215,25 @@ impl<R: Read> Read for Bcj2Reader<R> {
                 self.decoder.lims[self.decoder.state] = buf_index;
                 self.decoder.bufs[self.decoder.state] = buf_index;
             }
-            if !self.read_res[self.decoder.state] {
-                return Err(error_invalid_data("bcj2 decode error:2"));
-            }
-
             loop {
                 let cur_size = BUF_SIZE - total_read;
-                let cur_size = self.inputs[self.decoder.state].read(
+                let read = self.inputs[self.decoder.state].read(
                     &mut self.base.buf_at(self.decoder.state)[total_read..total_read + cur_size],
-                )?;
+                );
+                let cur_size = match read {
+                    Ok(size) => size,
+                    Err(error) => {
+                        #[cfg(feature = "std")]
+                        if error.kind() == std::io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                        #[cfg(not(feature = "std"))]
+                        if matches!(error, crate::Error::Interrupted) {
+                            continue;
+                        }
+                        return self.fail(result_size, error);
+                    }
+                };
                 if cur_size == 0 {
                     break;
                 }
@@ -157,31 +244,142 @@ impl<R: Read> Read for Bcj2Reader<R> {
             }
 
             if total_read == 0 {
-                break;
+                return self.fail(result_size, error_eof("unexpected end of BCJ2 input"));
             }
 
             if bcj2_is_32bit_stream(self.decoder.state) {
                 let extra_size = total_read & 3;
                 self.extra_read_sizes[self.decoder.state] = extra_size;
                 if total_read < 4 {
-                    if result_size != 0 {
-                        return Ok(result_size);
-                    }
-                    return Err(error_invalid_data("bcj2 decode error:3"));
+                    return self.fail(result_size, error_eof("incomplete BCJ2 address"));
                 }
                 total_read -= extra_size;
             }
             self.decoder.lims[self.decoder.state] = total_read + self.decoder.state * BUF_SIZE;
         }
 
-        if self.uncompressed_size == 0 {
-            if self.decoder.code != 0 {
-                return Err(error_invalid_data("bcj2 decode error:4"));
+        Ok(result_size)
+    }
+}
+
+impl<R: Read> Bcj2Reader<R> {
+    /// Checks that the output and all four input streams have ended, returning the inputs.
+    ///
+    /// Read the declared output before calling this method. For empty output,
+    /// this method initializes and validates the RC stream. The input readers
+    /// must be limited to their BCJ2 stream lengths: checking for trailing data
+    /// can read one further byte from each input.
+    pub fn finish(mut self) -> crate::Result<Vec<R>> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.report());
+        }
+        if self.uncompressed_size != 0 {
+            return Err(error_invalid_input("BCJ2 output has not been fully read"));
+        }
+        let _ = self.read(&mut [0])?;
+        for i in 0..BCJ2_NUM_STREAMS {
+            if self.decoder.bufs[i] != self.decoder.lims[i] || self.extra_read_sizes[i] != 0 {
+                return Err(error_invalid_data("trailing BCJ2 input"));
             }
-            if self.decoder.state != BCJ2_STREAM_MAIN && self.decoder.state != BCJ2_DEC_STATE_ORIG {
-                return Err(error_invalid_data("bcj2 decode error:5"));
+            loop {
+                match self.inputs[i].read(&mut [0]) {
+                    Ok(0) => break,
+                    Ok(_) => return Err(error_invalid_data("trailing BCJ2 input")),
+                    Err(error) => {
+                        #[cfg(feature = "std")]
+                        if error.kind() == std::io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                        #[cfg(not(feature = "std"))]
+                        if matches!(error, crate::Error::Interrupted) {
+                            continue;
+                        }
+                        return Err(error);
+                    }
+                }
             }
         }
-        Ok(result_size)
+        Ok(self.inputs)
+    }
+}
+
+impl<R> Bcj2Reader<R> {
+    fn fail(&mut self, result_size: usize, error: crate::Error) -> crate::Result<usize> {
+        let failure = StickyError::new(error);
+        let reported = failure.report();
+        self.failure = Some(failure);
+        if result_size == 0 {
+            Err(reported)
+        } else {
+            Ok(result_size)
+        }
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn literal_prefix_stops_before_marker_half() {
+        for position in 0..32 {
+            for byte in 0..=u8::MAX {
+                let mut window = [0x90; 33];
+                window[0] = 0;
+                window[position + 1] = byte;
+                let marker_half = if position < 16 { 0 } else { 16 };
+                assert_eq!(
+                    literal_prefix(&window),
+                    if matches!(byte, 0xE8 | 0xE9) {
+                        marker_half
+                    } else {
+                        32
+                    }
+                );
+                window[position] = 0x0F;
+                assert_eq!(
+                    literal_prefix(&window),
+                    if matches!(byte, 0x80..=0x8F | 0xE8 | 0xE9) {
+                        marker_half
+                    } else {
+                        32
+                    },
+                    "position={position} byte={byte:02x}"
+                );
+            }
+        }
+        let mut window = [0x90; 33];
+        window[32] = 0x0F;
+        assert_eq!(literal_prefix(&window), 32);
+        window[0] = 0x0F;
+        window[1] = 0x85;
+        assert_eq!(literal_prefix(&window), 0);
+    }
+
+    #[test]
+    fn marker_blocks_preserve_previous_byte_context() {
+        let mut window = [0x90; 17];
+        window[0] = 0x0F;
+        assert!(!contains_marker(&window));
+        for position in 0..16 {
+            for byte in 0..=u8::MAX {
+                let mut window = [0x90; 17];
+                window[0] = 0;
+                window[position + 1] = byte;
+                assert_eq!(contains_marker(&window), matches!(byte, 0xE8 | 0xE9));
+                window[position] = 0x0F;
+                assert_eq!(
+                    contains_marker(&window),
+                    matches!(byte, 0x80..=0x8F | 0xE8 | 0xE9),
+                    "position={position} byte={byte:02x}"
+                );
+            }
+        }
+        let mut window = [0x90; 17];
+        window[16] = 0x0F;
+        assert!(!contains_marker(&window));
+        window[0] = 0x0F;
+        window[1] = 0x85;
+        assert!(contains_marker(&window));
     }
 }
