@@ -74,6 +74,12 @@ impl<W: Write> LzipWriterMt<W> {
 
         self.drain_available_results()?;
 
+        while self.work_pool.is_full() {
+            if let Some(compressed_data) = self.work_pool.get_dispatched_result()? {
+                self.inner.write_all(&compressed_data)?;
+            }
+        }
+
         let work_data = core::mem::take(&mut self.current_work_unit);
         let mut single_member_options = self.options.clone();
         single_member_options.member_size = None;
@@ -103,6 +109,50 @@ impl<W: Write> LzipWriterMt<W> {
         Ok(())
     }
 
+    fn write_inner(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.work_pool.check_error()?;
+
+        let mut total_written = 0;
+        let mut remaining_buf = buf;
+
+        while !remaining_buf.is_empty() {
+            let member_remaining = self
+                .member_size
+                .saturating_sub(self.current_work_unit.len());
+            let to_write = remaining_buf.len().min(member_remaining);
+
+            if to_write > 0 {
+                self.current_work_unit
+                    .extend_from_slice(&remaining_buf[..to_write]);
+                total_written += to_write;
+                remaining_buf = &remaining_buf[to_write..];
+            }
+
+            if self.current_work_unit.len() >= self.member_size {
+                self.send_work_unit()?;
+            }
+
+            self.drain_available_results()?;
+        }
+
+        Ok(total_written)
+    }
+
+    fn flush_inner(&mut self) -> io::Result<()> {
+        self.work_pool.check_error()?;
+
+        if !self.current_work_unit.is_empty() {
+            self.send_work_unit()?;
+        }
+
+        // Wait for all pending work to complete and write the results.
+        while let Some(compressed_data) = self.work_pool.get_dispatched_result()? {
+            self.inner.write_all(&compressed_data)?;
+        }
+
+        self.inner.flush()
+    }
+
     /// Returns a wrapper around `self` that will finish the stream on drop.
     pub fn auto_finish(self) -> AutoFinisher<Self> {
         AutoFinisher(Some(self))
@@ -115,6 +165,7 @@ impl<W: Write> LzipWriterMt<W> {
 
     /// Finishes the compression and returns the underlying writer.
     pub fn finish(mut self) -> io::Result<W> {
+        self.work_pool.check_error()?;
         if !self.current_work_unit.is_empty() {
             self.send_work_unit()?;
         }
@@ -136,12 +187,7 @@ impl<W: Write> LzipWriterMt<W> {
         self.work_pool.finish();
 
         // Wait for all remaining work to complete.
-        while let Some(compressed_data) = self.work_pool.get_result(|_| {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "no more work to dispatch",
-            ))
-        })? {
+        while let Some(compressed_data) = self.work_pool.get_dispatched_result()? {
             self.inner.write_all(&compressed_data)?;
         }
 
@@ -201,47 +247,19 @@ fn worker_thread_logic(
 
 impl<W: Write> Write for LzipWriterMt<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if buf.is_empty() {
-            return Ok(0);
+        let result = self.write_inner(buf);
+        if result.is_err() {
+            self.work_pool.abort();
         }
-
-        let mut total_written = 0;
-        let mut remaining_buf = buf;
-
-        while !remaining_buf.is_empty() {
-            let member_remaining = self
-                .member_size
-                .saturating_sub(self.current_work_unit.len());
-            let to_write = remaining_buf.len().min(member_remaining);
-
-            if to_write > 0 {
-                self.current_work_unit
-                    .extend_from_slice(&remaining_buf[..to_write]);
-                total_written += to_write;
-                remaining_buf = &remaining_buf[to_write..];
-            }
-
-            if self.current_work_unit.len() >= self.member_size {
-                self.send_work_unit()?;
-            }
-
-            self.drain_available_results()?;
-        }
-
-        Ok(total_written)
+        result
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        if !self.current_work_unit.is_empty() {
-            self.send_work_unit()?;
+        let result = self.flush_inner();
+        if result.is_err() {
+            self.work_pool.abort();
         }
-
-        // Wait for all pending work to complete and write the results.
-        while let Some(compressed_data) = self.work_pool.get_dispatched_result()? {
-            self.inner.write_all(&compressed_data)?;
-        }
-
-        self.inner.flush()
+        result
     }
 }
 
