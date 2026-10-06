@@ -110,21 +110,17 @@ impl<W: Write> Lzma2WriterMt<W> {
     }
 
     fn write_inner(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.work_pool.check_error()?;
+        self.work_pool.check_error_and_abort()?;
 
-        let mut total_written = 0;
+        let total_written = buf.len();
         let mut remaining_buf = buf;
 
         while !remaining_buf.is_empty() {
-            let chunk_remaining = self.chunk_size.saturating_sub(self.current_work_unit.len());
-            let to_write = remaining_buf.len().min(chunk_remaining);
-
-            if to_write > 0 {
-                self.current_work_unit
-                    .extend_from_slice(&remaining_buf[..to_write]);
-                total_written += to_write;
-                remaining_buf = &remaining_buf[to_write..];
-            }
+            let remaining = self.chunk_size.saturating_sub(self.current_work_unit.len());
+            let to_write = remaining_buf.len().min(remaining);
+            self.current_work_unit
+                .extend_from_slice(&remaining_buf[..to_write]);
+            remaining_buf = &remaining_buf[to_write..];
 
             if self.current_work_unit.len() >= self.chunk_size {
                 self.send_work_unit()?;
@@ -137,7 +133,7 @@ impl<W: Write> Lzma2WriterMt<W> {
     }
 
     fn flush_inner(&mut self) -> io::Result<()> {
-        self.work_pool.check_error()?;
+        self.work_pool.check_error_and_abort()?;
 
         if !self.current_work_unit.is_empty() {
             self.send_work_unit()?;
@@ -163,7 +159,7 @@ impl<W: Write> Lzma2WriterMt<W> {
 
     /// Finishes the compression and returns the underlying writer.
     pub fn finish(mut self) -> io::Result<W> {
-        self.work_pool.check_error()?;
+        self.work_pool.check_error_and_abort()?;
         if !self.current_work_unit.is_empty() {
             self.send_work_unit()?;
         }

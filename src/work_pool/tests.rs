@@ -16,7 +16,7 @@ fn stored_worker_error_survives_poisoned_error_lock() {
         .is_err()
     );
 
-    let error = pool.check_error().unwrap_err();
+    let error = pool.check_error_and_abort().unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert_eq!(error.to_string(), "bad block");
     assert!(pool.worker_handles.is_empty());
@@ -38,7 +38,7 @@ fn worker_panic_is_reported_after_poisoning_error_lock() {
     let mut pool = WorkPool::new(WorkPoolConfig::new(1, 0), worker);
     assert!(pool.worker_handles.pop().unwrap().join().is_ok());
     assert_eq!(
-        pool.check_error().unwrap_err().to_string(),
+        pool.check_error_and_abort().unwrap_err().to_string(),
         "worker thread panicked"
     );
     assert_eq!(pool.state(), WorkPoolState::Error);
@@ -217,6 +217,32 @@ fn drop_disconnects_blocked_result_sender_and_joins_it() {
 }
 
 #[test]
+fn repeated_abort_disconnects_blocked_sender_and_rejects_work() {
+    let mut pool = WorkPool::new(WorkPoolConfig::new(1, u64::MAX), blocked_sender);
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (exited_tx, exited_rx) = mpsc::channel();
+    let mut signals = Some((ready_tx, exited_tx));
+    pool.dispatch_next_work(&mut |_| Ok(signals.take().unwrap()))
+        .unwrap();
+    ready_rx.recv_timeout(DEADLINE).unwrap();
+
+    pool.abort();
+    exited_rx.try_recv().unwrap();
+    pool.abort();
+    pool.finish();
+    assert!(pool.try_get_result().is_err());
+    assert!(pool.get_dispatched_result().is_err());
+    assert!(
+        pool.get_result(|_| panic!("aborted pool read input"))
+            .is_err()
+    );
+    assert!(
+        pool.dispatch_next_work(&mut |_| panic!("aborted pool accepted work"))
+            .is_err()
+    );
+}
+
+#[test]
 fn input_error_aborts_reader_prefetch_and_joins_workers() {
     let mut pool = WorkPool::new(WorkPoolConfig::new(2, 10), worker);
     let error = pool
@@ -234,6 +260,14 @@ fn finishing_empty_pool_joins_idle_worker() {
     assert_eq!(pool.get_dispatched_result().unwrap(), None);
     assert_eq!(pool.state(), WorkPoolState::Finished);
     assert!(pool.worker_handles.is_empty());
+    pool.finish();
+    assert_eq!(pool.try_get_result().unwrap(), None);
+    assert_eq!(pool.get_dispatched_result().unwrap(), None);
+    assert_eq!(
+        pool.get_result(|_| panic!("finished pool read input"))
+            .unwrap(),
+        None
+    );
 }
 
 #[test]

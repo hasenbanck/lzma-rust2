@@ -59,7 +59,7 @@ pub(crate) type WorkerFunction<W, R> = fn(
 /// A generic work pool for the multi threading reader and writer.
 pub(crate) struct WorkPool<W, R> {
     work_queue: WorkStealingQueue<(u64, W)>,
-    result_rx: Receiver<(u64, R)>,
+    result_rx: Option<Receiver<(u64, R)>>,
     result_tx: SyncSender<(u64, R)>,
     next_index_to_dispatch: u64,
     next_index_to_return: u64,
@@ -85,7 +85,7 @@ where
 
         let mut pool = Self {
             work_queue: WorkStealingQueue::new(),
-            result_rx,
+            result_rx: Some(result_rx),
             result_tx,
             next_index_to_dispatch: 0,
             next_index_to_return: 0,
@@ -114,7 +114,8 @@ where
         self.next_index_to_dispatch - self.next_index_to_return > u64::from(self.num_workers)
     }
 
-    pub(crate) fn check_error(&mut self) -> io::Result<()> {
+    /// Report worker errors and shut down the pool, joining all workers on failure.
+    pub(crate) fn check_error_and_abort(&mut self) -> io::Result<()> {
         let error = recover_lock(self.error_store.lock()).take();
         if let Some(error) = error {
             self.abort();
@@ -131,7 +132,7 @@ where
     where
         F: FnMut(u64) -> io::Result<W>,
     {
-        self.check_error()?;
+        self.check_error_and_abort()?;
         if self.state != WorkPoolState::Dispatching {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
@@ -177,7 +178,7 @@ where
 
     /// Try to get the next result in sequence order. Returns None if no result is ready.
     pub(crate) fn try_get_result(&mut self) -> io::Result<Option<R>> {
-        self.check_error()?;
+        self.check_error_and_abort()?;
         // Check if we have the next result in sequence.
         if let Some(result) = self.out_of_order_results.remove(&self.next_index_to_return) {
             self.next_index_to_return += 1;
@@ -185,7 +186,10 @@ where
         }
 
         // Try to receive a result without blocking.
-        match self.result_rx.try_recv() {
+        let Some(result_rx) = &self.result_rx else {
+            return Ok(None);
+        };
+        match result_rx.try_recv() {
             Ok((seq, result)) => {
                 if seq == self.next_index_to_return {
                     self.next_index_to_return += 1;
@@ -211,7 +215,7 @@ where
     /// never asks for new work, so more work can be dispatched afterwards.
     pub(crate) fn get_dispatched_result(&mut self) -> io::Result<Option<R>> {
         loop {
-            self.check_error()?;
+            self.check_error_and_abort()?;
 
             if let Some(result) = self.out_of_order_results.remove(&self.next_index_to_return) {
                 self.next_index_to_return += 1;
@@ -226,7 +230,10 @@ where
                 return Ok(None);
             }
 
-            match self.result_rx.recv_timeout(ERROR_CHECK_INTERVAL) {
+            let Some(result_rx) = &self.result_rx else {
+                return Ok(None);
+            };
+            match result_rx.recv_timeout(ERROR_CHECK_INTERVAL) {
                 Ok((seq, result)) => {
                     if seq == self.next_index_to_return {
                         self.next_index_to_return += 1;
@@ -237,7 +244,7 @@ where
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    self.check_error()?;
+                    self.check_error_and_abort()?;
                     self.abort();
                     return Err(io::Error::new(
                         io::ErrorKind::BrokenPipe,
@@ -254,7 +261,7 @@ where
         F: FnMut(u64) -> io::Result<W>,
     {
         loop {
-            self.check_error()?;
+            self.check_error_and_abort()?;
             // Always check for already-received results first.
             if let Some(result) = self.out_of_order_results.remove(&self.next_index_to_return) {
                 self.next_index_to_return += 1;
@@ -265,7 +272,10 @@ where
                 WorkPoolState::Dispatching => {
                     // First, always try to receive a result without blocking.
                     // This keeps the pipeline moving and avoids unnecessary blocking.
-                    match self.result_rx.try_recv() {
+                    let Some(result_rx) = &self.result_rx else {
+                        return Ok(None);
+                    };
+                    match result_rx.try_recv() {
                         Ok((seq, result)) => {
                             if seq == self.next_index_to_return {
                                 self.next_index_to_return += 1;
@@ -307,7 +317,10 @@ where
 
                     // Now we MUST wait for a result to make progress.
                     loop {
-                        match self.result_rx.recv_timeout(ERROR_CHECK_INTERVAL) {
+                        let Some(result_rx) = &self.result_rx else {
+                            return Ok(None);
+                        };
+                        match result_rx.recv_timeout(ERROR_CHECK_INTERVAL) {
                             Ok((seq, result)) => {
                                 if seq == self.next_index_to_return {
                                     self.next_index_to_return += 1;
@@ -319,7 +332,7 @@ where
                                 }
                             }
                             Err(mpsc::RecvTimeoutError::Timeout) => {
-                                self.check_error()?;
+                                self.check_error_and_abort()?;
                             }
                             Err(mpsc::RecvTimeoutError::Disconnected) => {
                                 // All workers are done.
@@ -338,7 +351,10 @@ where
 
                     // In Draining state, we only wait for results.
                     loop {
-                        match self.result_rx.recv_timeout(ERROR_CHECK_INTERVAL) {
+                        let Some(result_rx) = &self.result_rx else {
+                            return Ok(None);
+                        };
+                        match result_rx.recv_timeout(ERROR_CHECK_INTERVAL) {
                             Ok((seq, result)) => {
                                 if seq == self.next_index_to_return {
                                     self.next_index_to_return += 1;
@@ -349,7 +365,7 @@ where
                                 }
                             }
                             Err(mpsc::RecvTimeoutError::Timeout) => {
-                                self.check_error()?;
+                                self.check_error_and_abort()?;
                             }
                             Err(mpsc::RecvTimeoutError::Disconnected) => {
                                 // All workers finished, and channel is empty. We are done.
@@ -363,9 +379,7 @@ where
                     return Ok(None);
                 }
                 WorkPoolState::Error => {
-                    return Err(recover_lock(self.error_store.lock()).take().unwrap_or_else(
-                        || io::Error::other("work pool failed with unknown error"),
-                    ));
+                    return Err(io::Error::other("work pool has failed"));
                 }
             }
         }
@@ -443,12 +457,15 @@ impl<W, R> WorkPool<W, R> {
     }
 
     fn shutdown(&mut self) {
+        let Some(result_rx) = self.result_rx.take() else {
+            return;
+        };
+
         self.shutdown_flag.store(true, Ordering::Release);
         self.work_queue.close();
 
         // Disconnect before joining: workers may be blocked sending a result.
-        let (_, disconnected_rx) = mpsc::channel();
-        drop(core::mem::replace(&mut self.result_rx, disconnected_rx));
+        drop(result_rx);
         for handle in self.worker_handles.drain(..) {
             let _ = handle.join();
         }
