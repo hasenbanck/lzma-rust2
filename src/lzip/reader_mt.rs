@@ -9,7 +9,7 @@ use std::{
 
 use super::{LzipMember, scan_members};
 use crate::{
-    LzipReader, Read, set_error,
+    LzipReader, Read, error_out_of_memory, set_error,
     work_pool::{WorkPool, WorkPoolConfig, WorkPoolState},
     work_queue::WorkerHandle,
 };
@@ -62,7 +62,13 @@ impl<R: Read + Seek> LzipReaderMt<R> {
         self.work_pool.get_result(|index| {
             let member = &self.members[index as usize];
             self.inner.seek(SeekFrom::Start(member.start_pos))?;
-            let mut member_data = vec![0u8; member.compressed_size as usize];
+            let size = usize::try_from(member.compressed_size)
+                .map_err(|_| error_out_of_memory("LZIP member allocation too large"))?;
+            let mut member_data = Vec::new();
+            member_data
+                .try_reserve_exact(size)
+                .map_err(|_| error_out_of_memory("LZIP member allocation too large"))?;
+            member_data.resize(size, 0);
             self.inner.read_exact(&mut member_data)?;
             Ok(WorkUnit { member_data })
         })
