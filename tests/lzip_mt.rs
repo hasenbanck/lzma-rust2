@@ -4,7 +4,30 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use lzma_rust2::{LzipOptions, LzipReader, LzipReaderMt, LzipWriterMt};
+use lzma_rust2::{LzipOptions, LzipReader, LzipReaderMt, LzipWriter, LzipWriterMt};
+
+#[test]
+fn many_empty_members_do_not_exhaust_the_read_stack() {
+    let empty = LzipWriter::new(Vec::new(), LzipOptions::with_preset(0))
+        .finish()
+        .unwrap();
+    let mut archive = empty.repeat(20_000);
+    let mut last = LzipWriter::new(Vec::new(), LzipOptions::with_preset(0));
+    last.write_all(b"last").unwrap();
+    archive.extend(last.finish().unwrap());
+
+    std::thread::Builder::new()
+        .stack_size(64 * 1024)
+        .spawn(move || {
+            let mut reader = LzipReaderMt::new(Cursor::new(archive), 1).unwrap();
+            let mut output = Vec::new();
+            reader.read_to_end(&mut output).unwrap();
+            assert_eq!(output, b"last");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
