@@ -65,7 +65,8 @@ fn memory_limit_rejects_large_member_output() {
     let error = limited.read_to_end(&mut Vec::new()).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
 
-    let mut sufficient = LzipReaderMt::new_mem_limit(Cursor::new(archive.clone()), 4096, 2).unwrap();
+    let mut sufficient =
+        LzipReaderMt::new_mem_limit(Cursor::new(archive.clone()), 4096, 2).unwrap();
     let mut output = Vec::new();
     sufficient.read_to_end(&mut output).unwrap();
     assert_eq!(output, input);
