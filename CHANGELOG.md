@@ -11,12 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add `Bcj2Reader::finish` for strict input completion.
 - Add `Bcj2Reader::try_new` for checked stream counts.
+- Add `LzipReaderMt::new_mem_limit` to limit decoder and member-buffer memory per LZIP member.
 
 ### Fixed
 
 - Bound pending worker jobs and ordered results in multi-threaded writers and the LZIP reader.
 - Join workers after completion, errors, and drop; return thread-spawn failures as I/O errors.
 - Synchronize worker queue closure to prevent missed shutdown wakeups.
+- Read consecutive empty LZIP members without growing the `LzipReaderMt` call stack.
+- Return `OutOfMemory` instead of panicking when a LZIP member requests an impossible allocation.
+- Stop active LZIP member decoding when the worker pool shuts down.
 - Retry interrupted BCJ2 reads without losing fragmented branch addresses.
 - Reject truncated BCJ2 streams and incomplete branch addresses.
 - Validate the BCJ2 range stream even when the declared output is empty.
