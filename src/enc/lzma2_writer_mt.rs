@@ -66,10 +66,22 @@ impl<W: Write> Lzma2WriterMt<W> {
         })
     }
 
-    /// Sets a shared flag checked during worker input and while waiting for results.
-    pub fn set_cancellation(&mut self, flag: Arc<AtomicBool>) {
+    /// Sets a shared cancellation flag before writing input.
+    ///
+    /// The flag can be replaced until input has been buffered or dispatched. After that,
+    /// this method returns [`io::ErrorKind::InvalidInput`] and keeps the existing flag.
+    /// Workers check the flag between 64 KiB input segments, and the writer checks it
+    /// before accepting input and while waiting for results. Cancellation returns an
+    /// I/O error carrying [`EncoderCancelled`] and stops the writer permanently.
+    pub fn set_cancellation(&mut self, flag: Arc<AtomicBool>) -> io::Result<()> {
+        if !self.current_work_unit.is_empty() || self.work_pool.next_index_to_dispatch() != 0 {
+            return Err(error_invalid_input(
+                "cancellation must be configured before writing input",
+            ));
+        }
         self.work_pool.set_cancellation(Arc::clone(&flag));
         self.cancellation = Some(flag);
+        Ok(())
     }
 
     /// Sends the current work unit to the workers.
@@ -218,30 +230,12 @@ fn worker_thread_logic(
             }
         };
 
-        let mut compressed_buffer = Vec::new();
-
-        let mut writer = Lzma2Writer::new(&mut compressed_buffer, work_unit.options);
-
-        let encoded = work_unit.data.chunks(64 * 1024).try_for_each(|chunk| {
-            if shutdown_flag.load(Ordering::Acquire)
-                || work_unit
-                    .cancellation
-                    .as_ref()
-                    .is_some_and(|flag| flag.load(Ordering::Relaxed))
-            {
-                return Err(io::Error::other(EncoderCancelled));
+        let result = match encode_work_unit(work_unit, &shutdown_flag, Vec::new()) {
+            Ok(Some(result)) => result,
+            Ok(None) => {
+                active_workers.fetch_sub(1, Ordering::Release);
+                return;
             }
-            writer.write_all(chunk)
-        });
-        let result = match encoded {
-            Ok(_) => match writer.flush() {
-                Ok(_) => compressed_buffer,
-                Err(error) => {
-                    active_workers.fetch_sub(1, Ordering::Release);
-                    set_error(error, &error_store, &shutdown_flag);
-                    return;
-                }
-            },
             Err(error) => {
                 active_workers.fetch_sub(1, Ordering::Release);
                 set_error(error, &error_store, &shutdown_flag);
@@ -256,6 +250,39 @@ fn worker_thread_logic(
 
         active_workers.fetch_sub(1, Ordering::Release);
     }
+}
+
+/// Encode a work unit, returning `None` when the pool shuts down.
+/// Requested cancellation returns an error carrying `EncoderCancelled`.
+fn encode_work_unit<W: Write>(
+    work_unit: WorkUnit,
+    shutdown_flag: &AtomicBool,
+    inner: W,
+) -> io::Result<Option<W>> {
+    let WorkUnit {
+        data,
+        options,
+        cancellation,
+    } = work_unit;
+
+    if shutdown_flag.load(Ordering::Acquire) {
+        return Ok(None);
+    }
+    let mut writer = Lzma2Writer::new(inner, options);
+    for chunk in data.chunks(64 * 1024) {
+        if shutdown_flag.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        if cancellation
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            return Err(io::Error::other(EncoderCancelled));
+        }
+        writer.write_all(chunk)?;
+    }
+    writer.flush()?;
+    Ok(Some(writer.into_inner()))
 }
 
 impl<W: Write> Write for Lzma2WriterMt<W> {
@@ -284,7 +311,103 @@ impl<W: Write> AutoFinish for Lzma2WriterMt<W> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        sync::{atomic::AtomicUsize, mpsc},
+        thread,
+        time::Duration,
+    };
+
     use super::*;
+
+    const DEADLINE: Duration = Duration::from_secs(5);
+
+    struct GatedSink {
+        gate: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>,
+        bytes_written: Arc<AtomicUsize>,
+    }
+
+    impl Write for GatedSink {
+        fn write(&mut self, input: &[u8]) -> io::Result<usize> {
+            if let Some((started, resume)) = self.gate.take() {
+                started.send(()).unwrap();
+                resume.recv_timeout(DEADLINE).unwrap();
+            }
+            self.bytes_written.fetch_add(input.len(), Ordering::Relaxed);
+            Ok(input.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cancellation_stops_active_worker_encoding() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let cancellation = Arc::clone(&flag);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let bytes_written = Arc::new(AtomicUsize::new(0));
+        let sink = GatedSink {
+            gate: Some((started_tx, resume_rx)),
+            bytes_written: Arc::clone(&bytes_written),
+        };
+        let worker = thread::spawn(move || {
+            encode_work_unit(
+                work_unit(512 * 1024, Some(cancellation)),
+                &AtomicBool::new(false),
+                sink,
+            )
+        });
+
+        started_rx.recv_timeout(DEADLINE).unwrap();
+        flag.store(true, Ordering::Relaxed);
+        resume_tx.send(()).unwrap();
+        let result = worker.join().unwrap();
+        let error = result.err().expect("worker ignored cancellation");
+        assert!(error.get_ref().unwrap().is::<EncoderCancelled>());
+        assert!(bytes_written.load(Ordering::Relaxed) < 256 * 1024);
+    }
+
+    #[test]
+    fn shutdown_stops_active_worker_without_reporting_cancellation() {
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+        let shutdown = Arc::clone(&shutdown_flag);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let bytes_written = Arc::new(AtomicUsize::new(0));
+        let sink = GatedSink {
+            gate: Some((started_tx, resume_rx)),
+            bytes_written: Arc::clone(&bytes_written),
+        };
+        let worker =
+            thread::spawn(move || encode_work_unit(work_unit(512 * 1024, None), &shutdown, sink));
+
+        started_rx.recv_timeout(DEADLINE).unwrap();
+        shutdown_flag.store(true, Ordering::Release);
+        resume_tx.send(()).unwrap();
+        assert!(worker.join().unwrap().unwrap().is_none());
+        assert!(bytes_written.load(Ordering::Relaxed) < 256 * 1024);
+    }
+
+    fn work_unit(input_size: usize, cancellation: Option<Arc<AtomicBool>>) -> WorkUnit {
+        let mut state = 0x1234_5678_u32;
+        let data = (0..input_size)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect();
+        let mut options = Lzma2Options::with_preset(1);
+        options.lzma_options.dict_size = 512 * 1024;
+        WorkUnit {
+            data,
+            options,
+            cancellation,
+        }
+    }
 
     #[test]
     fn dispatch_retains_a_reserved_producer_buffer() {
