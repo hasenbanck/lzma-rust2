@@ -398,6 +398,31 @@ impl<W: Write> Lzma2Writer<W> {
         &mut self.inner
     }
 
+    /// Flush buffered input, returning false if `should_continue` requests a stop.
+    pub(super) fn flush_with_check<F>(&mut self, mut should_continue: F) -> crate::Result<bool>
+    where
+        F: FnMut() -> crate::Result<bool>,
+    {
+        if !should_continue()? {
+            return Ok(false);
+        }
+        self.lzma.lz.set_flushing();
+
+        while should_continue()? {
+            if self.pending_size == 0 {
+                self.inner.flush()?;
+                return should_continue();
+            }
+            self.lzma.encode_for_lzma2(&mut self.rc, &mut self.mode)?;
+            if !should_continue()? {
+                break;
+            }
+            self.write_chunk()?;
+        }
+
+        Ok(false)
+    }
+
     /// Finishes the compression and returns the underlying writer.
     pub fn finish(mut self) -> crate::Result<W> {
         self.lzma.lz.set_finishing();
@@ -435,14 +460,7 @@ impl<W: Write> Write for Lzma2Writer<W> {
     }
 
     fn flush(&mut self) -> crate::Result<()> {
-        self.lzma.lz.set_flushing();
-
-        while self.pending_size > 0 {
-            self.lzma.encode_for_lzma2(&mut self.rc, &mut self.mode)?;
-            self.write_chunk()?;
-        }
-
-        self.inner.flush()
+        self.flush_with_check(|| Ok(true)).map(|_| ())
     }
 }
 
