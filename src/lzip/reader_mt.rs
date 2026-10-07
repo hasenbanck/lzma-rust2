@@ -128,29 +128,12 @@ fn worker_thread_logic(
 
         let (index, WorkUnit { member_data, output_limit }) = work_unit;
 
-        let mut lzip_reader = LzipReader::new(member_data.as_slice());
-
-        let mut decompressed_data = Vec::new();
-        let result = (|| -> io::Result<Vec<u8>> {
-            let mut chunk = [0; 8192];
-            loop {
-                let count = lzip_reader.read(&mut chunk)?;
-                if count == 0 {
-                    return Ok(decompressed_data);
-                }
-                if output_limit.is_some_and(|limit| {
-                    decompressed_data.len().saturating_add(count) > limit
-                }) {
-                    return Err(error_out_of_memory("LZIP member exceeds memory limit"));
-                }
-                decompressed_data
-                    .try_reserve_exact(count)
-                    .map_err(|_| error_out_of_memory("LZIP member output allocation too large"))?;
-                decompressed_data.extend_from_slice(&chunk[..count]);
+        let result = match decode_member(&member_data, output_limit, &shutdown_flag) {
+            Ok(Some(data)) => data,
+            Ok(None) => {
+                active_workers.fetch_sub(1, Ordering::Release);
+                return;
             }
-        })();
-        let result = match result {
-            Ok(data) => data,
             Err(error) => {
                 active_workers.fetch_sub(1, Ordering::Release);
                 set_error(error, &error_store, &shutdown_flag);
@@ -164,6 +147,52 @@ fn worker_thread_logic(
         }
 
         active_workers.fetch_sub(1, Ordering::Release);
+    }
+}
+
+fn decode_member(
+    member_data: &[u8],
+    output_limit: Option<usize>,
+    shutdown_flag: &AtomicBool,
+) -> io::Result<Option<Vec<u8>>> {
+    let mut lzip_reader = LzipReader::new(member_data);
+    let mut decompressed_data = Vec::new();
+    let mut chunk = [0; 8192];
+    loop {
+        if shutdown_flag.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        let count = lzip_reader.read(&mut chunk);
+        if shutdown_flag.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        let count = count?;
+        if count == 0 {
+            return Ok(Some(decompressed_data));
+        }
+        if output_limit.is_some_and(|limit| decompressed_data.len().saturating_add(count) > limit)
+        {
+            return Err(error_out_of_memory("LZIP member exceeds memory limit"));
+        }
+        decompressed_data
+            .try_reserve_exact(count)
+            .map_err(|_| error_out_of_memory("LZIP member output allocation too large"))?;
+        decompressed_data.extend_from_slice(&chunk[..count]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{LzipOptions, LzipWriter, Write};
+
+    #[test]
+    fn cancelled_member_stops_before_decoding() {
+        let mut writer = LzipWriter::new(Vec::new(), LzipOptions::with_preset(0));
+        writer.write_all(&vec![b'x'; 256 * 1024]).unwrap();
+        let member = writer.finish().unwrap();
+        let shutdown = AtomicBool::new(true);
+        assert!(decode_member(&member, None, &shutdown).unwrap().is_none());
     }
 }
 
