@@ -70,9 +70,9 @@ impl<W: Write> Lzma2WriterMt<W> {
     ///
     /// The flag can be replaced until input has been buffered or dispatched. After that,
     /// this method returns [`io::ErrorKind::InvalidInput`] and keeps the existing flag.
-    /// Workers check the flag between 64 KiB input segments, and the writer checks it
-    /// before accepting input and while waiting for results. Cancellation returns an
-    /// I/O error carrying [`EncoderCancelled`] and stops the writer permanently.
+    /// Workers check the flag between 64 KiB input segments and during the final flush.
+    /// The writer checks it before accepting input and while waiting for results. Cancellation
+    /// returns an I/O error carrying [`EncoderCancelled`] and stops the writer permanently.
     pub fn set_cancellation(&mut self, flag: Arc<AtomicBool>) -> io::Result<()> {
         if !self.current_work_unit.is_empty() || self.work_pool.next_index_to_dispatch() != 0 {
             return Err(error_invalid_input(
@@ -265,13 +265,9 @@ fn encode_work_unit<W: Write>(
         cancellation,
     } = work_unit;
 
-    if shutdown_flag.load(Ordering::Acquire) {
-        return Ok(None);
-    }
-    let mut writer = Lzma2Writer::new(inner, options);
-    for chunk in data.chunks(64 * 1024) {
+    let should_continue = || {
         if shutdown_flag.load(Ordering::Acquire) {
-            return Ok(None);
+            return Ok(false);
         }
         if cancellation
             .as_ref()
@@ -279,9 +275,21 @@ fn encode_work_unit<W: Write>(
         {
             return Err(io::Error::other(EncoderCancelled));
         }
+        Ok(true)
+    };
+    if !should_continue()? {
+        return Ok(None);
+    }
+    let mut writer = Lzma2Writer::new(inner, options);
+    for chunk in data.chunks(64 * 1024) {
+        if !should_continue()? {
+            return Ok(None);
+        }
         writer.write_all(chunk)?;
     }
-    writer.flush()?;
+    if !writer.flush_with_check(should_continue)? {
+        return Ok(None);
+    }
     Ok(Some(writer.into_inner()))
 }
 
@@ -388,6 +396,54 @@ mod tests {
         resume_tx.send(()).unwrap();
         assert!(worker.join().unwrap().unwrap().is_none());
         assert!(bytes_written.load(Ordering::Relaxed) < 256 * 1024);
+    }
+
+    #[test]
+    fn cancellation_stops_worker_during_final_flush() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let cancellation = Arc::clone(&flag);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let sink = GatedSink {
+            gate: Some((started_tx, resume_rx)),
+            bytes_written: Arc::new(AtomicUsize::new(0)),
+        };
+        let worker = thread::spawn(move || {
+            // This fits in the encoder's lookahead buffer, so output starts in flush().
+            encode_work_unit(
+                work_unit(128, Some(cancellation)),
+                &AtomicBool::new(false),
+                sink,
+            )
+        });
+
+        started_rx.recv_timeout(DEADLINE).unwrap();
+        flag.store(true, Ordering::Relaxed);
+        resume_tx.send(()).unwrap();
+        let error = worker
+            .join()
+            .unwrap()
+            .err()
+            .expect("worker ignored cancellation during flush");
+        assert!(error.get_ref().unwrap().is::<EncoderCancelled>());
+    }
+
+    #[test]
+    fn shutdown_stops_worker_during_final_flush_without_reporting_cancellation() {
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+        let shutdown = Arc::clone(&shutdown_flag);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let sink = GatedSink {
+            gate: Some((started_tx, resume_rx)),
+            bytes_written: Arc::new(AtomicUsize::new(0)),
+        };
+        let worker = thread::spawn(move || encode_work_unit(work_unit(128, None), &shutdown, sink));
+
+        started_rx.recv_timeout(DEADLINE).unwrap();
+        shutdown_flag.store(true, Ordering::Release);
+        resume_tx.send(()).unwrap();
+        assert!(worker.join().unwrap().unwrap().is_none());
     }
 
     fn work_unit(input_size: usize, cancellation: Option<Arc<AtomicBool>>) -> WorkUnit {
