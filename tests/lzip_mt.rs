@@ -6,6 +6,51 @@ use std::{
 
 use lzma_rust2::{LzipOptions, LzipReader, LzipReaderMt, LzipWriter, LzipWriterMt};
 
+struct HugeMember {
+    pos: u64,
+    size: u64,
+}
+
+impl Read for HugeMember {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let count = buf.len().min(self.size.saturating_sub(self.pos) as usize);
+        for (offset, byte) in buf[..count].iter_mut().enumerate() {
+            let pos = self.pos + offset as u64;
+            *byte = if pos < 4 {
+                b"LZIP"[pos as usize]
+            } else if pos >= self.size - 8 {
+                self.size.to_le_bytes()[(pos - (self.size - 8)) as usize]
+            } else {
+                0
+            };
+        }
+        self.pos += count as u64;
+        Ok(count)
+    }
+}
+
+impl std::io::Seek for HugeMember {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.pos = match pos {
+            std::io::SeekFrom::Start(pos) => pos,
+            std::io::SeekFrom::End(0) => self.size,
+            _ => unreachable!(),
+        };
+        Ok(self.pos)
+    }
+}
+
+#[test]
+fn impossible_member_allocation_returns_error() {
+    let source = HugeMember {
+        pos: 0,
+        size: isize::MAX as u64 + 1,
+    };
+    let mut reader = LzipReaderMt::new(source, 1).unwrap();
+    let error = reader.read(&mut [0]).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+}
+
 #[test]
 fn many_empty_members_do_not_exhaust_the_read_stack() {
     let empty = LzipWriter::new(Vec::new(), LzipOptions::with_preset(0))
