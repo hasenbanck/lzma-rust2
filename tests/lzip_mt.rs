@@ -52,6 +52,31 @@ fn impossible_member_allocation_returns_error() {
 }
 
 #[test]
+fn memory_limit_rejects_large_member_output() {
+    let input = vec![b'x'; 2 * 1024 * 1024];
+    let mut options = LzipOptions::with_preset(0);
+    options.lzma_options.dict_size = 4096;
+    let mut writer = LzipWriter::new(Vec::new(), options);
+    writer.write_all(&input).unwrap();
+    let archive = writer.finish().unwrap();
+    assert!(archive.len() < 1024 * 1024 / 2);
+
+    let mut limited = LzipReaderMt::new_mem_limit(Cursor::new(archive.clone()), 1024, 2).unwrap();
+    let error = limited.read_to_end(&mut Vec::new()).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+
+    let mut sufficient = LzipReaderMt::new_mem_limit(Cursor::new(archive.clone()), 4096, 2).unwrap();
+    let mut output = Vec::new();
+    sufficient.read_to_end(&mut output).unwrap();
+    assert_eq!(output, input);
+
+    let mut unlimited = LzipReaderMt::new(Cursor::new(archive), 2).unwrap();
+    output.clear();
+    unlimited.read_to_end(&mut output).unwrap();
+    assert_eq!(output, input);
+}
+
+#[test]
 fn many_empty_members_do_not_exhaust_the_read_stack() {
     let empty = LzipWriter::new(Vec::new(), LzipOptions::with_preset(0))
         .finish()

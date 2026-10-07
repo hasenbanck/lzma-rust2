@@ -7,9 +7,10 @@ use std::{
     },
 };
 
-use super::{LzipMember, scan_members};
+use super::{HEADER_SIZE, LzipHeader, LzipMember, scan_members};
 use crate::{
     LzipReader, Read, error_out_of_memory, set_error,
+    lzma_reader::{get_memory_usage, speculation_memory_usage},
     work_pool::{WorkPool, WorkPoolConfig, WorkPoolState},
     work_queue::WorkerHandle,
 };
@@ -18,6 +19,7 @@ use crate::{
 #[derive(Debug)]
 struct WorkUnit {
     member_data: Vec<u8>,
+    output_limit: Option<usize>,
 }
 
 /// A multi-threaded LZIP decompressor.
@@ -26,6 +28,7 @@ pub struct LzipReaderMt<R: Read + Seek> {
     members: Vec<LzipMember>,
     work_pool: WorkPool<WorkUnit, Vec<u8>>,
     current_chunk: Cursor<Vec<u8>>,
+    mem_limit_kb: u32,
 }
 
 impl<R: Read + Seek> LzipReaderMt<R> {
@@ -34,6 +37,13 @@ impl<R: Read + Seek> LzipReaderMt<R> {
     /// - `inner`: The reader to read compressed data from. Must implement Seek.
     /// - `num_workers`: The maximum number of worker threads for decompression. Currently capped at 256 threads.
     pub fn new(inner: R, num_workers: u32) -> io::Result<Self> {
+        Self::new_mem_limit(inner, u32::MAX, num_workers)
+    }
+
+    /// Creates a multi-threaded LZIP reader with a per-member memory limit in KiB.
+    /// `u32::MAX` means no limit. The limit covers the estimated decoder memory,
+    /// compressed member buffer, and decompressed member buffer.
+    pub fn new_mem_limit(inner: R, mem_limit_kb: u32, num_workers: u32) -> io::Result<Self> {
         let (inner, members) = scan_members(inner)?;
         let num_members = members.len() as u64;
 
@@ -45,6 +55,7 @@ impl<R: Read + Seek> LzipReaderMt<R> {
                 worker_thread_logic,
             ),
             current_chunk: Cursor::new(Vec::new()),
+            mem_limit_kb,
         })
     }
 
@@ -62,6 +73,23 @@ impl<R: Read + Seek> LzipReaderMt<R> {
         self.work_pool.get_result(|index| {
             let member = &self.members[index as usize];
             self.inner.seek(SeekFrom::Start(member.start_pos))?;
+            let output_limit = if self.mem_limit_kb == u32::MAX {
+                None
+            } else {
+                let mut header = [0; HEADER_SIZE];
+                self.inner.read_exact(&mut header)?;
+                let header = LzipHeader::parse(&header)?;
+                let decoder_kb = get_memory_usage(header.dict_size, 3, 0)?
+                    .checked_add(speculation_memory_usage(3, 0))
+                    .ok_or_else(|| error_out_of_memory("LZIP member exceeds memory limit"))?;
+                let available = u64::from(self.mem_limit_kb)
+                    .checked_sub(u64::from(decoder_kb))
+                    .and_then(|kb| kb.checked_mul(1024))
+                    .and_then(|bytes| bytes.checked_sub(member.compressed_size))
+                    .ok_or_else(|| error_out_of_memory("LZIP member exceeds memory limit"))?;
+                self.inner.seek(SeekFrom::Start(member.start_pos))?;
+                Some(usize::try_from(available).unwrap_or(usize::MAX))
+            };
             let size = usize::try_from(member.compressed_size)
                 .map_err(|_| error_out_of_memory("LZIP member allocation too large"))?;
             let mut member_data = Vec::new();
@@ -70,7 +98,10 @@ impl<R: Read + Seek> LzipReaderMt<R> {
                 .map_err(|_| error_out_of_memory("LZIP member allocation too large"))?;
             member_data.resize(size, 0);
             self.inner.read_exact(&mut member_data)?;
-            Ok(WorkUnit { member_data })
+            Ok(WorkUnit {
+                member_data,
+                output_limit,
+            })
         })
     }
 }
@@ -95,13 +126,31 @@ fn worker_thread_logic(
             }
         };
 
-        let (index, WorkUnit { member_data }) = work_unit;
+        let (index, WorkUnit { member_data, output_limit }) = work_unit;
 
         let mut lzip_reader = LzipReader::new(member_data.as_slice());
 
         let mut decompressed_data = Vec::new();
-        let result = match lzip_reader.read_to_end(&mut decompressed_data) {
-            Ok(_) => decompressed_data,
+        let result = (|| -> io::Result<Vec<u8>> {
+            let mut chunk = [0; 8192];
+            loop {
+                let count = lzip_reader.read(&mut chunk)?;
+                if count == 0 {
+                    return Ok(decompressed_data);
+                }
+                if output_limit.is_some_and(|limit| {
+                    decompressed_data.len().saturating_add(count) > limit
+                }) {
+                    return Err(error_out_of_memory("LZIP member exceeds memory limit"));
+                }
+                decompressed_data
+                    .try_reserve_exact(count)
+                    .map_err(|_| error_out_of_memory("LZIP member output allocation too large"))?;
+                decompressed_data.extend_from_slice(&chunk[..count]);
+            }
+        })();
+        let result = match result {
+            Ok(data) => data,
             Err(error) => {
                 active_workers.fetch_sub(1, Ordering::Release);
                 set_error(error, &error_store, &shutdown_flag);
