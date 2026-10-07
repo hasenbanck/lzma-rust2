@@ -9,8 +9,9 @@ use std::{
 
 use super::{HEADER_SIZE, LzipHeader, LzipMember, scan_members};
 use crate::{
-    LzipReader, Read, error_out_of_memory, set_error,
+    LzipReader, Read, error_out_of_memory,
     lzma_reader::{get_memory_usage, speculation_memory_usage},
+    set_error,
     work_pool::{WorkPool, WorkPoolConfig, WorkPoolState},
     work_queue::WorkerHandle,
 };
@@ -126,7 +127,13 @@ fn worker_thread_logic(
             }
         };
 
-        let (index, WorkUnit { member_data, output_limit }) = work_unit;
+        let (
+            index,
+            WorkUnit {
+                member_data,
+                output_limit,
+            },
+        ) = work_unit;
 
         let result = match decode_member(&member_data, output_limit, &shutdown_flag) {
             Ok(Some(data)) => data,
@@ -170,8 +177,7 @@ fn decode_member(
         if count == 0 {
             return Ok(Some(decompressed_data));
         }
-        if output_limit.is_some_and(|limit| decompressed_data.len().saturating_add(count) > limit)
-        {
+        if output_limit.is_some_and(|limit| decompressed_data.len().saturating_add(count) > limit) {
             return Err(error_out_of_memory("LZIP member exceeds memory limit"));
         }
         decompressed_data
