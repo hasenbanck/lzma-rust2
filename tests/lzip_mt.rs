@@ -78,6 +78,28 @@ fn memory_limit_rejects_large_member_output() {
 }
 
 #[test]
+fn forged_span_is_rejected_before_decoding_a_second_member() {
+    let mut first_options = LzipOptions::with_preset(0);
+    first_options.lzma_options.dict_size = 4096;
+    let first = LzipWriter::new(Vec::new(), first_options).finish().unwrap();
+    let mut options = LzipOptions::with_preset(0);
+    options.lzma_options.dict_size = 4096;
+    let mut writer = LzipWriter::new(Vec::new(), options);
+    writer.write_all(&vec![b'x'; 256 * 1024]).unwrap();
+    let second = writer.finish().unwrap();
+
+    let mut archive = first;
+    archive.extend(second);
+    let size = archive.len();
+    archive[size - 8..].copy_from_slice(&(size as u64).to_le_bytes());
+
+    let mut reader = LzipReaderMt::new_mem_limit(Cursor::new(archive), 128, 1).unwrap();
+    assert_eq!(reader.member_count(), 1);
+    let error = reader.read_to_end(&mut Vec::new()).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
 fn many_empty_members_do_not_exhaust_the_read_stack() {
     let empty = LzipWriter::new(Vec::new(), LzipOptions::with_preset(0))
         .finish()

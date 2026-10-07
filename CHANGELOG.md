@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Synchronize worker queue closure to prevent missed shutdown wakeups.
 - Read consecutive empty LZIP members without growing the `LzipReaderMt` call stack.
 - Return `OutOfMemory` instead of panicking when a LZIP member requests an impossible allocation.
+- Reject malformed LZIP MT member spans before decoding an embedded second member.
 - Stop active LZIP member decoding when the worker pool shuts down.
 - Retry interrupted BCJ2 reads without losing fragmented branch addresses.
 - Reject truncated BCJ2 streams and incomplete branch addresses.

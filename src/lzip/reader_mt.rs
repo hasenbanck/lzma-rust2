@@ -162,7 +162,7 @@ fn decode_member(
     output_limit: Option<usize>,
     shutdown_flag: &AtomicBool,
 ) -> io::Result<Option<Vec<u8>>> {
-    let mut lzip_reader = LzipReader::new(member_data);
+    let mut lzip_reader = LzipReader::new_single_member(member_data);
     let mut decompressed_data = Vec::new();
     let mut chunk = [0; 8192];
     loop {

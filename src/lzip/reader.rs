@@ -14,6 +14,7 @@ pub struct LzipReader<R> {
     lzma_reader: Option<LzmaReader<CountingReader<MemberInput<R>>>>,
     current_header: Option<LzipHeader>,
     finished: bool,
+    single_member: bool,
     failure: Option<StickyError>,
     trailer_buf: Vec<u8>,
     crc_digest: Option<Crc32>,
@@ -114,11 +115,18 @@ impl<R: Read> LzipReader<R> {
             lzma_reader: None,
             current_header: None,
             finished: false,
+            single_member: false,
             failure: None,
             trailer_buf: Vec::with_capacity(TRAILER_SIZE),
             crc_digest: None,
             data_size: 0,
         }
+    }
+
+    pub(crate) fn new_single_member(inner: R) -> Self {
+        let mut reader = Self::new(inner);
+        reader.single_member = true;
+        reader
     }
 
     /// Start processing the next LZIP member.
@@ -252,6 +260,21 @@ impl<R: Read> LzipReader<R> {
                     Ok(0) => {
                         // Current member is finished, verify trailer.
                         self.finish_current_member()?;
+
+                        if self.single_member {
+                            let mut extra = [0];
+                            if read_some(
+                                self.inner.as_mut().expect("inner reader not set"),
+                                &mut extra,
+                            )? != 0
+                            {
+                                return Err(error_invalid_data(
+                                    "LZIP member span contains trailing data",
+                                ));
+                            }
+                            self.finished = true;
+                            return Ok(0);
+                        }
 
                         if !self.start_next_member()? {
                             // No more members, we're done.
