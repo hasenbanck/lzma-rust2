@@ -149,6 +149,7 @@ where
         Ok(())
     }
 
+    /// Set the caller's cancellation flag before dispatching work.
     pub(crate) fn set_cancellation(&mut self, flag: Arc<AtomicBool>) {
         self.cancellation = Some(flag);
     }
