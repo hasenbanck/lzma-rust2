@@ -118,22 +118,16 @@ impl<R: Read + Seek> Read for LzipReaderMt<R> {
             return Ok(0);
         }
 
-        let bytes_read = self.current_chunk.read(buf)?;
+        loop {
+            let bytes_read = self.current_chunk.read(buf)?;
+            if bytes_read > 0 {
+                return Ok(bytes_read);
+            }
 
-        if bytes_read > 0 {
-            return Ok(bytes_read);
+            let Some(chunk_data) = self.get_next_uncompressed_chunk()? else {
+                return Ok(0);
+            };
+            self.current_chunk = Cursor::new(chunk_data);
         }
-
-        let chunk_data = self.get_next_uncompressed_chunk()?;
-
-        let Some(chunk_data) = chunk_data else {
-            // This is the clean end of the stream.
-            return Ok(0);
-        };
-
-        self.current_chunk = Cursor::new(chunk_data);
-
-        // Recursive call to read the new chunk data.
-        self.read(buf)
     }
 }
