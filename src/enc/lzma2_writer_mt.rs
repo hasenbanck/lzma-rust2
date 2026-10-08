@@ -68,11 +68,11 @@ impl<W: Write> Lzma2WriterMt<W> {
 
     /// Sets a shared cancellation flag before writing input.
     ///
-    /// The flag can be replaced until input has been buffered or dispatched. After that,
-    /// this method returns [`io::ErrorKind::InvalidInput`] and keeps the existing flag.
-    /// Workers check the flag between 64 KiB input segments and during the final flush.
-    /// The writer checks it before accepting input and while waiting for results. Cancellation
-    /// returns an I/O error carrying [`EncoderCancelled`] and stops the writer permanently.
+    /// The flag can be replaced before writing input. Calling this method after
+    /// writing input returns [`io::ErrorKind::InvalidInput`] and keeps the existing flag.
+    ///
+    /// Setting the flag to `true` requests cancellation. Cancellation returns an I/O
+    /// error carrying [`EncoderCancelled`] and stops the writer permanently.
     pub fn set_cancellation(&mut self, flag: Arc<AtomicBool>) -> io::Result<()> {
         if !self.current_work_unit.is_empty() || self.work_pool.next_index_to_dispatch() != 0 {
             return Err(error_invalid_input(
