@@ -25,6 +25,7 @@ jobs:
           - lzma2_stream
           - xz
           - xz_stream
+          - xz_uncompressed_size
     steps:
       - uses: actions/checkout@v7
       - name: Install rust version
