@@ -980,7 +980,8 @@ fn scan_blocks<R: Read + Seek>(mut reader: R) -> io::Result<(R, Vec<Block>, Chec
 /// Returns the uncompressed size that the stream indexes declare for the XZ
 /// data from the current position of `reader` to its end.
 ///
-/// Only the stream headers, indexes and footers are read and checked.
+/// Concatenated streams and stream padding are supported. Only the stream
+/// headers, indexes and footers are read and checked.
 ///
 /// The position of `reader` is unspecified afterwards.
 #[cfg(feature = "std")]
