@@ -240,3 +240,91 @@ fn round_trip_pg6800_8() {
 fn round_trip_pg6800_9() {
     test_round_trip(PG6800, 9);
 }
+
+fn compress(data: &[u8], block_size: Option<u64>) -> Vec<u8> {
+    let mut option = XzOptions::with_preset(1);
+    option.set_block_size(block_size.and_then(std::num::NonZeroU64::new));
+    let mut writer = XzWriter::new(Vec::new(), option).unwrap();
+    writer.write_all(data).unwrap();
+    writer.finish().unwrap()
+}
+
+fn uncompressed_size(compressed: &[u8]) -> std::io::Result<u64> {
+    lzma_rust2::xz_uncompressed_size(std::io::Cursor::new(compressed))
+}
+
+#[test]
+fn uncompressed_size_of_a_single_stream() {
+    let data = std::fs::read(PG100).unwrap();
+    assert_eq!(
+        uncompressed_size(&compress(&data, None)).unwrap(),
+        data.len() as u64
+    );
+}
+
+#[test]
+fn uncompressed_size_adds_all_blocks() {
+    let data = std::fs::read(PG100).unwrap();
+    let compressed = compress(&data, Some(64 * 1024));
+    assert_eq!(uncompressed_size(&compressed).unwrap(), data.len() as u64);
+}
+
+#[test]
+fn uncompressed_size_of_an_empty_stream_is_zero() {
+    assert_eq!(uncompressed_size(&compress(&[], None)).unwrap(), 0);
+}
+
+#[test]
+fn uncompressed_size_of_a_liblzma_stream() {
+    use liblzma::write::XzEncoder;
+
+    let data = std::fs::read(PG6800).unwrap();
+    let mut encoder = XzEncoder::new(Vec::new(), 6);
+    encoder.write_all(&data).unwrap();
+    let compressed = encoder.finish().unwrap();
+    assert_eq!(uncompressed_size(&compressed).unwrap(), data.len() as u64);
+}
+
+#[test]
+fn uncompressed_size_adds_concatenated_streams_and_skips_padding() {
+    let first = b"first stream".repeat(100);
+    let second = b"second stream".repeat(50);
+    let mut compressed = compress(&first, None);
+    compressed.extend_from_slice(&[0; 8]);
+    compressed.extend_from_slice(&compress(&second, Some(256)));
+    compressed.extend_from_slice(&[0; 4]);
+
+    let expected = (first.len() + second.len()) as u64;
+    assert_eq!(uncompressed_size(&compressed).unwrap(), expected);
+
+    // The size agrees with what the reader decodes.
+    let mut decoded = Vec::new();
+    XzReader::new(compressed.as_slice(), true)
+        .read_to_end(&mut decoded)
+        .unwrap();
+    assert_eq!(decoded.len() as u64, expected);
+}
+
+#[test]
+fn uncompressed_size_rejects_broken_files() {
+    let compressed = compress(b"some data", None);
+
+    let mut truncated = compressed.clone();
+    truncated.pop();
+    assert!(uncompressed_size(&truncated).is_err());
+
+    let mut trailing = compressed.clone();
+    trailing.extend_from_slice(b"garbage!");
+    assert!(uncompressed_size(&trailing).is_err());
+
+    let mut unaligned_padding = compressed.clone();
+    unaligned_padding.extend_from_slice(&[0; 2]);
+    assert!(uncompressed_size(&unaligned_padding).is_err());
+
+    let mut leading = vec![0; 4];
+    leading.extend_from_slice(&compressed);
+    assert!(uncompressed_size(&leading).is_err());
+
+    assert!(uncompressed_size(&[0; 64]).is_err());
+    assert!(uncompressed_size(&[]).is_err());
+}

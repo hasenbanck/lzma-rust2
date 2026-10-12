@@ -123,6 +123,8 @@ pub use work_pool::EncoderCancelled;
 pub use xz::XzReaderMt;
 #[cfg(all(feature = "xz", feature = "encoder", feature = "std"))]
 pub use xz::XzWriterMt;
+#[cfg(all(feature = "xz", feature = "std"))]
+pub use xz::uncompressed_size as xz_uncompressed_size;
 #[cfg(feature = "xz")]
 pub use xz::{CheckType, XzReader, XzStream};
 #[cfg(all(feature = "xz", feature = "encoder"))]
