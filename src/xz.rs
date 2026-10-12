@@ -977,6 +977,100 @@ fn scan_blocks<R: Read + Seek>(mut reader: R) -> io::Result<(R, Vec<Block>, Chec
     Ok((reader, blocks, check_type))
 }
 
+/// Returns the size that the XZ data in `reader` decodes to.
+///
+/// The size is read from the stream indexes at the end of each stream, so only
+/// the stream headers, footers and indexes are read, not the compressed data.
+/// Concatenated streams and stream padding are accepted, as [`XzReader`]
+/// accepts them with `allow_multiple_streams`. The headers, footers and indexes
+/// are checked, the compressed data is not.
+///
+/// The position of `reader` is unspecified afterwards.
+#[cfg(feature = "std")]
+pub fn uncompressed_size<R: Read + Seek>(mut reader: R) -> io::Result<u64> {
+    const STREAM_HEADER_SIZE: u64 = 12;
+    const STREAM_FOOTER_SIZE: u64 = 12;
+    // A stream header, an empty index and a stream footer.
+    const MIN_STREAM_SIZE: u64 = STREAM_HEADER_SIZE + 8 + STREAM_FOOTER_SIZE;
+
+    let mut stream_end = reader.seek(SeekFrom::End(0))?;
+    let mut total = 0u64;
+
+    loop {
+        stream_end = skip_stream_padding(&mut reader, stream_end)?;
+        if stream_end < MIN_STREAM_SIZE {
+            return Err(error_invalid_data(
+                "file too small to contain a valid XZ stream",
+            ));
+        }
+
+        reader.seek(SeekFrom::Start(stream_end - STREAM_FOOTER_SIZE))?;
+        let stream_footer = StreamFooter::parse(&mut reader)?;
+
+        let index_size = (u64::from(stream_footer.backward_size) + 1) * 4;
+        let index_start = (stream_end - STREAM_FOOTER_SIZE)
+            .checked_sub(index_size)
+            .ok_or_else(|| error_invalid_data("XZ index size larger than file"))?;
+
+        reader.seek(SeekFrom::Start(index_start))?;
+        if reader.read_u8()? != 0 {
+            return Err(error_invalid_data("invalid XZ index indicator"));
+        }
+        let index = Index::parse(&mut reader)?;
+
+        let mut blocks_size = 0u64;
+        let mut stream_size = 0u64;
+        for record in &index.records {
+            blocks_size = record
+                .unpadded_size
+                .checked_next_multiple_of(4)
+                .and_then(|padded| blocks_size.checked_add(padded))
+                .ok_or_else(|| error_invalid_data("XZ block sizes overflow"))?;
+            stream_size = stream_size
+                .checked_add(record.uncompressed_size)
+                .ok_or_else(|| error_invalid_data("XZ uncompressed size overflow"))?;
+        }
+
+        let stream_start = index_start
+            .checked_sub(blocks_size)
+            .and_then(|blocks_start| blocks_start.checked_sub(STREAM_HEADER_SIZE))
+            .ok_or_else(|| error_invalid_data("XZ blocks larger than file"))?;
+
+        reader.seek(SeekFrom::Start(stream_start))?;
+        let stream_header = StreamHeader::parse(&mut reader)?;
+        if stream_footer.stream_flags != [0, stream_header.check_type as u8] {
+            return Err(error_invalid_data(
+                "stream header and footer flags mismatch",
+            ));
+        }
+
+        total = total
+            .checked_add(stream_size)
+            .ok_or_else(|| error_invalid_data("XZ uncompressed size overflow"))?;
+
+        if stream_start == 0 {
+            return Ok(total);
+        }
+        stream_end = stream_start;
+    }
+}
+
+/// Moves `end` back over the stream padding before it: null bytes in
+/// multiples of four.
+#[cfg(feature = "std")]
+fn skip_stream_padding<R: Read + Seek>(reader: &mut R, mut end: u64) -> io::Result<u64> {
+    let mut word = [0u8; 4];
+    while end >= 4 {
+        reader.seek(SeekFrom::Start(end - 4))?;
+        reader.read_exact(&mut word)?;
+        if word != [0; 4] {
+            break;
+        }
+        end -= 4;
+    }
+    Ok(end)
+}
+
 #[cfg(feature = "std")]
 fn create_filter_chain<'reader>(
     mut chain_reader: Box<dyn Read + 'reader>,
