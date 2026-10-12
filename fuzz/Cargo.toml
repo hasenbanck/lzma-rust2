@@ -70,3 +70,9 @@ name = "lzma2_stream"
 path = "fuzz_targets/lzma2_stream.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "xz_uncompressed_size"
+path = "fuzz_targets/xz_uncompressed_size.rs"
+test = false
+doc = false
