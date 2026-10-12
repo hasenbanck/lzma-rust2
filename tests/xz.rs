@@ -1,6 +1,9 @@
-use std::io::{Read, Write};
+use std::{
+    io::{self, Cursor, Read, Write},
+    num::NonZeroU64,
+};
 
-use lzma_rust2::{XzOptions, XzReader, XzWriter};
+use lzma_rust2::{CheckType, DICT_SIZE_MIN, XzOptions, XzReader, XzWriter, xz_uncompressed_size};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
@@ -241,16 +244,40 @@ fn round_trip_pg6800_9() {
     test_round_trip(PG6800, 9);
 }
 
+const STREAM_FOOTER_SIZE: usize = 12;
+
 fn compress(data: &[u8], block_size: Option<u64>) -> Vec<u8> {
     let mut option = XzOptions::with_preset(1);
-    option.set_block_size(block_size.and_then(std::num::NonZeroU64::new));
+    // The block size is raised to at least the dictionary size.
+    option.lzma_options.dict_size = DICT_SIZE_MIN;
+    option.set_block_size(block_size.and_then(NonZeroU64::new));
     let mut writer = XzWriter::new(Vec::new(), option).unwrap();
     writer.write_all(data).unwrap();
     writer.finish().unwrap()
 }
 
-fn uncompressed_size(compressed: &[u8]) -> std::io::Result<u64> {
-    lzma_rust2::xz_uncompressed_size(std::io::Cursor::new(compressed))
+fn uncompressed_size(compressed: &[u8]) -> io::Result<u64> {
+    xz_uncompressed_size(Cursor::new(compressed))
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &byte in data {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+        }
+    }
+    !crc
+}
+
+fn stream_footer(backward_size: u32, check_type: CheckType) -> Vec<u8> {
+    let mut fields = backward_size.to_le_bytes().to_vec();
+    fields.extend_from_slice(&[0, check_type as u8]);
+    let mut footer = crc32(&fields).to_le_bytes().to_vec();
+    footer.extend_from_slice(&fields);
+    footer.extend_from_slice(b"YZ");
+    footer
 }
 
 #[test]
@@ -288,10 +315,10 @@ fn uncompressed_size_of_a_liblzma_stream() {
 #[test]
 fn uncompressed_size_adds_concatenated_streams_and_skips_padding() {
     let first = b"first stream".repeat(100);
-    let second = b"second stream".repeat(50);
+    let second = b"second stream".repeat(1000);
     let mut compressed = compress(&first, None);
-    compressed.extend_from_slice(&[0; 8]);
-    compressed.extend_from_slice(&compress(&second, Some(256)));
+    compressed.extend_from_slice(&[0; 10_000]);
+    compressed.extend_from_slice(&compress(&second, Some(4096)));
     compressed.extend_from_slice(&[0; 4]);
 
     let expected = (first.len() + second.len()) as u64;
@@ -325,6 +352,47 @@ fn uncompressed_size_rejects_broken_files() {
     leading.extend_from_slice(&compressed);
     assert!(uncompressed_size(&leading).is_err());
 
-    assert!(uncompressed_size(&[0; 64]).is_err());
+    let mut bad_index_crc = compressed.clone();
+    let index_end = bad_index_crc.len() - STREAM_FOOTER_SIZE;
+    bad_index_crc[index_end - 1] ^= 1;
+    assert!(uncompressed_size(&bad_index_crc).is_err());
+
+    assert!(uncompressed_size(&[0; 10_000]).is_err());
     assert!(uncompressed_size(&[]).is_err());
+}
+
+#[test]
+fn uncompressed_size_starts_at_the_reader_position() {
+    let data = b"some data";
+    let prefix = b"prefix";
+    let mut file = prefix.to_vec();
+    file.extend_from_slice(&compress(data, None));
+
+    let mut reader = Cursor::new(file);
+    reader.set_position(prefix.len() as u64);
+    assert_eq!(
+        xz_uncompressed_size(&mut reader).unwrap(),
+        data.len() as u64
+    );
+}
+
+#[test]
+fn uncompressed_size_rejects_an_index_shorter_than_the_backward_size() {
+    let empty = compress(&[], None);
+    let (header_and_index, footer) = empty.split_at(empty.len() - STREAM_FOOTER_SIZE);
+    assert_eq!(footer, stream_footer(1, CheckType::Crc64));
+
+    // The backward size covers the 8 bytes of the empty index and 4 more.
+    let mut broken = header_and_index.to_vec();
+    broken.extend_from_slice(&[0xAA; 4]);
+    broken.extend_from_slice(&stream_footer(2, CheckType::Crc64));
+    assert!(uncompressed_size(&broken).is_err());
+}
+
+#[test]
+fn uncompressed_size_rejects_footer_flags_that_differ_from_the_header() {
+    let mut broken = compress(&[], None);
+    broken.truncate(broken.len() - STREAM_FOOTER_SIZE);
+    broken.extend_from_slice(&stream_footer(1, CheckType::Crc32));
+    assert!(uncompressed_size(&broken).is_err());
 }
