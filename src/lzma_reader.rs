@@ -79,6 +79,7 @@ pub struct LzmaReader<R> {
     end_reached: bool,
     relaxed_end_cond: bool,
     remaining_size: u64,
+    deferred_error: Option<crate::StickyError>,
 }
 
 /// Size of the first refill. A container of many small members reads ahead over
@@ -215,6 +216,15 @@ impl<R: Read> crate::range_dec::RangeReader for ReaderInput<R> {
 }
 
 impl<R> LzmaReader<R> {
+    /// Controls whether a known-size raw LZMA stream may stop without the
+    /// range coder reaching its canonical terminal state.
+    ///
+    /// Defaults to `true`. Set this to `false` to validate the range coder
+    /// state when the declared uncompressed size is reached.
+    pub fn set_relaxed_end_condition(&mut self, relaxed: bool) {
+        self.relaxed_end_cond = relaxed;
+    }
+
     /// Unwraps the reader, returning the underlying reader.
     ///
     /// Discards any buffered input. Use [`Self::into_parts`] to recover it.
@@ -352,6 +362,7 @@ impl<R: Read> LzmaReader<R> {
             end_reached: false,
             relaxed_end_cond: true,
             remaining_size: uncomp_size,
+            deferred_error: None,
         })
     }
 
@@ -454,6 +465,11 @@ impl<R: Read> LzmaReader<R> {
             return Ok(0);
         }
         self.rc.inner().check_failure()?;
+        // Report a deferred terminal-state error before returning EOF, even
+        // if the previous read already set `end_reached`.
+        if let Some(error) = self.deferred_error.take() {
+            return Err(error.report());
+        }
         if self.end_reached {
             return Ok(0);
         }
@@ -470,16 +486,21 @@ impl<R: Read> LzmaReader<R> {
             }
             self.lz.set_limit(copy_size_max as usize)?;
 
+            let mut decode_error = None;
             match self.decode_buffered() {
                 Ok(_) => {}
                 Err(error) => {
-                    self.rc.inner().check_failure()?;
-                    if self.remaining_size != u64::MAX || !self.lzma.end_marker_detected() {
-                        return Err(error);
+                    if let Err(input_error) = self.rc.inner().check_failure() {
+                        decode_error = Some(input_error);
+                    } else if self.remaining_size != u64::MAX || !self.lzma.end_marker_detected() {
+                        decode_error = Some(error);
+                    } else {
+                        self.end_reached = true;
+                        self.rc.normalize();
+                        if let Err(input_error) = self.rc.inner().check_failure() {
+                            decode_error = Some(input_error);
+                        }
                     }
-                    self.end_reached = true;
-                    self.rc.normalize();
-                    self.rc.inner().check_failure()?;
                 }
             }
 
@@ -487,6 +508,16 @@ impl<R: Read> LzmaReader<R> {
             off = off.saturating_add(copied_size);
             len = len.saturating_sub(copied_size);
             size = size.saturating_add(copied_size);
+            // A Read call cannot return both bytes and an error. Deliver
+            // the output already produced, then report the error on the next
+            // non-empty read.
+            if let Some(error) = decode_error {
+                if size != 0 {
+                    self.deferred_error = Some(crate::StickyError::new(error));
+                    return Ok(size as usize);
+                }
+                return Err(error);
+            }
             if self.remaining_size <= u64::MAX / 2 {
                 self.remaining_size = self.remaining_size.saturating_sub(copied_size);
                 if self.remaining_size == 0 {
@@ -498,7 +529,12 @@ impl<R: Read> LzmaReader<R> {
                 if self.lz.has_pending()
                     || (!self.relaxed_end_cond && !self.rc.is_stream_finished())
                 {
-                    return Err(error_invalid_data("end reached but not decoder finished"));
+                    let error = error_invalid_data("end reached but not decoder finished");
+                    if size != 0 {
+                        self.deferred_error = Some(crate::StickyError::new(error));
+                        return Ok(size as usize);
+                    }
+                    return Err(error);
                 }
                 return Ok(size as _);
             }

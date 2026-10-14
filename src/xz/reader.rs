@@ -700,7 +700,10 @@ impl XzStream {
         in_pos: &mut usize,
         out_pos: &mut usize,
     ) -> Result<Option<StreamResult>> {
-        let lzma2 = self.lzma2.as_mut().unwrap();
+        let lzma2 = self
+            .lzma2
+            .as_mut()
+            .ok_or_else(|| error_invalid_data("LZMA2 decoder not initialized"))?;
 
         if lzma2.is_draining() {
             if *out_pos >= output.len() {
@@ -768,13 +771,26 @@ impl XzStream {
             return Ok(0);
         }
 
-        if self.filter_pos < self.filter_buf.len() - self.filter_held_back() {
+        let ready_end = self
+            .filter_buf
+            .len()
+            .checked_sub(self.filter_held_back())
+            .ok_or_else(|| error_invalid_data("invalid XZ filter buffer state"))?;
+        if self.filter_pos < ready_end {
             return self.emit_filtered_output(output, out_pos);
         }
 
-        if self.lzma2.as_ref().unwrap().is_draining() {
-            self.drain_and_filter_lzma2();
-            let lzma2 = self.lzma2.as_ref().unwrap();
+        if self
+            .lzma2
+            .as_ref()
+            .ok_or_else(|| error_invalid_data("LZMA2 decoder not initialized"))?
+            .is_draining()
+        {
+            self.drain_and_filter_lzma2()?;
+            let lzma2 = self
+                .lzma2
+                .as_ref()
+                .ok_or_else(|| error_invalid_data("LZMA2 decoder not initialized"))?;
             if !lzma2.has_output() && lzma2.is_finished() {
                 self.flush_filter_pending();
             }
@@ -784,7 +800,7 @@ impl XzStream {
         let result = self
             .lzma2
             .as_mut()
-            .unwrap()
+            .ok_or_else(|| error_invalid_data("LZMA2 decoder not initialized"))?
             .process(&input[*in_pos..], &mut [], action)?;
         *in_pos += result.bytes_consumed;
         self.total_in += result.bytes_consumed as u64;
@@ -793,16 +809,31 @@ impl XzStream {
             return self.try_complete_filtered_block();
         }
 
-        if *in_pos >= input.len() && !self.lzma2.as_ref().unwrap().is_draining() {
+        if *in_pos >= input.len()
+            && !self
+                .lzma2
+                .as_ref()
+                .ok_or_else(|| error_invalid_data("LZMA2 decoder not initialized"))?
+                .is_draining()
+        {
             return Ok(0);
         }
         Ok(1)
     }
 
     fn emit_filtered_output(&mut self, output: &mut [u8], out_pos: &mut usize) -> Result<usize> {
-        let ready_end = self.filter_buf.len() - self.filter_held_back();
-        let available = ready_end - self.filter_pos;
-        let space = output.len() - *out_pos;
+        let ready_end = self
+            .filter_buf
+            .len()
+            .checked_sub(self.filter_held_back())
+            .ok_or_else(|| error_invalid_data("invalid XZ filter buffer state"))?;
+        let available = ready_end
+            .checked_sub(self.filter_pos)
+            .ok_or_else(|| error_invalid_data("invalid XZ filter position"))?;
+        let space = output
+            .len()
+            .checked_sub(*out_pos)
+            .ok_or_else(|| error_invalid_data("invalid XZ output position"))?;
         let n = available.min(space);
         output[*out_pos..*out_pos + n]
             .copy_from_slice(&self.filter_buf[self.filter_pos..self.filter_pos + n]);
@@ -817,10 +848,13 @@ impl XzStream {
             return Ok(0);
         }
 
-        self.compact_filter_buf();
+        self.compact_filter_buf()?;
 
         let is_finished = {
-            let lzma2 = self.lzma2.as_ref().unwrap();
+            let lzma2 = self
+                .lzma2
+                .as_ref()
+                .ok_or_else(|| error_invalid_data("LZMA2 decoder not initialized"))?;
             !lzma2.has_output() && lzma2.is_finished()
         };
         if is_finished {
@@ -829,23 +863,39 @@ impl XzStream {
         Ok(1)
     }
 
-    fn drain_and_filter_lzma2(&mut self) -> usize {
-        let lzma2 = self.lzma2.as_mut().unwrap();
+    fn drain_and_filter_lzma2(&mut self) -> Result<usize> {
+        let lzma2 = self
+            .lzma2
+            .as_mut()
+            .ok_or_else(|| error_invalid_data("LZMA2 decoder not initialized"))?;
         let prev_len = self.filter_buf.len();
         lzma2.drain_to_buf(&mut self.filter_buf, 4096);
-        let new_bytes = self.filter_buf.len() - prev_len;
+        let new_bytes = self
+            .filter_buf
+            .len()
+            .checked_sub(prev_len)
+            .ok_or_else(|| error_invalid_data("invalid XZ filter buffer length"))?;
         if new_bytes > 0 {
-            let filter_start = prev_len - self.filter_held_back();
+            let filter_start = prev_len
+                .checked_sub(self.filter_held_back())
+                .ok_or_else(|| error_invalid_data("invalid XZ filter buffer state"))?;
             let filter_slice = &mut self.filter_buf[filter_start..];
-            self.filter.as_mut().unwrap().decode(filter_slice);
+            self.filter
+                .as_mut()
+                .ok_or_else(|| error_invalid_data("XZ filter not initialized"))?
+                .decode(filter_slice);
         }
-        new_bytes
+        Ok(new_bytes)
     }
 
-    fn compact_filter_buf(&mut self) {
+    fn compact_filter_buf(&mut self) -> Result<()> {
         let held_back = self.filter_held_back();
         if held_back > 0 {
-            let tail_start = self.filter_buf.len() - held_back;
+            let tail_start = self
+                .filter_buf
+                .len()
+                .checked_sub(held_back)
+                .ok_or_else(|| error_invalid_data("invalid XZ filter buffer state"))?;
             let pending: Vec<u8> = self.filter_buf[tail_start..].to_vec();
             self.filter_buf.clear();
             self.filter_buf.extend_from_slice(&pending);
@@ -853,11 +903,17 @@ impl XzStream {
             self.filter_buf.clear();
         }
         self.filter_pos = 0;
+        Ok(())
     }
 
     fn try_complete_filtered_block(&mut self) -> Result<usize> {
         self.flush_filter_pending();
-        if self.filter_pos < self.filter_buf.len() - self.filter_held_back() {
+        let ready_end = self
+            .filter_buf
+            .len()
+            .checked_sub(self.filter_held_back())
+            .ok_or_else(|| error_invalid_data("invalid XZ filter buffer state"))?;
+        if self.filter_pos < ready_end {
             return Ok(1);
         }
         self.filter.take();
@@ -876,7 +932,10 @@ impl XzStream {
     }
 
     fn finish_lzma2_block(&mut self) -> Result<()> {
-        let lzma2 = self.lzma2.as_ref().unwrap();
+        let lzma2 = self
+            .lzma2
+            .as_ref()
+            .ok_or_else(|| error_invalid_data("LZMA2 decoder not initialized"))?;
         self.block_compressed_size = lzma2.total_in();
         self.block_uncompressed_size = lzma2.total_out();
 

@@ -359,7 +359,9 @@ impl BlockHeader {
                                 FilterType::BcjSparc => 4,
                                 FilterType::BcjArm64 => 4,
                                 FilterType::BcjRiscv => 2,
-                                _ => unreachable!(),
+                                _ => {
+                                    return Err(error_invalid_data("invalid BCJ filter type"));
+                                }
                             };
 
                             if start_offset_value % bcj_alignment != 0 {
