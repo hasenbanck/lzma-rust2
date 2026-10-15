@@ -842,3 +842,226 @@ fn xz_index_record_count_does_not_size_the_reservation() {
     assert!(result.unwrap().is_err());
     assert!(peak < 1 << 20, "peak {peak} bytes for 23 bytes of input");
 }
+
+mod lzma_declared_end {
+    use super::*;
+
+    fn data() -> Vec<u8> {
+        let mut data = Vec::new();
+        for i in 0..4000u32 {
+            data.extend_from_slice(b"abcdefghijklmnopqrstuvwxyz0123456789");
+            data.push((i % 251) as u8);
+        }
+        data
+    }
+
+    fn encode(data: &[u8], use_end_marker: bool) -> Vec<u8> {
+        let options = LzmaOptions::with_preset(6);
+        let size = Some(data.len() as u64);
+        let mut writer = LzmaWriter::new(Vec::new(), &options, true, use_end_marker, size).unwrap();
+        writer.write_all(data).unwrap();
+        writer.finish().unwrap()
+    }
+
+    fn with_declared_size(compressed: &[u8], size: usize) -> Vec<u8> {
+        let mut compressed = compressed.to_vec();
+        compressed[5..13].copy_from_slice(&(size as u64).to_le_bytes());
+        compressed
+    }
+
+    fn reader(compressed: &[u8], relaxed: bool) -> LzmaReader<&[u8]> {
+        let mut reader = LzmaReader::new_mem_limit(compressed, u32::MAX, None).unwrap();
+        reader.set_relaxed_end_condition(relaxed);
+        reader
+    }
+
+    fn read_to_end_fails(compressed: &[u8], relaxed: bool) -> bool {
+        reader(compressed, relaxed)
+            .read_to_end(&mut Vec::new())
+            .is_err()
+    }
+
+    fn assert_bounded_reads_fail(compressed: &[u8], size: usize, relaxed: bool) {
+        let mut output = vec![0; size];
+        let exact = reader(compressed, relaxed).read_exact(&mut output);
+        let taken = reader(compressed, relaxed)
+            .take(size as u64)
+            .read_to_end(&mut Vec::new());
+        assert!(exact.is_err(), "read_exact of {size} bytes succeeded");
+        assert!(taken.is_err(), "take({size}).read_to_end succeeded");
+    }
+
+    #[test]
+    fn declared_size_inside_a_match_fails_a_bounded_read() {
+        let data = data();
+        let compressed = encode(&data, false);
+
+        let size = ((data.len() - 200)..data.len())
+            .find(|&size| read_to_end_fails(&with_declared_size(&compressed, size), true))
+            .expect("no declared size ends inside a match");
+
+        assert_bounded_reads_fail(&with_declared_size(&compressed, size), size, true);
+    }
+
+    #[test]
+    fn strict_end_condition_fails_a_bounded_read() {
+        let data = data();
+        let compressed = encode(&data, false);
+
+        for size in (data.len() - 50)..data.len() {
+            let compressed = with_declared_size(&compressed, size);
+            assert!(read_to_end_fails(&compressed, false), "size {size}");
+            assert_bounded_reads_fail(&compressed, size, false);
+        }
+    }
+
+    #[test]
+    fn strict_end_condition_accepts_known_size_with_end_marker() {
+        let data = data();
+        let compressed = encode(&data, true);
+
+        let mut output = Vec::new();
+        reader(&compressed, false).read_to_end(&mut output).unwrap();
+        assert!(output == data);
+
+        let mut output = vec![0; data.len()];
+        reader(&compressed, false).read_exact(&mut output).unwrap();
+        assert!(output == data);
+    }
+
+    #[test]
+    fn strict_completion_accepts_both_endings_and_empty_streams() {
+        for data in [Vec::new(), b"x".to_vec(), data()] {
+            for marker in [false, true] {
+                let compressed = encode(&data, marker);
+                let mut output = Vec::new();
+                reader(&compressed, false).read_to_end(&mut output).unwrap();
+                assert_eq!(output, data);
+                let mut output = vec![0; data.len()];
+                reader(&compressed, false).read_exact(&mut output).unwrap();
+                assert_eq!(output, data);
+                let mut output = Vec::new();
+                reader(&compressed, false)
+                    .take(data.len() as u64)
+                    .read_to_end(&mut output)
+                    .unwrap();
+                assert_eq!(output, data);
+            }
+        }
+    }
+
+    #[test]
+    fn known_size_with_end_marker_matches_liblzma() {
+        let data = data();
+        let compressed = encode(&data, true);
+        let stream = liblzma::stream::Stream::new_lzma_decoder(u64::MAX).unwrap();
+        let mut reference = liblzma::read::XzDecoder::new_stream(&compressed[..], stream);
+        let mut expected = Vec::new();
+        reference.read_to_end(&mut expected).unwrap();
+        assert_eq!(expected, data);
+        let mut output = Vec::new();
+        reader(&compressed, false).read_to_end(&mut output).unwrap();
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn strict_completion_preserves_bytes_after_end_marker() {
+        let data = data();
+        let mut compressed = encode(&data, true);
+        compressed.extend_from_slice(b"next member");
+        let mut decoder = reader(&compressed, false);
+        let mut output = Vec::new();
+        decoder.read_to_end(&mut output).unwrap();
+        assert_eq!(output, data);
+        let (remaining, mut unused) = decoder.into_parts();
+        unused.extend_from_slice(remaining);
+        assert_eq!(unused, b"next member");
+    }
+
+    #[test]
+    fn strict_completion_rejects_truncated_end_markers() {
+        let data = data();
+        let compressed = encode(&data, true);
+        for removed in 1..=5 {
+            let truncated = &compressed[..compressed.len() - removed];
+            assert!(read_to_end_fails(truncated, false));
+            assert_bounded_reads_fail(truncated, data.len(), false);
+        }
+    }
+
+    #[test]
+    fn deferred_terminal_error_preserves_output_and_ignores_empty_reads() {
+        let data = data();
+        let compressed = encode(&data, false);
+        let size = data.len() - 50;
+        let compressed = with_declared_size(&compressed, size);
+        let mut decoder = reader(&compressed, false);
+        decoder.set_defer_errors(true);
+        let mut output = vec![0; size];
+        decoder.read_exact(&mut output).unwrap();
+        assert_eq!(output, data[..size]);
+        assert_eq!(decoder.read(&mut []).unwrap(), 0);
+        assert_eq!(
+            decoder.read(&mut [0]).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn deferred_decode_error_preserves_recovered_prefix() {
+        let data = data();
+        let mut compressed = encode(&data, true);
+        compressed.truncate(compressed.len() - 20);
+        let mut decoder = reader(&compressed, false);
+        decoder.set_defer_errors(true);
+        let mut output = vec![0; data.len()];
+        let count = decoder.read(&mut output).unwrap();
+        assert!(count > 0 && count < data.len());
+        assert_eq!(output[..count], data[..count]);
+        assert!(decoder.read(&mut [0]).is_err());
+    }
+
+    #[test]
+    fn strict_completion_handles_fragmented_input_and_dictionary_wraps() {
+        struct Fragmented<'a> {
+            input: &'a [u8],
+            chunk: usize,
+        }
+        impl Read for Fragmented<'_> {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let limit = buf.len().min(self.chunk);
+                self.input.read(&mut buf[..limit])
+            }
+        }
+        let data = data();
+        let mut options = LzmaOptions::with_preset(6);
+        options.dict_size = 4096;
+        for marker in [false, true] {
+            let mut writer =
+                LzmaWriter::new(Vec::new(), &options, true, marker, Some(data.len() as u64))
+                    .unwrap();
+            writer.write_all(&data).unwrap();
+            let compressed = writer.finish().unwrap();
+            for chunk in [1, 17] {
+                for output_size in [1, 17, 4096] {
+                    let input = Fragmented {
+                        input: &compressed,
+                        chunk,
+                    };
+                    let mut decoder = LzmaReader::new_mem_limit(input, u32::MAX, None).unwrap();
+                    decoder.set_relaxed_end_condition(false);
+                    let mut output = Vec::new();
+                    let mut buf = vec![0; output_size];
+                    loop {
+                        let size = decoder.read(&mut buf).unwrap();
+                        if size == 0 {
+                            break;
+                        }
+                        output.extend_from_slice(&buf[..size]);
+                    }
+                    assert_eq!(output, data);
+                }
+            }
+        }
+    }
+}

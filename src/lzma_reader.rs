@@ -79,6 +79,7 @@ pub struct LzmaReader<R> {
     end_reached: bool,
     relaxed_end_cond: bool,
     remaining_size: u64,
+    defer_errors: bool,
     deferred_error: Option<crate::StickyError>,
 }
 
@@ -220,9 +221,21 @@ impl<R> LzmaReader<R> {
     /// range coder reaching its canonical terminal state.
     ///
     /// Defaults to `true`. Set this to `false` to validate the range coder
-    /// state when the declared uncompressed size is reached.
+    /// state when the declared uncompressed size is reached. Strict completion
+    /// accepts streams both with and without an end marker.
     pub fn set_relaxed_end_condition(&mut self, relaxed: bool) {
         self.relaxed_end_cond = relaxed;
+    }
+
+    /// Controls whether a read returns produced bytes before reporting an error.
+    ///
+    /// Defaults to `false`, so errors detected at the declared end are reported
+    /// by that read, including through `read_exact` and `take`. When enabled,
+    /// an error encountered after producing output is reported on the next
+    /// non-empty read. Callers must read until EOF or an error: reading only
+    /// the declared size does not validate the stream in this mode.
+    pub fn set_defer_errors(&mut self, defer: bool) {
+        self.defer_errors = defer;
     }
 
     /// Unwraps the reader, returning the underlying reader.
@@ -362,6 +375,7 @@ impl<R: Read> LzmaReader<R> {
             end_reached: false,
             relaxed_end_cond: true,
             remaining_size: uncomp_size,
+            defer_errors: false,
             deferred_error: None,
         })
     }
@@ -460,6 +474,34 @@ impl<R: Read> LzmaReader<R> {
         }
     }
 
+    fn validate_end_condition(&mut self) -> crate::Result<()> {
+        if self.lz.has_pending() {
+            return Err(error_invalid_data("end reached but not decoder finished"));
+        }
+        if self.relaxed_end_cond || self.rc.is_stream_finished() {
+            return Ok(());
+        }
+
+        // A known-size stream may also carry an end marker. Decode at most
+        // one additional output byte: only a marker with a finished range
+        // coder is valid here; any further output exceeds the declared size.
+        self.lz.set_limit(1)?;
+        let result = self.decode_buffered();
+        self.rc.inner().check_failure()?;
+        match result {
+            Err(_) if self.lzma.end_marker_detected() => {
+                self.rc.normalize();
+                self.rc.inner().check_failure()?;
+                if self.rc.is_stream_finished() {
+                    return Ok(());
+                }
+            }
+            Err(error) => return Err(error),
+            Ok(()) => {}
+        }
+        Err(error_invalid_data("end reached but not decoder finished"))
+    }
+
     fn read_decode(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -508,11 +550,10 @@ impl<R: Read> LzmaReader<R> {
             off = off.saturating_add(copied_size);
             len = len.saturating_sub(copied_size);
             size = size.saturating_add(copied_size);
-            // A Read call cannot return both bytes and an error. Deliver
-            // the output already produced, then report the error on the next
-            // non-empty read.
+            // Deferred delivery is opt-in: bounded consumers otherwise need
+            // to see an error before a read satisfies their declared size.
             if let Some(error) = decode_error {
-                if size != 0 {
+                if self.defer_errors && size != 0 {
                     self.deferred_error = Some(crate::StickyError::new(error));
                     return Ok(size as usize);
                 }
@@ -526,11 +567,8 @@ impl<R: Read> LzmaReader<R> {
             }
 
             if self.end_reached {
-                if self.lz.has_pending()
-                    || (!self.relaxed_end_cond && !self.rc.is_stream_finished())
-                {
-                    let error = error_invalid_data("end reached but not decoder finished");
-                    if size != 0 {
+                if let Err(error) = self.validate_end_condition() {
+                    if self.defer_errors && size != 0 {
                         self.deferred_error = Some(crate::StickyError::new(error));
                         return Ok(size as usize);
                     }
