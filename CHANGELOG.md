@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add optional strict completion and deferred error delivery to `LzmaReader`.
 - Add `XzStream::set_stop_after_stream_header` and `XzStream::streams_started` to read the check type of every concatenated stream.
 
+### Changed
+
+- Breaking change: `LzipStream::new` and `LzipStream::new_mem_limit` take `allow_multiple_members`, like `XzStream`.
+
 ## 0.22.0 - 2026-10-11
 
 ### Added
