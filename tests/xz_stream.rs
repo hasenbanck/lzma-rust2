@@ -1,6 +1,6 @@
 use std::io::{ErrorKind, Read, Write};
 
-use lzma_rust2::{Action, Status, XzOptions, XzReader, XzStream, XzWriter};
+use lzma_rust2::{Action, CheckType, Status, XzOptions, XzReader, XzStream, XzWriter};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
@@ -291,6 +291,69 @@ fn concatenated_streams() {
     let mut expected = data_a.clone();
     expected.extend_from_slice(data_b);
     assert!(decompressed == expected);
+}
+
+#[test]
+fn stop_after_each_stream_header() {
+    let data: [&[u8]; 3] = [b"first stream", b"second stream", b"third stream"];
+    let checks = [CheckType::Crc64, CheckType::None, CheckType::Crc32];
+    let streams: Vec<Vec<u8>> = data
+        .iter()
+        .zip(checks)
+        .map(|(data, check_type)| {
+            let mut options = XzOptions::with_preset(1);
+            options.set_check_sum_type(check_type);
+            let mut writer = XzWriter::new(Vec::new(), options).unwrap();
+            writer.write_all(data).unwrap();
+            writer.finish().unwrap()
+        })
+        .collect();
+    let input = streams.concat();
+
+    let mut decoder = XzStream::new(true);
+    decoder.set_stop_after_stream_header(true).unwrap();
+
+    // All input and plenty of output space, so only a stop ends a call early.
+    let mut output = [0u8; 4096];
+    let mut in_pos = 0;
+    let mut out_pos = 0;
+    let mut stops = Vec::new();
+    loop {
+        let streams_started = decoder.streams_started();
+        let result = decoder
+            .process(&input[in_pos..], &mut output[out_pos..], Action::Finish)
+            .unwrap();
+        in_pos += result.bytes_consumed;
+        out_pos += result.bytes_produced;
+        if decoder.streams_started() != streams_started {
+            stops.push((decoder.check_type(), in_pos, out_pos));
+        }
+        if result.status == Status::StreamEnd {
+            break;
+        }
+    }
+
+    let mut expected = Vec::new();
+    let mut stream_start = 0;
+    let mut data_start = 0;
+    for ((stream, data), check_type) in streams.iter().zip(data).zip(checks) {
+        expected.push((Some(check_type), stream_start + 12, data_start));
+        stream_start += stream.len();
+        data_start += data.len();
+    }
+    assert_eq!(stops, expected);
+    assert_eq!(&output[..out_pos], data.concat());
+}
+
+#[test]
+fn stop_after_stream_header_must_be_set_before_decoding() {
+    let compressed = encode_xz(b"data", 1);
+    let mut decoder = XzStream::new(false);
+    decoder
+        .process(&compressed[..1], &mut [0u8; 16], Action::Run)
+        .unwrap();
+    let error = decoder.set_stop_after_stream_header(true).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::InvalidInput);
 }
 
 #[test]
