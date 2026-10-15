@@ -7,7 +7,7 @@ use super::{
 use crate::{
     CountingReader, Lzma2Reader, Read, Result,
     crc::Crc32,
-    error_eof, error_invalid_data, error_out_of_memory, error_unsupported,
+    error_eof, error_invalid_data, error_invalid_input, error_out_of_memory, error_unsupported,
     filter::{FilterConfig, FilterType, StreamFilter, bcj::BcjReader, delta::DeltaReader},
     lzma2_reader::{Lzma2Stream, get_memory_usage, get_stream_memory_usage},
     stream::{Action, Status, StreamResult},
@@ -506,6 +506,8 @@ pub struct XzStream {
     index_crc: Crc32,
     index_size: usize,
     allow_multiple_streams: bool,
+    stop_after_stream_header: bool,
+    streams_started: usize,
     /// Memory usage limit in KiB. `u32::MAX` means no limit.
     mem_limit_kb: u32,
     /// Set once `process()` has returned an error. A failed stream stays failed.
@@ -538,6 +540,8 @@ impl XzStream {
             index_crc: Crc32::new(),
             index_size: 0,
             allow_multiple_streams,
+            stop_after_stream_header: false,
+            streams_started: 0,
             mem_limit_kb: u32::MAX,
             failed: false,
             total_in: 0,
@@ -575,12 +579,43 @@ impl XzStream {
         self.total_out
     }
 
-    /// The integrity check type used by the current stream.
+    /// The integrity check type of the stream being decoded.
     ///
-    /// This is read from the stream header during decoding.
-    /// Before the header has been parsed, returns [`CheckType::None`].
+    /// This is read from each stream header, so with concatenated streams it
+    /// changes from one stream to the next. Returns `None` before the first
+    /// header has been parsed.
+    ///
+    /// To read it for every stream, see [`set_stop_after_stream_header()`].
+    ///
+    /// [`set_stop_after_stream_header()`]: XzStream::set_stop_after_stream_header
     pub fn check_type(&self) -> Option<CheckType> {
         self.check_type
+    }
+
+    /// Number of stream headers parsed so far.
+    pub fn streams_started(&self) -> usize {
+        self.streams_started
+    }
+
+    /// Return from [`process()`] right after each stream header is parsed.
+    ///
+    /// At that point [`check_type()`] belongs to the stream that just started
+    /// and none of its data has been decoded. A change in [`streams_started()`]
+    /// tells such a return apart from one that needs more input or output space.
+    ///
+    /// Must be called before decoding starts.
+    ///
+    /// [`process()`]: XzStream::process
+    /// [`check_type()`]: XzStream::check_type
+    /// [`streams_started()`]: XzStream::streams_started
+    pub fn set_stop_after_stream_header(&mut self, stop: bool) -> Result<()> {
+        if self.total_in != 0 {
+            return Err(error_invalid_input(
+                "stream header stop set after decoding started",
+            ));
+        }
+        self.stop_after_stream_header = stop;
+        Ok(())
     }
 
     /// Process available data from `input` into `output`.
@@ -686,7 +721,15 @@ impl XzStream {
                         }
                     }
 
+                    let streams_started = self.streams_started;
                     self.process_accumulated()?;
+                    if self.stop_after_stream_header && self.streams_started != streams_started {
+                        return Ok(StreamResult {
+                            bytes_consumed: in_pos,
+                            bytes_produced: out_pos,
+                            status: Status::Ok,
+                        });
+                    }
                 }
             }
         }
@@ -1011,6 +1054,7 @@ impl XzStream {
         }
         let check_type = CheckType::from_byte(data[7])?;
         self.check_type = Some(check_type);
+        self.streams_started += 1;
         self.index_records.clear();
         self.block_count = 0;
         self.state = XzStreamState::BlockHeaderSize;
