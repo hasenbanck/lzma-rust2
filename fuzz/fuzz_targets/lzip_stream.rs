@@ -28,7 +28,7 @@ fuzz_target!(|data: &[u8]| {
     }
     let (plan, stream) = data.split_at(PLAN_LEN);
 
-    let mut decoder = LzipStream::new_mem_limit(MEM_LIMIT_KB);
+    let mut decoder = LzipStream::new_mem_limit(true, MEM_LIMIT_KB);
 
     let mut output = [0u8; 4096];
     let mut in_pos = 0usize;

@@ -49,8 +49,8 @@ fn parse_header(header: &[u8]) -> Result<u32> {
 /// Every call consumes the whole `input` slice unless the output buffer filled
 /// first or the stream ended, so the caller never has to re-present bytes.
 ///
-/// Members are decoded one after another, so a concatenation of LZIP files
-/// decodes as if it were one file.
+/// With `allow_multiple_members`, members are decoded one after another, so a
+/// concatenation of LZIP files decodes as if it were one file.
 ///
 /// [`LzipReader`]: crate::LzipReader
 /// [`process()`]: LzipStream::process
@@ -65,7 +65,7 @@ fn parse_header(header: &[u8]) -> Result<u32> {
 ///     0, 0, 0, 0, 0, 0,
 /// ];
 ///
-/// let mut stream = LzipStream::new();
+/// let mut stream = LzipStream::new(true);
 /// let mut buf = [0; 1024];
 /// let mut out = Vec::new();
 /// let mut consumed = 0;
@@ -98,6 +98,7 @@ pub struct LzipStream {
     /// Payload bytes the current member has used.
     member_compressed: u64,
     members: usize,
+    allow_multiple_members: bool,
     mem_limit_kb: u32,
     /// Bytes that belong to no member. Filled in once the stream ends.
     leftover: Vec<u8>,
@@ -105,27 +106,37 @@ pub struct LzipStream {
     total_out: u64,
 }
 
-impl Default for LzipStream {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl LzipStream {
     /// Creates a decompressor for the LZIP file format with no memory limit.
-    pub fn new() -> Self {
-        Self::new_mem_limit(u32::MAX)
+    ///
+    /// If `allow_multiple_members` is true, concatenated LZIP members are
+    /// decoded one after another until EOF. Otherwise [`process()`] returns
+    /// [`Status::StreamEnd`] once the first member's trailer has been verified,
+    /// and the bytes taken in past that member come back through
+    /// [`unused_input()`].
+    ///
+    /// [`process()`]: LzipStream::process
+    /// [`unused_input()`]: LzipStream::unused_input
+    pub fn new(allow_multiple_members: bool) -> Self {
+        Self::new_mem_limit(allow_multiple_members, u32::MAX)
     }
 
     /// Creates a decompressor for the LZIP file format with a memory usage
     /// limit.
+    ///
+    /// If `allow_multiple_members` is true, concatenated LZIP members are
+    /// decoded one after another until EOF. Otherwise [`process()`] returns
+    /// [`Status::StreamEnd`] once the first member's trailer has been verified,
+    /// and the bytes taken in past that member come back through
+    /// [`unused_input()`].
     /// - `mem_limit_kb` - memory usage limit in kibibytes (KiB). `u32::MAX` means no limit.
     ///
     /// Each member header is checked against the limit as it is parsed, so
     /// violations surface from [`process()`] rather than from here.
     ///
     /// [`process()`]: LzipStream::process
-    pub fn new_mem_limit(mem_limit_kb: u32) -> Self {
+    /// [`unused_input()`]: LzipStream::unused_input
+    pub fn new_mem_limit(allow_multiple_members: bool, mem_limit_kb: u32) -> Self {
         Self {
             state: LzipState::Header,
             lzma: None,
@@ -137,6 +148,7 @@ impl LzipStream {
             data_size: 0,
             member_compressed: 0,
             members: 0,
+            allow_multiple_members,
             mem_limit_kb,
             leftover: Vec::new(),
             total_in: 0,
@@ -249,6 +261,9 @@ impl LzipStream {
                         return Ok(result);
                     }
                     self.verify_trailer()?;
+                    if !self.allow_multiple_members {
+                        self.finish();
+                    }
                 }
             }
         }

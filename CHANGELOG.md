@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `xz_uncompressed_size` to read the uncompressed size of XZ data from its stream indexes, without decoding it.
 - Add optional strict completion and deferred error delivery to `LzmaReader`.
 
+### Changed
+
+- Breaking change: `LzipStream::new` and `LzipStream::new_mem_limit` take `allow_multiple_members`, like `XzStream`.
+
 ## 0.22.0 - 2026-10-11
 
 ### Added

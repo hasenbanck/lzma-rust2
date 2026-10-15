@@ -107,7 +107,7 @@ fn test_round_trip(path: &str, preset: u32) {
     let data = std::fs::read(path).unwrap();
 
     let compressed = compress(&data, preset, None);
-    let decompressed = decode(&mut LzipStream::new(), &compressed, ENTIRE, 4096).unwrap();
+    let decompressed = decode(&mut LzipStream::new(true), &compressed, ENTIRE, 4096).unwrap();
     assert!(decompressed == data, "preset {preset}");
     assert_eq!(decompressed.len(), data.len(), "preset {preset}");
 }
@@ -184,7 +184,7 @@ fn writer_split_members_round_trip() {
 
     for preset in [0, 1] {
         let compressed = compress(&data, preset, Some(256 * 1024));
-        let mut stream = LzipStream::new();
+        let mut stream = LzipStream::new(true);
         let decompressed = decode(&mut stream, &compressed, ENTIRE, 4096).unwrap();
 
         assert!(decompressed == data, "preset {preset}");
@@ -201,7 +201,7 @@ fn concatenated_members_round_trip() {
 
     for piece in [1usize, 7, 512, 4096] {
         let compressed = compress_members(data, 0, piece);
-        let decompressed = decode(&mut LzipStream::new(), &compressed, 4096, 4096).unwrap();
+        let decompressed = decode(&mut LzipStream::new(true), &compressed, 4096, 4096).unwrap();
         assert!(decompressed == data, "piece {piece}");
     }
 }
@@ -214,7 +214,7 @@ fn tiny_members_decode() {
 
     for &chunk in CHUNK_SIZES {
         for &out_size in OUTPUT_SIZES {
-            let decompressed = decode(&mut LzipStream::new(), &compressed, chunk, out_size)
+            let decompressed = decode(&mut LzipStream::new(true), &compressed, chunk, out_size)
                 .unwrap_or_else(|error| panic!("chunk {chunk} out {out_size}: {error}"));
             assert_eq!(decompressed, b"aaaaaaaa", "chunk {chunk} out {out_size}");
         }
@@ -230,7 +230,7 @@ fn empty_members_decode() {
 
     for &chunk in CHUNK_SIZES {
         for &out_size in OUTPUT_SIZES {
-            let decompressed = decode(&mut LzipStream::new(), &compressed, chunk, out_size)
+            let decompressed = decode(&mut LzipStream::new(true), &compressed, chunk, out_size)
                 .unwrap_or_else(|error| panic!("chunk {chunk} out {out_size}: {error}"));
             assert!(decompressed.is_empty(), "chunk {chunk} out {out_size}");
         }
@@ -248,19 +248,19 @@ fn reference_file_decodes() {
     let data = std::fs::read(EXECUTABLE).unwrap();
 
     for &chunk in &[19usize, 20, 21, 39, 40, 41, 4096, ENTIRE] {
-        let decompressed = decode(&mut LzipStream::new(), &compressed, chunk, 4096)
+        let decompressed = decode(&mut LzipStream::new(true), &compressed, chunk, 4096)
             .unwrap_or_else(|error| panic!("chunk {chunk}: {error}"));
         assert!(decompressed == data, "chunk {chunk}");
     }
 
-    let decompressed = decode(&mut LzipStream::new(), &compressed, 41, 64).unwrap();
+    let decompressed = decode(&mut LzipStream::new(true), &compressed, 41, 64).unwrap();
     assert!(decompressed == data, "small output");
 }
 
 #[test]
 fn reference_file_has_twelve_members() {
     let compressed = std::fs::read(REFERENCE).unwrap();
-    let mut stream = LzipStream::new();
+    let mut stream = LzipStream::new(true);
     decode(&mut stream, &compressed, ENTIRE, 4096).unwrap();
 
     assert_eq!(stream.member_count(), 12);
@@ -273,7 +273,7 @@ fn test_chunk_matrix(compressed: &[u8], data: &[u8], label: &str) {
 
     for &chunk in CHUNK_SIZES {
         for &out_size in OUTPUT_SIZES {
-            let decompressed = decode(&mut LzipStream::new(), compressed, chunk, out_size)
+            let decompressed = decode(&mut LzipStream::new(true), compressed, chunk, out_size)
                 .unwrap_or_else(|error| panic!("{label} chunk {chunk} out {out_size}: {error}"));
             assert!(
                 decompressed == reference,
@@ -339,7 +339,7 @@ fn matches_reader_on_corpus() {
         for preset in [0, 6] {
             let compressed = compress(&data, preset, None);
             let reference = decode_with_reader(&compressed).unwrap();
-            let decompressed = decode(&mut LzipStream::new(), &compressed, 4096, 4096).unwrap();
+            let decompressed = decode(&mut LzipStream::new(true), &compressed, 4096, 4096).unwrap();
             assert!(decompressed == reference, "{path} preset {preset}");
         }
     }
@@ -352,7 +352,7 @@ fn matches_reader_on_multi_member_files() {
         for preset in [0, 6] {
             let compressed = compress_members(&data, preset, 1024);
             let reference = decode_with_reader(&compressed).unwrap();
-            let decompressed = decode(&mut LzipStream::new(), &compressed, 4096, 4096).unwrap();
+            let decompressed = decode(&mut LzipStream::new(true), &compressed, 4096, 4096).unwrap();
             assert!(decompressed == reference, "{path} preset {preset}");
         }
     }
@@ -369,7 +369,7 @@ fn a_corrupted_payload_is_caught() {
 
     // Which check trips first depends on the target, so only the failure is
     // asserted.
-    decode_err(&mut LzipStream::new(), &corrupted, ENTIRE, 4096);
+    decode_err(&mut LzipStream::new(true), &corrupted, ENTIRE, 4096);
 }
 
 #[test]
@@ -382,7 +382,7 @@ fn tampered_trailer_fields_are_caught() {
         let mut corrupted = compressed.clone();
         corrupted[trailer + offset] ^= 0x01;
 
-        let error = decode_err(&mut LzipStream::new(), &corrupted, ENTIRE, 4096);
+        let error = decode_err(&mut LzipStream::new(true), &corrupted, ENTIRE, 4096);
         assert_eq!(error.kind(), ErrorKind::InvalidData, "tampered {field}");
     }
 }
@@ -399,7 +399,7 @@ fn a_corrupted_member_in_the_middle_is_caught() {
     // Either the member fails to decode, or it stops early because the flipped
     // byte no longer looks like a header. What it must not do is decode as if
     // nothing had happened.
-    if let Ok(decompressed) = decode(&mut LzipStream::new(), &corrupted, ENTIRE, 4096) {
+    if let Ok(decompressed) = decode(&mut LzipStream::new(true), &corrupted, ENTIRE, 4096) {
         assert!(decompressed != data);
     }
 }
@@ -414,7 +414,7 @@ fn bit_flips_never_panic() {
     for index in 0..compressed.len() {
         let mut corrupted = compressed.clone();
         corrupted[index] ^= 1 << (index % 8);
-        let _ = decode(&mut LzipStream::new(), &corrupted, ENTIRE, 4096);
+        let _ = decode(&mut LzipStream::new(true), &corrupted, ENTIRE, 4096);
     }
 }
 
@@ -432,7 +432,12 @@ fn every_truncated_prefix_errors() {
     }
 
     for prefix in 1..compressed.len() {
-        let result = decode(&mut LzipStream::new(), &compressed[..prefix], ENTIRE, 4096);
+        let result = decode(
+            &mut LzipStream::new(true),
+            &compressed[..prefix],
+            ENTIRE,
+            4096,
+        );
 
         // A file that stops on a member boundary is complete, and so is one
         // that stops a few bytes into the next header: too little to tell a
@@ -464,7 +469,7 @@ fn truncation_is_detected_at_every_chunk_size() {
 
     for &chunk in CHUNK_SIZES {
         for &out_size in OUTPUT_SIZES {
-            let result = decode(&mut LzipStream::new(), truncated, chunk, out_size);
+            let result = decode(&mut LzipStream::new(true), truncated, chunk, out_size);
             assert!(result.is_err(), "chunk {chunk} out {out_size}");
         }
     }
@@ -477,7 +482,7 @@ fn a_truncated_last_member_errors() {
     compressed.truncate(compressed.len() - 25);
 
     for &chunk in CHUNK_SIZES {
-        decode_err(&mut LzipStream::new(), &compressed, chunk, 4096);
+        decode_err(&mut LzipStream::new(true), &compressed, chunk, 4096);
     }
 }
 
@@ -527,7 +532,7 @@ fn trailing_data_is_recoverable() {
         input.extend_from_slice(&garbage);
 
         let (decompressed, unused) =
-            decode_recovering_tail(&mut LzipStream::new(), &input, chunk).unwrap();
+            decode_recovering_tail(&mut LzipStream::new(true), &input, chunk).unwrap();
 
         assert!(decompressed == data, "chunk {chunk}");
         assert_eq!(unused, garbage, "chunk {chunk}");
@@ -547,11 +552,63 @@ fn a_short_trailing_tail_is_recoverable() {
             input.extend_from_slice(&garbage);
 
             let (decompressed, unused) =
-                decode_recovering_tail(&mut LzipStream::new(), &input, chunk).unwrap();
+                decode_recovering_tail(&mut LzipStream::new(true), &input, chunk).unwrap();
 
             assert!(decompressed == data, "tail {tail_len} chunk {chunk}");
             assert_eq!(unused, garbage, "tail {tail_len} chunk {chunk}");
         }
+    }
+}
+
+fn test_single_member(first: &[u8], tail: &[u8], data: &[u8], label: &str) {
+    let mut input = first.to_vec();
+    input.extend_from_slice(tail);
+
+    for &chunk in CHUNK_SIZES {
+        let mut stream = LzipStream::new(false);
+        let (decompressed, unused) = decode_recovering_tail(&mut stream, &input, chunk)
+            .unwrap_or_else(|error| panic!("{label} chunk {chunk}: {error}"));
+
+        assert!(decompressed == data, "{label} chunk {chunk}");
+        assert_eq!(unused, tail, "{label} chunk {chunk}");
+        assert!(stream.is_finished(), "{label} chunk {chunk}");
+        assert_eq!(stream.member_count(), 1, "{label} chunk {chunk}");
+        assert_eq!(
+            stream.total_in() - stream.unused_input().len() as u64,
+            first.len() as u64,
+            "{label} chunk {chunk}"
+        );
+
+        // Once stopped, the stream stays stopped and takes nothing more.
+        let result = stream.process(tail, &mut [0u8; 64], Action::Run).unwrap();
+        assert_eq!(result.status, Status::StreamEnd, "{label} chunk {chunk}");
+        assert_eq!(result.bytes_consumed, 0, "{label} chunk {chunk}");
+        assert_eq!(result.bytes_produced, 0, "{label} chunk {chunk}");
+    }
+}
+
+#[test]
+fn single_member_stops_after_first_member() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let (first, second) = data.split_at(1024);
+    test_single_member(
+        &compress(first, 0, None),
+        &compress(second, 0, None),
+        first,
+        "second member",
+    );
+}
+
+/// Behind the first member comes garbage, or a member cut short that would be
+/// an error if it were decoded. Neither is looked at.
+#[test]
+fn single_member_leaves_trailing_data_alone() {
+    let data = &std::fs::read(INPUT_HTML).unwrap()[..1024];
+    let garbage: Vec<u8> = (0u8..=255).cycle().take(300).collect();
+    let truncated = compress(data, 0, None)[..HEADER_SIZE + 8].to_vec();
+
+    for (tail, label) in [(garbage, "garbage"), (truncated, "truncated member")] {
+        test_single_member(&compress(data, 0, None), &tail, data, label);
     }
 }
 
@@ -560,14 +617,14 @@ fn non_lzip_input_errors() {
     let data = std::fs::read(INPUT_HTML).unwrap();
 
     for &chunk in CHUNK_SIZES {
-        let error = decode_err(&mut LzipStream::new(), &data, chunk, 4096);
+        let error = decode_err(&mut LzipStream::new(true), &data, chunk, 4096);
         assert_eq!(error.kind(), ErrorKind::InvalidData, "chunk {chunk}");
     }
 }
 
 #[test]
 fn empty_input_errors() {
-    let mut stream = LzipStream::new();
+    let mut stream = LzipStream::new(true);
     let mut output = [0u8; 64];
     let error = stream
         .process(&[], &mut output, Action::Finish)
@@ -579,7 +636,7 @@ fn empty_input_errors() {
 
 #[test]
 fn empty_input_asks_for_more() {
-    let mut stream = LzipStream::new();
+    let mut stream = LzipStream::new(true);
     let mut output = [0u8; 64];
     let result = stream.process(&[], &mut output, Action::Run).unwrap();
 
@@ -604,7 +661,7 @@ fn memory_limit_is_enforced_from_process() {
 
     // The constructor cannot fail; the limit is checked once a member header
     // has been parsed.
-    let mut stream = LzipStream::new_mem_limit(1);
+    let mut stream = LzipStream::new_mem_limit(true, 1);
     let mut output = [0u8; 4096];
     let error = stream
         .process(&compressed, &mut output, Action::Finish)
@@ -612,7 +669,7 @@ fn memory_limit_is_enforced_from_process() {
     assert_eq!(error.kind(), ErrorKind::OutOfMemory);
 
     // A generous limit works on the same bytes.
-    let decompressed = decode(&mut LzipStream::new(), &compressed, ENTIRE, 4096).unwrap();
+    let decompressed = decode(&mut LzipStream::new(true), &compressed, ENTIRE, 4096).unwrap();
     assert!(decompressed == data);
 }
 
@@ -620,7 +677,12 @@ fn memory_limit_is_enforced_from_process() {
 fn memory_limit_is_enforced_when_the_header_arrives_byte_by_byte() {
     let data = std::fs::read(APACHE2).unwrap();
     let compressed = compress(&data, 9, None);
-    let result = decode(&mut LzipStream::new_mem_limit(1), &compressed, 1, 4096);
+    let result = decode(
+        &mut LzipStream::new_mem_limit(true, 1),
+        &compressed,
+        1,
+        4096,
+    );
     assert_eq!(result.unwrap_err().kind(), ErrorKind::OutOfMemory);
 }
 
@@ -631,11 +693,22 @@ fn memory_limit_is_enforced_on_a_later_member() {
     // Preset 0 uses a 256 KiB dictionary, preset 9 a 64 MiB one.
     let mut input = compress(&data, 0, None);
     let limit = member_memory(1 << 18);
-    let decompressed = decode(&mut LzipStream::new_mem_limit(limit), &input, ENTIRE, 4096).unwrap();
+    let decompressed = decode(
+        &mut LzipStream::new_mem_limit(true, limit),
+        &input,
+        ENTIRE,
+        4096,
+    )
+    .unwrap();
     assert!(decompressed == data);
 
     input.extend_from_slice(&compress(&data, 9, None));
-    let error = decode_err(&mut LzipStream::new_mem_limit(limit), &input, ENTIRE, 4096);
+    let error = decode_err(
+        &mut LzipStream::new_mem_limit(true, limit),
+        &input,
+        ENTIRE,
+        4096,
+    );
     assert_eq!(error.kind(), ErrorKind::OutOfMemory);
 }
 
@@ -646,7 +719,7 @@ fn memory_limit_includes_speculation() {
     let limit = member_memory(1 << 18);
 
     let decompressed = decode(
-        &mut LzipStream::new_mem_limit(limit),
+        &mut LzipStream::new_mem_limit(true, limit),
         &compressed,
         ENTIRE,
         4096,
@@ -655,7 +728,7 @@ fn memory_limit_includes_speculation() {
     assert!(decompressed == data);
 
     let error = decode_err(
-        &mut LzipStream::new_mem_limit(limit - 1),
+        &mut LzipStream::new_mem_limit(true, limit - 1),
         &compressed,
         ENTIRE,
         4096,
