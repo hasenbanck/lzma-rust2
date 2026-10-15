@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add `xz_uncompressed_size` to read the uncompressed size of XZ data from its stream indexes, without decoding it.
+- Add optional strict completion and deferred error delivery to `LzmaReader`.
 
 ## 0.22.0 - 2026-10-11
 
