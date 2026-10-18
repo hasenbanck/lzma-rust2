@@ -427,12 +427,9 @@ fn process_after_stream_end() {
     }
 
     let result = decoder.process(&[], &mut output_buf, Action::Finish);
-    match result {
-        Ok(r) => {
-            assert_eq!(r.bytes_consumed, 0);
-            assert_eq!(r.bytes_produced, 0);
-        }
-        Err(_) => {}
+    if let Ok(r) = result {
+        assert_eq!(r.bytes_consumed, 0);
+        assert_eq!(r.bytes_produced, 0);
     }
 }
 

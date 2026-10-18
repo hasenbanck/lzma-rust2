@@ -49,7 +49,7 @@ fn regression_xz_reader(input_data: &[u8], expected_output: &[u8]) {
 #[test]
 fn issue_56() {
     let input = std::fs::read("tests/data/issue_56.xz").unwrap();
-    let output = [b'O', b'n', b'e', b'\n', b'T', b'w', b'o', b'\n'];
+    let output = *b"One\nTwo\n";
     regression_xz_reader(input.as_slice(), output.as_slice());
 }
 
