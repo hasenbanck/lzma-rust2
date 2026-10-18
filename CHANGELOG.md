@@ -7,11 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.23.0 - 2026-10-18
+
 ### Added
 
 - Add `xz_uncompressed_size` to read the uncompressed size of XZ data from its stream indexes, without decoding it.
 - Add optional strict completion and deferred error delivery to `LzmaReader`.
-- Add `XzStream::set_stop_after_stream_header` and `XzStream::streams_started` to read the check type of every concatenated stream.
+- Add `XzStream::set_stop_after_stream_header` and `XzStream::streams_started` to read the check type of every
+  concatenated stream.
 
 ### Changed
 
