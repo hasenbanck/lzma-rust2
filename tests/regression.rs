@@ -6,7 +6,7 @@ use std::{
 use lzma_rust2::{
     LzipOptions, LzipReaderMt, LzipWriter, Lzma2Options, Lzma2Reader, Lzma2ReaderMt, Lzma2Writer,
     Lzma2WriterMt, LzmaOptions, LzmaReader, LzmaWriter, XzOptions, XzReader, XzReaderMt,
-    XzWriterMt,
+    XzWriterMt, xz_uncompressed_size,
 };
 
 fn regression_lzma2_reader_mt(input_data: &[u8], expected_output: &[u8], dict_size: u32) {
@@ -1086,4 +1086,88 @@ mod lzma_declared_end {
             }
         }
     }
+}
+
+fn xz_index_flood(records: usize, block_bytes: usize) -> Vec<u8> {
+    let mut stream = vec![0xFD, b'7', b'z', b'X', b'Z', 0x00, 0x00, 0x00];
+    stream.extend_from_slice(&crc32(&[0x00, 0x00]).to_le_bytes());
+    stream.resize(stream.len() + block_bytes, 0);
+
+    let mut index = vec![0x00];
+    let mut count = records as u64;
+    while count >= 0x80 {
+        index.push(count as u8 | 0x80);
+        count >>= 7;
+    }
+    index.push(count as u8);
+    for _ in 0..records {
+        index.extend_from_slice(&[0x01, 0x00]);
+    }
+    while index.len() % 4 != 0 {
+        index.push(0);
+    }
+    index.extend_from_slice(&crc32(&index).to_le_bytes());
+
+    let mut fields = ((index.len() / 4 - 1) as u32).to_le_bytes().to_vec();
+    fields.extend_from_slice(&[0x00, 0x00]);
+    stream.extend_from_slice(&index);
+    stream.extend_from_slice(&crc32(&fields).to_le_bytes());
+    stream.extend_from_slice(&fields);
+    stream.extend_from_slice(b"YZ");
+    stream
+}
+
+const FLOOD_RECORDS: usize = 1 << 20;
+
+#[test]
+fn xz_reader_does_not_collect_index_records() {
+    let input = xz_index_flood(FLOOD_RECORDS, 0);
+
+    let mut result = None;
+    let peak = allocation_tracking::peak(|| {
+        let mut uncompressed = Vec::new();
+        result = Some(XzReader::new(input.as_slice(), true).read_to_end(&mut uncompressed));
+    });
+
+    assert!(result.unwrap().is_err());
+    assert!(peak < 1 << 20, "peak {peak} bytes");
+}
+
+#[test]
+fn xz_reader_mt_rejects_index_records_past_the_index() {
+    let input = xz_index_flood(FLOOD_RECORDS, 0);
+
+    let mut result = None;
+    let peak = allocation_tracking::peak(|| {
+        result = Some(XzReaderMt::new(std::io::Cursor::new(input.as_slice()), true, 1).map(|_| ()));
+    });
+
+    assert!(result.unwrap().is_err());
+    assert!(peak < 1 << 20, "peak {peak} bytes");
+}
+
+#[test]
+fn xz_uncompressed_size_does_not_collect_index_records() {
+    let input = xz_index_flood(FLOOD_RECORDS, 4 * FLOOD_RECORDS);
+
+    let mut result = None;
+    let peak = allocation_tracking::peak(|| {
+        result = Some(xz_uncompressed_size(std::io::Cursor::new(input.as_slice())));
+    });
+
+    assert_eq!(result.unwrap().unwrap(), 0);
+    assert!(peak < 1 << 20, "peak {peak} bytes");
+}
+
+#[test]
+fn xz_uncompressed_size_rejects_index_records_past_the_index() {
+    let input = xz_index_flood(FLOOD_RECORDS, 0);
+
+    let mut result = None;
+    let peak = allocation_tracking::peak(|| {
+        result = Some(xz_uncompressed_size(std::io::Cursor::new(input.as_slice())));
+    });
+
+    assert!(result.unwrap().is_err());
+    assert!(peak < 1 << 20, "peak {peak} bytes");
 }
