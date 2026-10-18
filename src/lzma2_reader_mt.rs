@@ -290,9 +290,13 @@ impl<R: Read> Lzma2ReaderMt<R> {
                                 // Clean EOF from inner reader.
                                 // Send any remaining data as the final work unit.
                                 self.send_work_unit();
+                                // Input without a chunk dispatches nothing to wait for.
                                 self.last_sequence_id =
-                                    Some(self.next_sequence_to_dispatch.saturating_sub(1));
-                                self.state = State::Draining;
+                                    self.next_sequence_to_dispatch.checked_sub(1);
+                                self.state = match self.last_sequence_id {
+                                    Some(_) => State::Draining,
+                                    None => State::Finished,
+                                };
                                 continue;
                             }
                             Err(error) => {
@@ -431,23 +435,18 @@ impl<R: Read> Read for Lzma2ReaderMt<R> {
             return Ok(0);
         }
 
-        let bytes_read = self.current_chunk.read(buf)?;
+        loop {
+            let bytes_read = self.current_chunk.read(buf)?;
+            if bytes_read > 0 {
+                return Ok(bytes_read);
+            }
 
-        if bytes_read > 0 {
-            return Ok(bytes_read);
+            let Some(chunk_data) = self.get_next_uncompressed_chunk()? else {
+                // This is the clean end of the stream.
+                return Ok(0);
+            };
+            self.current_chunk = Cursor::new(chunk_data);
         }
-
-        let chunk_data = self.get_next_uncompressed_chunk()?;
-
-        let Some(chunk_data) = chunk_data else {
-            // This is the clean end of the stream.
-            return Ok(0);
-        };
-
-        self.current_chunk = Cursor::new(chunk_data);
-
-        // Recursive call to read the new chunk data.
-        self.read(buf)
     }
 }
 

@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Read any number of empty XZ streams in `XzReader` without growing the call stack.
 - Read any number of empty XZ blocks in `XzReaderMt` without growing the call stack.
 - Read the XZ index record by record without collecting the records in memory.
+- Finish `Lzma2ReaderMt` on empty input with empty output.
 
 ## 0.22.0 - 2026-10-11
 
