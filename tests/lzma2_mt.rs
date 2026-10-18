@@ -263,3 +263,20 @@ fn round_trip_pg6800_8() {
 fn round_trip_pg6800_9() {
     test_round_trip(PG6800, 9);
 }
+
+#[test]
+fn empty_input_decodes_to_nothing() {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut uncompressed = Vec::new();
+        let result = Lzma2ReaderMt::new(&[][..], 1 << 16, None, 2)
+            .read_to_end(&mut uncompressed)
+            .map(|_| uncompressed.len());
+        let _ = sender.send(result);
+    });
+
+    let result = receiver
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the reader did not finish");
+    assert_eq!(result.unwrap(), 0);
+}
