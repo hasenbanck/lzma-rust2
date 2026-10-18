@@ -156,13 +156,21 @@ impl<R: Read + Seek> XzReaderMt<R> {
         let mut block_start_pos = header_end_pos;
 
         for record in &index.records {
+            let block_end_pos = next_block_start(block_start_pos, record.unpadded_size)?;
+            if block_end_pos > index_start_pos {
+                return Err(error_invalid_data("XZ blocks larger than file"));
+            }
+
             self.blocks.push(XzBlock {
                 start_pos: block_start_pos,
                 unpadded_size: record.unpadded_size,
                 uncompressed_size: record.uncompressed_size,
             });
 
-            block_start_pos = next_block_start(block_start_pos, record.unpadded_size)?;
+            block_start_pos = block_end_pos;
+        }
+        if block_start_pos != index_start_pos {
+            return Err(error_invalid_data("XZ blocks do not end at the index"));
         }
 
         if self.blocks.is_empty() {

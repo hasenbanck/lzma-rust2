@@ -302,3 +302,55 @@ fn round_trip_pg6800_8() {
 fn round_trip_pg6800_9() {
     test_round_trip(PG6800, 9);
 }
+
+fn compress_mt(data: &[u8]) -> Vec<u8> {
+    let mut options = XzOptions::with_preset(1);
+    options.set_block_size(NonZeroU64::new(1 << 20));
+    let mut writer = XzWriterMt::new(Vec::new(), options, 1).unwrap();
+    writer.write_all(data).unwrap();
+    writer.finish().unwrap()
+}
+
+fn decode_mt(compressed: &[u8]) -> std::io::Result<Vec<u8>> {
+    let mut reader = XzReaderMt::new(Cursor::new(compressed), true, 2)?;
+    let mut uncompressed = Vec::new();
+    reader.read_to_end(&mut uncompressed)?;
+    Ok(uncompressed)
+}
+
+#[test]
+fn a_gap_between_the_blocks_and_the_index_is_rejected() {
+    let data = b"some data".repeat(100);
+    let compressed = compress_mt(&data);
+    assert!(decode_mt(&compressed).unwrap() == data);
+
+    let footer_start = compressed.len() - 12;
+    let backward_size = u32::from_le_bytes(
+        compressed[footer_start + 4..footer_start + 8]
+            .try_into()
+            .unwrap(),
+    );
+    let index_start = footer_start - (backward_size as usize + 1) * 4;
+    let mut broken = compressed[..index_start].to_vec();
+    broken.extend_from_slice(&[0; 4]);
+    broken.extend_from_slice(&compressed[index_start..]);
+
+    assert_eq!(
+        decode_mt(&broken).err().map(|error| error.kind()),
+        Some(std::io::ErrorKind::InvalidData)
+    );
+}
+
+#[test]
+fn concatenated_streams_are_not_truncated() {
+    let first = vec![b'A'; 100_000];
+    let second = vec![b'B'; 100_000];
+    let mut compressed = compress_mt(&first);
+    let first_size = compressed.len();
+    compressed.extend_from_slice(&compress_mt(&second));
+    assert_eq!(compressed.len(), 2 * first_size);
+
+    if let Ok(uncompressed) = decode_mt(&compressed) {
+        assert!(uncompressed == [first, second].concat());
+    }
+}

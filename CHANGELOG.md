@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Breaking change: `LzipStream::new` and `LzipStream::new_mem_limit` take `allow_multiple_members`, like `XzStream`.
 
+### Fixed
+
+- Reject XZ blocks in `XzReaderMt` that do not end at the index before allocating them.
+
 ## 0.22.0 - 2026-10-11
 
 ### Added
