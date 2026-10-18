@@ -382,9 +382,31 @@ fn xz_with_huge_index_record(unpadded_size: u64) -> Vec<u8> {
 fn xz_mt_huge_index_record_does_not_oom() {
     let input = xz_with_huge_index_record(1 << 60);
 
-    let mut reader = XzReaderMt::new(std::io::Cursor::new(input), false, 2).unwrap();
-    let mut output = Vec::new();
-    assert!(reader.read_to_end(&mut output).is_err());
+    let result = XzReaderMt::new(std::io::Cursor::new(input), false, 2).and_then(|mut reader| {
+        let mut output = Vec::new();
+        reader.read_to_end(&mut output)
+    });
+    assert!(result.is_err());
+}
+
+#[test]
+fn xz_mt_index_record_past_the_index_is_not_allocated() {
+    let input = xz_with_huge_index_record(1 << 30);
+
+    let mut result = None;
+    let peak = allocation_tracking::peak(|| {
+        result = Some(
+            XzReaderMt::new(std::io::Cursor::new(input.as_slice()), false, 2).and_then(
+                |mut reader| {
+                    let mut output = Vec::new();
+                    reader.read_to_end(&mut output)
+                },
+            ),
+        );
+    });
+
+    assert!(result.unwrap().is_err());
+    assert!(peak < 1 << 20, "peak {peak} bytes");
 }
 
 struct FaultyReader {
