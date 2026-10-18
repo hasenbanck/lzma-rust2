@@ -354,3 +354,63 @@ fn concatenated_streams_are_not_truncated() {
         assert!(uncompressed == [first, second].concat());
     }
 }
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &byte in data {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+        }
+    }
+    !crc
+}
+
+fn empty_blocks(blocks: usize) -> Vec<u8> {
+    let mut stream = vec![0xFD, b'7', b'z', b'X', b'Z', 0x00, 0x00, 0x00];
+    stream.extend_from_slice(&crc32(&[0x00, 0x00]).to_le_bytes());
+
+    // A 12 byte block header, the LZMA2 end marker and the block padding.
+    let mut block = vec![0x02, 0x00, 0x21, 0x01, 0x00, 0x00, 0x00, 0x00];
+    block.extend_from_slice(&crc32(&block).to_le_bytes());
+    block.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+    for _ in 0..blocks {
+        stream.extend_from_slice(&block);
+    }
+
+    let mut index = vec![0x00];
+    let mut count = blocks as u64;
+    while count >= 0x80 {
+        index.push(count as u8 | 0x80);
+        count >>= 7;
+    }
+    index.push(count as u8);
+    for _ in 0..blocks {
+        index.extend_from_slice(&[13, 0x00]);
+    }
+    while index.len() % 4 != 0 {
+        index.push(0);
+    }
+    index.extend_from_slice(&crc32(&index).to_le_bytes());
+
+    let mut fields = ((index.len() / 4 - 1) as u32).to_le_bytes().to_vec();
+    fields.extend_from_slice(&[0x00, 0x00]);
+    stream.extend_from_slice(&index);
+    stream.extend_from_slice(&crc32(&fields).to_le_bytes());
+    stream.extend_from_slice(&fields);
+    stream.extend_from_slice(b"YZ");
+    stream
+}
+
+#[test]
+fn many_empty_blocks_are_read() {
+    let compressed = empty_blocks(20_000);
+
+    let decoded = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || decode_mt(&compressed).map(|decoded| decoded.len()))
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(decoded.unwrap(), 0);
+}
