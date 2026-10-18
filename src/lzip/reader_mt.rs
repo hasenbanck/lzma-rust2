@@ -187,21 +187,6 @@ fn decode_member(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{LzipOptions, LzipWriter, Write};
-
-    #[test]
-    fn cancelled_member_stops_before_decoding() {
-        let mut writer = LzipWriter::new(Vec::new(), LzipOptions::with_preset(0));
-        writer.write_all(&vec![b'x'; 256 * 1024]).unwrap();
-        let member = writer.finish().unwrap();
-        let shutdown = AtomicBool::new(true);
-        assert!(decode_member(&member, None, &shutdown).unwrap().is_none());
-    }
-}
-
 impl<R: Read + Seek> Read for LzipReaderMt<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
@@ -219,5 +204,20 @@ impl<R: Read + Seek> Read for LzipReaderMt<R> {
             };
             self.current_chunk = Cursor::new(chunk_data);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{LzipOptions, LzipWriter, Write};
+
+    #[test]
+    fn cancelled_member_stops_before_decoding() {
+        let mut writer = LzipWriter::new(Vec::new(), LzipOptions::with_preset(0));
+        writer.write_all(&vec![b'x'; 256 * 1024]).unwrap();
+        let member = writer.finish().unwrap();
+        let shutdown = AtomicBool::new(true);
+        assert!(decode_member(&member, None, &shutdown).unwrap().is_none());
     }
 }
