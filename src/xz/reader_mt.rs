@@ -13,7 +13,7 @@ use std::{
 /// Interval for checking worker errors while waiting for results.
 const ERROR_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
-use super::{BlockHeader, CheckType, Index, StreamFooter, StreamHeader, create_filter_chain};
+use super::{BlockHeader, CheckType, StreamFooter, StreamHeader, create_filter_chain, parse_index};
 use crate::{
     ByteReader, Read, error_invalid_data, error_out_of_memory, set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
@@ -151,24 +151,24 @@ impl<R: Read + Seek> XzReaderMt<R> {
             return Err(error_invalid_data("invalid XZ index indicator"));
         }
 
-        let index = Index::parse(&mut reader)?;
-
+        let blocks = &mut self.blocks;
         let mut block_start_pos = header_end_pos;
-
-        for record in &index.records {
+        parse_index(&mut reader, |record| {
             let block_end_pos = next_block_start(block_start_pos, record.unpadded_size)?;
             if block_end_pos > index_start_pos {
                 return Err(error_invalid_data("XZ blocks larger than file"));
             }
 
-            self.blocks.push(XzBlock {
+            blocks.try_reserve(1)?;
+            blocks.push(XzBlock {
                 start_pos: block_start_pos,
                 unpadded_size: record.unpadded_size,
                 uncompressed_size: record.uncompressed_size,
             });
 
             block_start_pos = block_end_pos;
-        }
+            Ok(())
+        })?;
         if block_start_pos != index_start_pos {
             return Err(error_invalid_data("XZ blocks do not end at the index"));
         }

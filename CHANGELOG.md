@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reject XZ blocks in `XzReaderMt` that do not end at the index before allocating them.
 - Read any number of empty XZ streams in `XzReader` without growing the call stack.
 - Read any number of empty XZ blocks in `XzReaderMt` without growing the call stack.
+- Read the XZ index record by record without collecting the records in memory.
 
 ## 0.22.0 - 2026-10-11
 

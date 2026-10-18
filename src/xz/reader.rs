@@ -1,8 +1,8 @@
 use alloc::{boxed::Box, vec::Vec};
 
 use super::{
-    BlockHeader, CheckType, ChecksumCalculator, Index, IndexRecord, StreamFooter, StreamHeader,
-    XZ_FOOTER_MAGIC, XZ_MAGIC, count_multibyte_integer_size, parse_multibyte_integer,
+    BlockHeader, CheckType, ChecksumCalculator, IndexRecord, StreamFooter, StreamHeader,
+    XZ_FOOTER_MAGIC, XZ_MAGIC, count_multibyte_integer_size, parse_index, parse_multibyte_integer,
 };
 use crate::{
     CountingReader, Lzma2Reader, Read, Result,
@@ -399,9 +399,13 @@ impl<R: Read> XzReader<R> {
     }
 
     fn parse_index_and_footer(&mut self) -> Result<()> {
-        let index = Index::parse(&mut self.reader)?;
+        let mut number_of_records = 0u64;
+        parse_index(&mut self.reader, |_| {
+            number_of_records += 1;
+            Ok(())
+        })?;
 
-        if index.number_of_records != self.blocks_processed {
+        if number_of_records != self.blocks_processed {
             return Err(error_invalid_data(
                 "number of blocks processed doesn't match index records",
             ));

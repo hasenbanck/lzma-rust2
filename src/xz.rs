@@ -8,9 +8,11 @@ mod writer;
 #[cfg(all(feature = "encoder", feature = "std"))]
 mod writer_mt;
 
-use alloc::{boxed::Box, vec, vec::Vec};
+#[cfg(feature = "encoder")]
+use alloc::vec::Vec;
+use alloc::{boxed::Box, vec};
 #[cfg(feature = "std")]
-use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
+use std::io::{self, BufReader, Seek, SeekFrom};
 
 pub use reader::{XzReader, XzStream};
 #[cfg(feature = "std")]
@@ -46,12 +48,6 @@ struct IndexRecord {
 }
 
 #[derive(Debug)]
-struct Index {
-    pub number_of_records: u64,
-    pub records: Vec<IndexRecord>,
-}
-
-#[derive(Debug)]
 struct StreamHeader {
     pub check_type: CheckType,
 }
@@ -69,13 +65,6 @@ struct BlockHeader {
     uncompressed_size: Option<u64>,
     filters: [Option<FilterType>; 4],
     properties: [u32; 4],
-}
-
-#[derive(Debug, Clone)]
-struct Block {
-    start_pos: u64,
-    unpadded_size: u64,
-    uncompressed_size: u64,
 }
 
 /// Supported checksum types in XZ format.
@@ -143,29 +132,6 @@ fn count_multibyte_integer_size(data: &[u8]) -> usize {
         }
     }
     data.len()
-}
-
-fn parse_multibyte_integer_from_reader<R: Read>(reader: &mut R) -> crate::Result<u64> {
-    let mut result = 0u64;
-    let mut shift = 0;
-
-    for _ in 0..9 {
-        // Max 9 bytes for 63-bit value
-        let byte = reader.read_u8()?;
-
-        if shift >= 63 {
-            return Err(error_invalid_data("XZ multibyte integer too large"));
-        }
-
-        result |= ((byte & 0x7F) as u64) << shift;
-        shift += 7;
-
-        if (byte & 0x80) == 0 {
-            return Ok(result);
-        }
-    }
-
-    Err(error_invalid_data("XZ multibyte integer too long"))
 }
 
 fn count_multibyte_integer_size_for_value(mut value: u64) -> usize {
@@ -789,76 +755,64 @@ impl StreamFooter {
     }
 }
 
-impl Index {
-    pub(crate) fn parse<R: Read>(reader: &mut R) -> crate::Result<Index> {
-        // sic! index indicator already consumed
-        let number_of_records = parse_multibyte_integer_from_reader(reader)?;
-        let mut records = Vec::new();
-        records.try_reserve_exact(number_of_records.min(1024) as usize)?;
+/// Parses an index whose indicator byte is already consumed and passes each
+/// record to `on_record`. The records are not collected. Returns the size of
+/// the index in bytes, the indicator included.
+fn parse_index<R: Read>(
+    reader: &mut R,
+    mut on_record: impl FnMut(IndexRecord) -> crate::Result<()>,
+) -> crate::Result<u64> {
+    let mut crc = Crc32::new();
+    crc.update(&[0]);
+    let mut size = 1;
 
-        for _ in 0..number_of_records {
-            let unpadded_size = parse_multibyte_integer_from_reader(reader)?;
-            let uncompressed_size = parse_multibyte_integer_from_reader(reader)?;
+    let number_of_records = read_index_integer(reader, &mut crc, &mut size)?;
+    for _ in 0..number_of_records {
+        let unpadded_size = read_index_integer(reader, &mut crc, &mut size)?;
+        let uncompressed_size = read_index_integer(reader, &mut crc, &mut size)?;
 
-            if unpadded_size == 0 {
-                return Err(error_invalid_data("invalid index record unpadded size"));
-            }
-
-            records.push(IndexRecord {
-                unpadded_size,
-                uncompressed_size,
-            });
+        if unpadded_size == 0 {
+            return Err(error_invalid_data("invalid index record unpadded size"));
         }
 
-        // Skip index padding (0-3 null bytes to make multiple of 4).
-        let mut bytes_read = 1;
-        bytes_read += count_multibyte_integer_size_for_value(number_of_records);
-        for record in &records {
-            bytes_read += count_multibyte_integer_size_for_value(record.unpadded_size);
-            bytes_read += count_multibyte_integer_size_for_value(record.uncompressed_size);
-        }
-
-        let padding_needed = (4 - (bytes_read % 4)) % 4;
-
-        if padding_needed > 0 {
-            let mut padding_buf = [0u8; 3];
-            reader.read_exact(&mut padding_buf[..padding_needed])?;
-
-            if !padding_buf[..padding_needed].iter().all(|&b| b == 0) {
-                return Err(error_invalid_data("invalid index padding"));
-            }
-        }
-
-        let expected_crc = reader.read_u32()?;
-
-        // Calculate CRC32 over index data (excluding CRC32 itself).
-        let mut crc = Crc32::new();
-        crc.update(&[0]);
-
-        // Add number of records.
-        let mut temp_buf = [0u8; 10];
-        let size = encode_multibyte_integer(number_of_records, &mut temp_buf)?;
-        crc.update(&temp_buf[..size]);
-
-        // Add all records.
-        for record in &records {
-            let size = encode_multibyte_integer(record.unpadded_size, &mut temp_buf)?;
-            crc.update(&temp_buf[..size]);
-            let size = encode_multibyte_integer(record.uncompressed_size, &mut temp_buf)?;
-            crc.update(&temp_buf[..size]);
-        }
-
-        update_crc_with_padding(&mut crc, padding_needed);
-
-        if expected_crc != crc.finalize() {
-            return Err(error_invalid_data("index CRC32 mismatch"));
-        }
-
-        Ok(Index {
-            number_of_records,
-            records,
-        })
+        on_record(IndexRecord {
+            unpadded_size,
+            uncompressed_size,
+        })?;
     }
+
+    let padding_needed = ((4 - size % 4) % 4) as usize;
+    let mut padding = [0u8; 3];
+    reader.read_exact(&mut padding[..padding_needed])?;
+    if padding[..padding_needed].iter().any(|&byte| byte != 0) {
+        return Err(error_invalid_data("invalid index padding"));
+    }
+    crc.update(&padding[..padding_needed]);
+
+    if reader.read_u32()? != crc.finalize() {
+        return Err(error_invalid_data("index CRC32 mismatch"));
+    }
+
+    Ok(size + padding_needed as u64 + 4)
+}
+
+/// Reads a multibyte integer of the index and adds its bytes to `crc` and `size`.
+fn read_index_integer<R: Read>(
+    reader: &mut R,
+    crc: &mut Crc32,
+    size: &mut u64,
+) -> crate::Result<u64> {
+    let mut bytes = [0u8; 9];
+    for len in 1..=bytes.len() {
+        bytes[len - 1] = reader.read_u8()?;
+        if bytes[len - 1] & 0x80 == 0 {
+            crc.update(&bytes[..len]);
+            *size += len as u64;
+            return parse_multibyte_integer(&bytes[..len]);
+        }
+    }
+
+    Err(error_invalid_data("XZ multibyte integer too long"))
 }
 
 #[cfg(feature = "encoder")]
@@ -906,79 +860,6 @@ fn update_crc_with_padding(crc: &mut Crc32, padding_needed: usize) {
     }
 }
 
-/// Scan the XZ file to collect information about all blocks.
-/// This reads the index at the end of the file to efficiently locate block boundaries.
-#[cfg(feature = "std")]
-fn scan_blocks<R: Read + Seek>(mut reader: R) -> io::Result<(R, Vec<Block>, CheckType)> {
-    let stream_header = StreamHeader::parse(&mut reader)?;
-    let check_type = stream_header.check_type;
-
-    let header_end_pos = reader.stream_position()?;
-
-    let file_size = reader.seek(SeekFrom::End(0))?;
-
-    // Minimum XZ file: 12 byte header + 12 byte footer + 8 byte minimum index.
-    if file_size < 32 {
-        return Err(error_invalid_data(
-            "File too small to contain a valid XZ stream",
-        ));
-    }
-
-    reader.seek(SeekFrom::End(-12))?;
-
-    let stream_footer = StreamFooter::parse(&mut reader)?;
-
-    let header_flags = [0, check_type as u8];
-
-    if stream_footer.stream_flags != header_flags {
-        return Err(error_invalid_data(
-            "stream header and footer flags mismatch",
-        ));
-    }
-
-    // Now read the index using backward size.
-    let index_size = (stream_footer.backward_size + 1) * 4;
-    let index_start_pos = file_size - 12 - index_size as u64;
-
-    reader.seek(SeekFrom::Start(index_start_pos))?;
-
-    // Parse the index.
-    let index_indicator = reader.read_u8()?;
-
-    if index_indicator != 0 {
-        return Err(error_invalid_data("invalid XZ index indicator"));
-    }
-
-    let index = Index::parse(&mut reader)?;
-
-    let mut blocks = Vec::new();
-    let mut block_start_pos = header_end_pos;
-
-    for record in &index.records {
-        blocks.push(Block {
-            start_pos: block_start_pos,
-            unpadded_size: record.unpadded_size,
-            uncompressed_size: record.uncompressed_size,
-        });
-
-        let padding_needed = (4 - (record.unpadded_size % 4)) % 4;
-        let actual_block_size = record.unpadded_size + padding_needed;
-
-        block_start_pos += actual_block_size;
-    }
-
-    if blocks.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "No valid XZ blocks found",
-        ));
-    }
-
-    reader.seek(SeekFrom::Start(0))?;
-
-    Ok((reader, blocks, check_type))
-}
-
 /// Returns the uncompressed size that the stream indexes declare for the XZ
 /// data from the current position of `reader` to its end.
 ///
@@ -1013,36 +894,38 @@ pub fn uncompressed_size<R: Read + Seek>(mut reader: R) -> io::Result<u64> {
             .checked_sub(index_size)
             .ok_or_else(|| error_invalid_data("XZ index size larger than file"))?;
 
+        let blocks_space = index_start
+            .checked_sub(data_start)
+            .and_then(|space| space.checked_sub(STREAM_HEADER_SIZE))
+            .ok_or_else(|| error_invalid_data("XZ index size larger than file"))?;
+
         reader.seek(SeekFrom::Start(index_start))?;
         let mut index_reader = BufReader::new(reader.by_ref().take(index_size));
         if index_reader.read_u8()? != 0 {
             return Err(error_invalid_data("invalid XZ index indicator"));
         }
-        let index = Index::parse(&mut index_reader)?;
-        if !index_reader.fill_buf()?.is_empty() {
+
+        let mut blocks_size = 0u64;
+        let mut stream_size = 0u64;
+        let parsed_size = parse_index(&mut index_reader, |record| {
+            blocks_size = record
+                .unpadded_size
+                .checked_next_multiple_of(4)
+                .and_then(|padded| blocks_size.checked_add(padded))
+                .filter(|&size| size <= blocks_space)
+                .ok_or_else(|| error_invalid_data("XZ blocks larger than file"))?;
+            stream_size = stream_size
+                .checked_add(record.uncompressed_size)
+                .ok_or_else(|| error_invalid_data("XZ uncompressed size overflow"))?;
+            Ok(())
+        })?;
+        if parsed_size != index_size {
             return Err(error_invalid_data(
                 "XZ index size does not match the backward size",
             ));
         }
 
-        let mut blocks_size = 0u64;
-        let mut stream_size = 0u64;
-        for record in &index.records {
-            blocks_size = record
-                .unpadded_size
-                .checked_next_multiple_of(4)
-                .and_then(|padded| blocks_size.checked_add(padded))
-                .ok_or_else(|| error_invalid_data("XZ block sizes overflow"))?;
-            stream_size = stream_size
-                .checked_add(record.uncompressed_size)
-                .ok_or_else(|| error_invalid_data("XZ uncompressed size overflow"))?;
-        }
-
-        let stream_start = index_start
-            .checked_sub(blocks_size)
-            .and_then(|blocks_start| blocks_start.checked_sub(STREAM_HEADER_SIZE))
-            .filter(|&start| start >= data_start)
-            .ok_or_else(|| error_invalid_data("XZ blocks larger than file"))?;
+        let stream_start = index_start - blocks_size - STREAM_HEADER_SIZE;
 
         reader.seek(SeekFrom::Start(stream_start))?;
         let stream_header = StreamHeader::parse(&mut reader)?;
