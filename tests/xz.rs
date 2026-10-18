@@ -396,3 +396,26 @@ fn uncompressed_size_rejects_footer_flags_that_differ_from_the_header() {
     broken.extend_from_slice(&stream_footer(1, CheckType::Crc32));
     assert!(uncompressed_size(&broken).is_err());
 }
+
+fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(f)
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+#[test]
+fn xz_reader_reads_many_empty_streams() {
+    let empty = compress(&[], None);
+    let compressed = empty.repeat(10_000);
+
+    let decoded = on_small_stack(move || {
+        let mut decoded = Vec::new();
+        XzReader::new(compressed.as_slice(), true)
+            .read_to_end(&mut decoded)
+            .map(|_| decoded.len())
+    });
+    assert_eq!(decoded.unwrap(), 0);
+}

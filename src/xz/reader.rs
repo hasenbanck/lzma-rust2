@@ -239,43 +239,42 @@ impl<R: Read> XzReader<R> {
     }
 
     fn prepare_next_block(&mut self) -> Result<bool> {
-        match BlockHeader::parse(&mut self.reader)? {
-            Some(block_header) => {
-                // Check before replacing the reader to preserve access to the input on error.
-                check_memory_limit(&block_header, self.mem_limit_kb)?;
-                let base_reader: FilterReader<R> =
-                    core::mem::replace(&mut self.reader, FilterReader::Dummy);
-
-                self.reader = FilterReader::create_filter_chain(
-                    base_reader.into_inner(),
-                    &block_header.filters,
-                    &block_header.properties,
-                );
-
-                match self.stream_header.as_ref() {
-                    Some(header) => {
-                        self.checksum_calculator = Some(ChecksumCalculator::new(header.check_type));
-                    }
-                    None => {
-                        panic!("stream_header not set");
-                    }
-                }
-
-                self.blocks_processed += 1;
-
-                Ok(true)
-            }
-            None => {
+        loop {
+            let Some(block_header) = BlockHeader::parse(&mut self.reader)? else {
                 // End of blocks reached, index follows.
                 self.parse_index_and_footer()?;
 
                 if self.allow_multiple_streams && self.try_start_next_stream()? {
-                    return self.prepare_next_block();
+                    continue;
                 }
 
                 self.finished = true;
-                Ok(false)
+                return Ok(false);
+            };
+
+            // Check before replacing the reader to preserve access to the input on error.
+            check_memory_limit(&block_header, self.mem_limit_kb)?;
+            let base_reader: FilterReader<R> =
+                core::mem::replace(&mut self.reader, FilterReader::Dummy);
+
+            self.reader = FilterReader::create_filter_chain(
+                base_reader.into_inner(),
+                &block_header.filters,
+                &block_header.properties,
+            );
+
+            match self.stream_header.as_ref() {
+                Some(header) => {
+                    self.checksum_calculator = Some(ChecksumCalculator::new(header.check_type));
+                }
+                None => {
+                    panic!("stream_header not set");
+                }
             }
+
+            self.blocks_processed += 1;
+
+            return Ok(true);
         }
     }
 
