@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Count the bytes a failed `process()` call consumed and produced in `total_in` and `total_out` of `XzStream`, `LzipStream`, `LzmaStream` and `Lzma2Stream`.
+
 ## 0.23.0 - 2026-10-18
 
 ### Added

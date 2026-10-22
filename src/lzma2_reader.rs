@@ -654,7 +654,7 @@ impl Lzma2Stream {
                         ..
                     } = self;
                     match lzma.as_mut() {
-                        Some(lzma) => core.feed(lz, lzma, &[], limits, InputEnd::Caller)?.1,
+                        Some(lzma) => core.feed(lz, lzma, &[], limits, InputEnd::Caller).1?,
                         None => 0,
                     }
                 };
@@ -710,11 +710,12 @@ impl Lzma2Stream {
             let lzma = lzma
                 .as_mut()
                 .ok_or_else(|| error_invalid_input("corrupted input data (LZMA2:1)"))?;
-            core.feed(lz, lzma, available, limits, input_end)?
+            core.feed(lz, lzma, available, limits, input_end)
         };
 
         *in_pos += consumed;
         self.total_in += consumed as u64;
+        let produced = produced?;
 
         if consumed == 0 && produced == 0 && !self.limits.end_reached {
             *stalled = true;

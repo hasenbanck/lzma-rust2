@@ -363,22 +363,32 @@ impl LzipStream {
             .lzma
             .as_mut()
             .ok_or_else(|| error_invalid_data("payload decoder not set"))?;
-        let result = lzma.process(buf, &mut output[*out_pos..], action)?;
+        let before_in = lzma.total_in();
+        let before_out = lzma.total_out();
+        let result = lzma.process(buf, &mut output[*out_pos..], action);
+        let (consumed, produced) = match &result {
+            Ok(result) => (result.bytes_consumed, result.bytes_produced),
+            Err(_) => (
+                (lzma.total_in() - before_in) as usize,
+                (lzma.total_out() - before_out) as usize,
+            ),
+        };
 
         if from_caller {
-            *in_pos += result.bytes_consumed;
-            self.total_in += result.bytes_consumed as u64;
+            *in_pos += consumed;
+            self.total_in += consumed as u64;
         } else {
-            self.pending_pos += result.bytes_consumed;
+            self.pending_pos += consumed;
         }
 
-        if result.bytes_produced > 0 {
-            self.crc
-                .update(&output[*out_pos..*out_pos + result.bytes_produced]);
-            self.data_size += result.bytes_produced as u64;
-            *out_pos += result.bytes_produced;
-            self.total_out += result.bytes_produced as u64;
+        if produced > 0 {
+            self.crc.update(&output[*out_pos..*out_pos + produced]);
+            self.data_size += produced as u64;
+            *out_pos += produced;
+            self.total_out += produced as u64;
         }
+
+        let result = result?;
 
         if result.status == Status::StreamEnd {
             self.finish_payload();

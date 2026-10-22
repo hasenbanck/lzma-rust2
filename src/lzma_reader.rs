@@ -756,8 +756,9 @@ impl LzmaCore {
         &self.carry[..self.carry_len]
     }
 
-    /// Runs one decode pass over `input`, returning `(bytes consumed from
-    /// input, bytes decoded into the dictionary)`.
+    /// Runs one decode pass over `input`, returning the bytes consumed from
+    /// input and either the bytes decoded into the dictionary or why the
+    /// decode failed.
     ///
     /// `input_end` says whether anything follows this slice, and if not, who
     /// said so. The last bytes of the slice are then decoded against zero
@@ -770,7 +771,7 @@ impl LzmaCore {
         input: &[u8],
         limits: &mut Limits,
         input_end: InputEnd,
-    ) -> crate::Result<(usize, usize)> {
+    ) -> (usize, crate::Result<usize>) {
         let input_ends_here = input_end != InputEnd::More;
         // Clamp before anything decides where a symbol may start, so no symbol
         // can reach a byte the budget does not cover. An LZMA2 chunk is
@@ -805,7 +806,10 @@ impl LzmaCore {
             let symbol_limit = filled.saturating_sub(IN_REQUIRED - 1);
             let (pos, decoded) =
                 self.run(lz, lzma, limits, &scratch[..filled], filled, symbol_limit);
-            produced += decoded?;
+            match decoded {
+                Ok(decoded) => produced += decoded,
+                Err(error) => return (pos.saturating_sub(carry_len), Err(error)),
+            }
 
             if pos >= carry_len {
                 // The carry is drained. Un-consume the scratch residue so the
@@ -833,7 +837,10 @@ impl LzmaCore {
                 let symbol_limit = avail - (IN_REQUIRED - 1);
                 let (pos, decoded) =
                     self.run(lz, lzma, limits, &input[in_pos..], avail, symbol_limit);
-                produced += decoded?;
+                match decoded {
+                    Ok(decoded) => produced += decoded,
+                    Err(error) => return (in_pos + pos, Err(error)),
+                }
                 in_pos += pos;
             }
         }
@@ -865,7 +872,7 @@ impl LzmaCore {
                 // The decoder had to read padding to get here, so a symbol runs
                 // past the end of the input. What that means depends on who said
                 // where the end was.
-                return Err(match input_end {
+                let error = match input_end {
                     // A length field in the stream. Everything it declared is
                     // here, and the data inside it does not fit, so the data is
                     // wrong rather than missing.
@@ -875,13 +882,17 @@ impl LzmaCore {
                     // The caller. More bytes would have finished the symbol, so
                     // the stream was cut short.
                     _ => error_eof("truncated LZMA stream"),
-                });
+                };
+                return (in_pos, Err(error));
             }
 
-            produced += result?;
+            match result {
+                Ok(decoded) => produced += decoded,
+                Err(error) => return (in_pos, Err(error)),
+            }
         }
 
-        Ok((in_pos, produced))
+        (in_pos, Ok(produced))
     }
 
     /// Decodes what is left of the carry with padding zeros behind it, so the
@@ -1780,6 +1791,7 @@ impl LzmaStream {
             core,
             limits,
             spec_blocked,
+            total_in,
             ..
         } = self;
 
@@ -1801,7 +1813,10 @@ impl LzmaStream {
         }
 
         let offered = input.len() - *in_pos;
-        let (consumed, mut produced) = core.feed(lz, lzma, &input[*in_pos..], limits, input_end)?;
+        let (consumed, produced) = core.feed(lz, lzma, &input[*in_pos..], limits, input_end);
+        *in_pos += consumed;
+        *total_in += consumed as u64;
+        let mut produced = produced?;
 
         // A caller that has handed over everything it had and got nothing back
         // has run dry, and whether it will ever have more to give is the one
@@ -1833,9 +1848,6 @@ impl LzmaStream {
                 }
             }
         }
-
-        *in_pos += consumed;
-        self.total_in += consumed as u64;
 
         Ok((consumed, produced))
     }
@@ -1907,19 +1919,17 @@ mod tests {
 
         // Four bytes of a nineteen byte payload on offer: only four may be
         // taken, and they are too few to start a symbol from.
-        let (consumed, produced) = core
-            .feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, InputEnd::More)
-            .unwrap();
+        let (consumed, produced) =
+            core.feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, InputEnd::More);
         assert_eq!(consumed, 4);
-        assert_eq!(produced, 0);
+        assert_eq!(produced.unwrap(), 0);
         assert_eq!(limits.compressed_left, Some(0));
 
         // A used up budget stops the core dead, however much input is left.
-        let (consumed, produced) = core
-            .feed(&mut lz, &mut lzma, &RAW[9..], &mut limits, InputEnd::More)
-            .unwrap();
+        let (consumed, produced) =
+            core.feed(&mut lz, &mut lzma, &RAW[9..], &mut limits, InputEnd::More);
         assert_eq!(consumed, 0);
-        assert_eq!(produced, 0);
+        assert_eq!(produced.unwrap(), 0);
     }
 
     #[test]
@@ -1927,11 +1937,10 @@ mod tests {
         let (mut lz, mut lzma, mut core) = parts();
         let mut limits = limits(None);
 
-        let (consumed, produced) = core
-            .feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, InputEnd::Caller)
-            .unwrap();
+        let (consumed, produced) =
+            core.feed(&mut lz, &mut lzma, &RAW[5..], &mut limits, InputEnd::Caller);
         assert_eq!(consumed, RAW.len() - 5);
-        assert_eq!(produced, 13);
+        assert_eq!(produced.unwrap(), 13);
         assert!(limits.end_reached);
 
         let mut out = [0u8; 13];

@@ -735,3 +735,30 @@ fn memory_limit_includes_speculation() {
     );
     assert_eq!(error.kind(), ErrorKind::OutOfMemory);
 }
+
+/// A member cut short, with more data than the dictionary holds. The part that
+/// was handed over before the cut was noticed still has to be counted.
+#[test]
+fn a_cut_member_is_counted_before_the_error() {
+    let data = std::fs::read(PG100).unwrap();
+    let data = &data[..1 << 20];
+    // Preset 0 uses a 256 KiB dictionary, so the output is flushed on the way.
+    let compressed = compress(data, 0, None);
+    let cut = &compressed[..compressed.len() / 2];
+
+    let mut stream = LzipStream::new(true);
+    let mut output = vec![0u8; data.len()];
+    let error = stream
+        .process(cut, &mut output, Action::Finish)
+        .expect_err("the cut member was accepted");
+    assert_eq!(error.kind(), ErrorKind::UnexpectedEof, "{error}");
+
+    assert_eq!(stream.total_in(), cut.len() as u64, "total_in");
+    let produced = stream.total_out() as usize;
+    assert!(produced > 0, "the dictionary was never flushed");
+    assert!(output[..produced] == data[..produced], "wrong output");
+    assert!(
+        output[produced..].iter().all(|&byte| byte == 0),
+        "output was written past total_out {produced}"
+    );
+}
