@@ -781,17 +781,28 @@ impl XzStream {
             return Ok(None);
         }
 
-        let result = lzma2.process(&input[*in_pos..], &mut output[*out_pos..], action)?;
-        *in_pos += result.bytes_consumed;
-        self.total_in += result.bytes_consumed as u64;
+        let before_in = lzma2.total_in();
+        let before_out = lzma2.total_out();
+        let result = lzma2.process(&input[*in_pos..], &mut output[*out_pos..], action);
+        let (consumed, produced) = match &result {
+            Ok(result) => (result.bytes_consumed, result.bytes_produced),
+            Err(_) => (
+                (lzma2.total_in() - before_in) as usize,
+                (lzma2.total_out() - before_out) as usize,
+            ),
+        };
+        *in_pos += consumed;
+        self.total_in += consumed as u64;
 
-        if result.bytes_produced > 0 {
+        if produced > 0 {
             if let Some(cs) = self.checksum.as_mut() {
-                cs.update(&output[*out_pos..*out_pos + result.bytes_produced]);
+                cs.update(&output[*out_pos..*out_pos + produced]);
             }
-            *out_pos += result.bytes_produced;
-            self.total_out += result.bytes_produced as u64;
+            *out_pos += produced;
+            self.total_out += produced as u64;
         }
+
+        let result = result?;
 
         if result.status == Status::StreamEnd {
             self.finish_lzma2_block()?;
@@ -843,13 +854,19 @@ impl XzStream {
             return Ok(1);
         }
 
-        let result = self
+        let lzma2 = self
             .lzma2
             .as_mut()
-            .ok_or_else(|| error_invalid_data("LZMA2 decoder not initialized"))?
-            .process(&input[*in_pos..], &mut [], action)?;
-        *in_pos += result.bytes_consumed;
-        self.total_in += result.bytes_consumed as u64;
+            .ok_or_else(|| error_invalid_data("LZMA2 decoder not initialized"))?;
+        let before_in = lzma2.total_in();
+        let result = lzma2.process(&input[*in_pos..], &mut [], action);
+        let consumed = match &result {
+            Ok(result) => result.bytes_consumed,
+            Err(_) => (lzma2.total_in() - before_in) as usize,
+        };
+        *in_pos += consumed;
+        self.total_in += consumed as u64;
+        let result = result?;
 
         if result.status == Status::StreamEnd {
             return self.try_complete_filtered_block();

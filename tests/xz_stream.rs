@@ -867,3 +867,58 @@ fn a_broken_stream_header_checksum_comes_before_the_reserved_bits() {
     assert_eq!(stream_error(&stream).kind(), ErrorKind::InvalidData);
     assert_eq!(reader_error(&stream).kind(), ErrorKind::InvalidData);
 }
+
+/// A single `Finish` call over all of `input`, which has to fail with a stream
+/// cut short. Returns the decoder and the output buffer it wrote into.
+fn finish_cut_stream(input: &[u8], out_size: usize) -> (XzStream, Vec<u8>) {
+    let mut decoder = XzStream::new(false);
+    let mut output = vec![0u8; out_size];
+    let error = decoder
+        .process(input, &mut output, Action::Finish)
+        .expect_err("the cut stream was accepted");
+    assert_eq!(error.kind(), ErrorKind::UnexpectedEof, "{error}");
+    (decoder, output)
+}
+
+/// After a failed call the totals still have to cover what that call did: the
+/// input is used up, and `total_out` is exactly the prefix of `data` that was
+/// written to `output`, with nothing written past it.
+fn assert_totals_cover_the_cut(decoder: &XzStream, input: &[u8], output: &[u8], data: &[u8]) {
+    assert_eq!(decoder.total_in(), input.len() as u64, "total_in");
+    let produced = decoder.total_out() as usize;
+    assert!(output[..produced] == data[..produced], "wrong output");
+    assert!(
+        output[produced..].iter().all(|&byte| byte == 0),
+        "output was written past total_out {produced}"
+    );
+}
+
+/// A stored chunk cut short. The bytes before the cut are copied to the output
+/// before the end of the input is noticed.
+#[test]
+fn a_cut_stored_chunk_is_counted_before_the_error() {
+    let data = b"0123456789abcdefghijklmnopqrstuv";
+    let stream = encode_xz(data, 1);
+    // Stream header and block header are 12 + 12 bytes. A stored chunk with a
+    // dictionary reset starts with 0x01 and two size bytes.
+    assert_eq!(stream[24], 0x01, "expected a stored LZMA2 chunk");
+    let cut = &stream[..27 + 30];
+
+    let (decoder, output) = finish_cut_stream(cut, 64);
+    assert_totals_cover_the_cut(&decoder, cut, &output, data);
+    assert_eq!(decoder.total_out(), 30);
+}
+
+/// A compressed chunk cut short, behind chunks that arrived whole. Their output
+/// was handed over before the cut was noticed.
+#[test]
+fn a_cut_compressed_chunk_is_counted_before_the_error() {
+    let data = std::fs::read(PG100).unwrap();
+    let data = &data[..1 << 20];
+    let stream = encode_xz(data, 1);
+    let cut = &stream[..stream.len() / 2];
+
+    let (decoder, output) = finish_cut_stream(cut, data.len());
+    assert_totals_cover_the_cut(&decoder, cut, &output, data);
+    assert!(decoder.total_out() > 0, "no chunk arrived whole");
+}
