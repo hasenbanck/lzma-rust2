@@ -1,7 +1,7 @@
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
 };
 
 use lzma_rust2::{
@@ -1224,4 +1224,32 @@ fn set_filters_accepts_an_empty_chain() {
     let mut stream = Lzma2Stream::new(4096);
     stream.set_filters(&[]).unwrap();
     assert!(decode(stream, HELLO, ENTIRE, 4096).unwrap() == b"Hello, world!");
+}
+
+#[test]
+fn a_cut_stream_is_counted_before_the_error() {
+    let data = std::fs::read(PG100).unwrap();
+    let data = &data[..1 << 20];
+    let opts = Lzma2Options::with_preset(1);
+    let dict_size = opts.lzma_options.dict_size;
+    let mut writer = Lzma2Writer::new(Vec::new(), opts);
+    writer.write_all(data).unwrap();
+    let compressed = writer.finish().unwrap();
+    let cut = &compressed[..compressed.len() / 2];
+
+    let mut stream = Lzma2Stream::new(dict_size);
+    let mut output = vec![0u8; data.len()];
+    let error = stream
+        .process(cut, &mut output, Action::Finish)
+        .expect_err("the cut stream was accepted");
+    assert_eq!(error.kind(), ErrorKind::UnexpectedEof, "{error}");
+
+    assert_eq!(stream.total_in(), cut.len() as u64, "total_in");
+    let produced = stream.total_out() as usize;
+    assert!(produced > 0, "no chunk arrived whole");
+    assert!(output[..produced] == data[..produced], "wrong output");
+    assert!(
+        output[produced..].iter().all(|&byte| byte == 0),
+        "output was written past total_out {produced}"
+    );
 }
