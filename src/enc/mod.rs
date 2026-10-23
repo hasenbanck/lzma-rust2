@@ -5,6 +5,7 @@ mod lzma2_writer;
 #[cfg(feature = "std")]
 mod lzma2_writer_mt;
 mod lzma_writer;
+mod microlzma;
 pub(crate) mod range_enc;
 
 pub use encoder::EncodeMode;
@@ -12,5 +13,6 @@ pub use lzma_writer::*;
 pub use lzma2_writer::*;
 #[cfg(feature = "std")]
 pub use lzma2_writer_mt::*;
+pub use microlzma::MicroLzmaEncoder;
 
 use super::*;

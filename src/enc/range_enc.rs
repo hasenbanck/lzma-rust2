@@ -18,6 +18,15 @@ static PRICES: &[u8; 128] = &[
     0x2, 0x2, 0x2, 0x1, 0x1, 0x1, 0x1, 0x1,
 ];
 
+#[derive(Clone, Copy)]
+pub(crate) struct RangeCheckpoint {
+    low: u64,
+    range: u32,
+    cache_size: u64,
+    cache: u8,
+    pos: usize,
+}
+
 pub(crate) struct RangeEncoder<W> {
     low: u64,
     range: u32,
@@ -221,6 +230,30 @@ impl RangeEncoder<()> {
     }
 }
 
+impl RangeEncoder<Vec<u8>> {
+    pub(crate) fn checkpoint(&self) -> RangeCheckpoint {
+        RangeCheckpoint {
+            low: self.low,
+            range: self.range,
+            cache_size: self.cache_size,
+            cache: self.cache,
+            pos: self.inner.len(),
+        }
+    }
+
+    pub(crate) fn restore(&mut self, state: RangeCheckpoint) {
+        self.low = state.low;
+        self.range = state.range;
+        self.cache_size = state.cache_size;
+        self.cache = state.cache;
+        self.inner.truncate(state.pos);
+    }
+
+    pub(crate) fn get_pending_size(&self) -> u64 {
+        self.inner.len() as u64 + self.cache_size + 4
+    }
+}
+
 impl RangeEncoder<RangeEncoderBuffer> {
     pub(crate) fn write_to<W: Write>(&self, out: &mut W) -> crate::Result<()> {
         self.inner.write_to(out)
@@ -286,6 +319,24 @@ impl Write for RangeEncoderBuffer {
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checkpoint_preserves_wide_cache_and_buffer() {
+        let mut encoder = RangeEncoder::new(vec![1, 2, 3]);
+        encoder.cache_size = u64::from(u32::MAX) + 17;
+        let state = encoder.checkpoint();
+        encoder.inner.push(4);
+        encoder.low = 9;
+        encoder.range = 1;
+        encoder.cache_size = 1;
+        encoder.cache = 5;
+        encoder.restore(state);
+        assert_eq!(encoder.inner, [1, 2, 3]);
+        assert_eq!(encoder.low, state.low);
+        assert_eq!(encoder.range, state.range);
+        assert_eq!(encoder.cache, state.cache);
+        assert_eq!(encoder.get_pending_size(), u64::from(u32::MAX) + 24);
+    }
 
     #[test]
     fn deferred_bytes_can_exceed_u32() {

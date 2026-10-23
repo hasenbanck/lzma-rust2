@@ -19,6 +19,15 @@ pub struct Hash234 {
 }
 
 impl Hash234 {
+    pub(crate) fn reset(&mut self) {
+        self.hash2_table.fill(0);
+        self.hash3_table.fill(0);
+        self.hash4_table.fill(0);
+        self.hash2_value = 0;
+        self.hash3_value = 0;
+        self.hash4_value = 0;
+    }
+
     fn get_hash4_size(dict_size: u32) -> u32 {
         let mut h = dict_size - 1;
         h |= h >> 1;
