@@ -17,6 +17,13 @@ pub(crate) struct Hc4 {
 }
 
 impl Hc4 {
+    pub(crate) fn reset(&mut self) {
+        self.hash.reset();
+        self.chain.fill(0);
+        self.cyclic_pos = -1;
+        self.lz_pos = self.cyclic_size;
+    }
+
     pub(crate) fn get_mem_usage(dict_size: u32) -> u32 {
         Hash234::get_mem_usage(dict_size) + dict_size / (1024 / 4) + 10
     }

@@ -20,6 +20,13 @@ fn sh_left(i: i32) -> i32 {
 }
 
 impl Bt4 {
+    pub(crate) fn reset(&mut self) {
+        self.hash.reset();
+        self.tree.fill(0);
+        self.cyclic_pos = -1;
+        self.lz_pos = self.cyclic_size;
+    }
+
     pub(crate) fn new(dict_size: u32, nice_len: u32, depth_limit: i32) -> Self {
         let cyclic_size = dict_size as i32 + 1;
 
