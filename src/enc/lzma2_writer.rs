@@ -365,7 +365,7 @@ impl<W: Write> Lzma2Writer<W> {
         if compressed_size + 2 < uncompressed_size {
             self.write_lzma(uncompressed_size, compressed_size)?;
         } else {
-            self.lzma.reset_state(&mut self.mode);
+            self.lzma.reset(&mut self.mode);
             uncompressed_size = self.lzma.data.uncompressed_size;
             debug_assert!(uncompressed_size > 0);
             self.write_uncompressed(uncompressed_size)?;
