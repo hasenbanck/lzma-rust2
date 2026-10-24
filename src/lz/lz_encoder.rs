@@ -186,6 +186,19 @@ impl LzEncoder {
         }
     }
 
+    pub(crate) fn reset(&mut self) {
+        self.data.read_pos = -1;
+        self.data.read_limit = -1;
+        self.data.finishing = false;
+        self.data.write_pos = 0;
+        self.data.pending_size = 0;
+        self.matches.count = 0;
+        match &mut self.match_finder {
+            MatchFinders::Hc4(finder) => finder.reset(),
+            MatchFinders::Bt4(finder) => finder.reset(),
+        }
+    }
+
     pub(crate) fn normalize(positions: &mut [i32], norm_offset: i32) {
         #[cfg(all(feature = "std", feature = "optimization", target_arch = "x86_64"))]
         {
@@ -458,7 +471,7 @@ impl Deref for LzEncoder {
     }
 }
 
-fn get_buf_size(
+pub(crate) fn get_buf_size(
     dict_size: u32,
     extra_size_before: u32,
     extra_size_after: u32,

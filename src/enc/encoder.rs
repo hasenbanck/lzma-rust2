@@ -590,6 +590,46 @@ impl LzmaEncoder {
 }
 
 impl LzmaEncoder {
+    pub(crate) fn reset_stream(&mut self, mode: &mut dyn LzmaEncoderTrait) {
+        self.lz.reset();
+        self.data.read_ahead = -1;
+        self.reset(mode);
+        self.data.uncompressed_size = 0;
+        self.data.back = 0;
+    }
+
+    pub(crate) fn encode_for_limit(
+        &mut self,
+        rc: &mut RangeEncoder<Vec<u8>>,
+        mode: &mut dyn LzmaEncoderTrait,
+        limit: usize,
+    ) -> crate::Result<bool> {
+        if !self.lz.is_started() {
+            let state = rc.checkpoint();
+            if !self.encode_init(rc)? {
+                return Ok(false);
+            }
+            if rc.get_pending_size() > limit as u64 {
+                rc.restore(state);
+                self.data.uncompressed_size = 0;
+                return Ok(true);
+            }
+        }
+        loop {
+            let state = rc.checkpoint();
+            let consumed = self.data.uncompressed_size;
+            if !self.encode_symbol(rc, mode)? {
+                return Ok(false);
+            }
+            if rc.get_pending_size() > limit as u64 {
+                // Rollback is terminal: reset all probability and LZ state before reuse.
+                rc.restore(state);
+                self.data.uncompressed_size = consumed;
+                return Ok(true);
+            }
+        }
+    }
+
     pub fn encode_for_lzma2(
         &mut self,
         rc: &mut RangeEncoder<RangeEncoderBuffer>,
