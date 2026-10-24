@@ -203,12 +203,12 @@ impl LzmaEncoder {
                 uncompressed_size: 0,
             },
         };
-        e.reset_state(&mut mode);
+        e.reset(&mut mode);
 
         (e, mode)
     }
 
-    pub(crate) fn reset_state(&mut self, mode: &mut dyn LzmaEncoderTrait) {
+    pub(crate) fn reset(&mut self, mode: &mut dyn LzmaEncoderTrait) {
         self.coder.reset();
         self.literal_encoder.reset();
         self.match_len_encoder.reset();
@@ -590,10 +590,10 @@ impl LzmaEncoder {
 }
 
 impl LzmaEncoder {
-    pub(crate) fn reset(&mut self, mode: &mut dyn LzmaEncoderTrait) {
+    pub(crate) fn reset_stream(&mut self, mode: &mut dyn LzmaEncoderTrait) {
         self.lz.reset();
         self.data.read_ahead = -1;
-        self.reset_state(mode);
+        self.reset(mode);
         self.data.uncompressed_size = 0;
         self.data.back = 0;
     }

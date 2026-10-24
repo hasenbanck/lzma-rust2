@@ -187,15 +187,12 @@ impl LzEncoder {
     }
 
     pub(crate) fn reset(&mut self) {
-        self.data.buf.fill(0);
         self.data.read_pos = -1;
         self.data.read_limit = -1;
         self.data.finishing = false;
         self.data.write_pos = 0;
         self.data.pending_size = 0;
         self.matches.count = 0;
-        self.matches.len.fill(0);
-        self.matches.dist.fill(0);
         match &mut self.match_finder {
             MatchFinders::Hc4(finder) => finder.reset(),
             MatchFinders::Bt4(finder) => finder.reset(),

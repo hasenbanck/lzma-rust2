@@ -18,10 +18,14 @@ pub(crate) struct Hc4 {
 
 impl Hc4 {
     pub(crate) fn reset(&mut self) {
-        self.hash.reset();
-        self.chain.fill(0);
-        self.cyclic_pos = -1;
-        self.lz_pos = self.cyclic_size;
+        // Every stored position falls out of the dictionary.
+        if self.lz_pos < 0x7FFFFFFF - self.cyclic_size {
+            self.lz_pos += self.cyclic_size;
+        } else {
+            self.hash.reset();
+            self.chain.fill(0);
+            self.lz_pos = self.cyclic_size;
+        }
     }
 
     pub(crate) fn get_mem_usage(dict_size: u32) -> u32 {

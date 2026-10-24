@@ -82,19 +82,9 @@ impl MicroLzmaEncoder {
         })
     }
 
-    /// Encodes the complete input, returning (consumed, written).
-    ///
-    /// Returns an error without modifying `output` if the complete stream does not fit.
-    pub fn compress_all(
-        &mut self,
-        input: &[u8],
-        output: &mut [u8],
-    ) -> crate::Result<(usize, usize)> {
-        self.encode::<false>(input, output)
-    }
-
     /// Encodes an independently decodable prefix, returning (consumed, written).
     ///
+    /// If the complete stream fits, the entire input is consumed.
     /// `output` must contain at least five bytes for range-coder termination.
     /// Zero input consumption is possible when only an empty stream fits.
     pub fn compress_prefix(
@@ -102,18 +92,10 @@ impl MicroLzmaEncoder {
         input: &[u8],
         output: &mut [u8],
     ) -> crate::Result<(usize, usize)> {
-        self.encode::<true>(input, output)
-    }
-
-    fn encode<const BOUNDED: bool>(
-        &mut self,
-        input: &[u8],
-        output: &mut [u8],
-    ) -> crate::Result<(usize, usize)> {
         if output.len() < 5 {
             return Err(error_invalid_input("output needs at least five bytes"));
         }
-        self.lzma.reset(&mut self.mode);
+        self.lzma.reset_stream(&mut self.mode);
         self.rc.reset();
         self.rc.inner_mut().clear();
         let mut offset = 0usize;
@@ -126,13 +108,9 @@ impl MicroLzmaEncoder {
             if offset == input.len() {
                 self.lzma.lz.set_finishing();
             }
-            let stopped = if BOUNDED {
-                self.lzma
-                    .encode_for_limit(&mut self.rc, &mut self.mode, output.len())?
-            } else {
-                self.lzma.encode_for_lzma1(&mut self.rc, &mut self.mode)?;
-                false
-            };
+            let stopped = self
+                .lzma
+                .encode_for_limit(&mut self.rc, &mut self.mode, output.len())?;
             consumed += self.lzma.data.uncompressed_size as usize;
             self.lzma.reset_uncompressed_size();
             if stopped || offset == input.len() {
@@ -141,9 +119,7 @@ impl MicroLzmaEncoder {
         }
         self.rc.finish()?;
         let encoded = self.rc.inner();
-        let target = output
-            .get_mut(..encoded.len())
-            .ok_or_else(|| error_invalid_input("output too small for complete stream"))?;
+        let target = &mut output[..encoded.len()];
         target.copy_from_slice(encoded);
         target[0] = !self.props;
         Ok((consumed, target.len()))
@@ -248,6 +224,39 @@ mod tests {
     }
 
     #[test]
+    fn reset_wraps_match_finder_positions() {
+        let mut seed = 5u32;
+        let half: Vec<_> = (0..3000)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                seed as u8
+            })
+            .collect();
+        let input = [half.as_slice(), half.as_slice()].concat();
+        for mf in [MfType::Hc4, MfType::Bt4] {
+            let mut options = LzmaOptions::with_preset(1);
+            options.dict_size = 8 * 1024 * 1024;
+            options.mf = mf;
+            let mut encoder = MicroLzmaEncoder::new(&options).unwrap();
+            let mut expected = vec![0; 8192];
+            let (used, written) = encoder.compress_prefix(&input, &mut expected).unwrap();
+            assert_eq!(used, input.len());
+            check_stream(&expected[..written], &input, options.dict_size);
+            let mut output = vec![0; 8192];
+            // 300 resets advance the match finder positions past i32::MAX.
+            for _ in 0..300 {
+                assert_eq!(
+                    encoder.compress_prefix(&input, &mut output).unwrap(),
+                    (used, written)
+                );
+                assert_eq!(output[..written], expected[..written]);
+            }
+        }
+    }
+
+    #[test]
     fn input_can_exceed_dictionary_and_window() {
         let mut seed = 11u32;
         let input: Vec<_> = (0..(1 << 20))
@@ -270,7 +279,7 @@ mod tests {
                 expected[0] = !options.get_props();
 
                 let mut full = vec![0; input.len() * 2];
-                let (used, written) = encoder.compress_all(&input, &mut full).unwrap();
+                let (used, written) = encoder.compress_prefix(&input, &mut full).unwrap();
                 assert_eq!(used, input.len());
                 assert_eq!(&full[..written], expected);
                 check_stream(&full[..written], &input, dict_size);
@@ -323,9 +332,8 @@ mod tests {
                     .is_err()
             );
         }
-        assert!(encoder.compress_all(b"input", &mut output[..5]).is_err());
         assert_eq!(output, [0xA5; 64]);
-        let (used, written) = encoder.compress_all(b"input", &mut output).unwrap();
+        let (used, written) = encoder.compress_prefix(b"input", &mut output).unwrap();
         assert_eq!(used, 5);
         check_stream(&output[..written], b"input", options.dict_size);
     }
