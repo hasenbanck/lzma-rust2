@@ -347,6 +347,9 @@ impl<R: Read> XzReader<R> {
             let read = self.reader.read(&mut byte_buffer)?;
             if read == 0 {
                 // EOF reached, no more streams.
+                if padding_bytes % 4 != 0 {
+                    return Err(error_invalid_data("stream padding size not multiple of 4"));
+                }
                 return Ok(false);
             }
 
