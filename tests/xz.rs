@@ -407,6 +407,26 @@ fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
 }
 
 #[test]
+fn xz_reader_rejects_unaligned_trailing_padding() {
+    let compressed = compress(b"some data", None);
+
+    let mut aligned = compressed.clone();
+    aligned.extend_from_slice(&[0; 4]);
+    let mut decoded = Vec::new();
+    XzReader::new(aligned.as_slice(), true)
+        .read_to_end(&mut decoded)
+        .unwrap();
+    assert_eq!(decoded, b"some data");
+
+    for padding in 1..4 {
+        let mut unaligned = compressed.clone();
+        unaligned.extend_from_slice(&vec![0; padding]);
+        let result = XzReader::new(unaligned.as_slice(), true).read_to_end(&mut Vec::new());
+        assert!(result.is_err(), "{padding} bytes of padding");
+    }
+}
+
+#[test]
 fn xz_reader_reads_many_empty_streams() {
     let empty = compress(&[], None);
     let compressed = empty.repeat(10_000);
