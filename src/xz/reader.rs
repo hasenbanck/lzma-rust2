@@ -339,7 +339,7 @@ impl<R: Read> XzReader<R> {
     /// Look for the start of the next stream by reading bytes one at a time
     /// and checking for the XZ magic sequence, allowing for stream padding.
     fn try_start_next_stream(&mut self) -> Result<bool> {
-        let mut padding_bytes = 0;
+        let mut padding_bytes = 0u64;
         let mut buffer = [0u8; 6];
 
         loop {
