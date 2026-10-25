@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Add `MicroLzmaEncoder` to encode independent MicroLZMA streams with reused allocations, including
+  `compress_prefix` to encode the longest prefix that fits a given output buffer.
+
 ### Fixed
 
-- Count the bytes a failed `process()` call consumed and produced in `total_in` and `total_out` of `XzStream`, `LzipStream`, `LzmaStream` and `Lzma2Stream`.
+- Count the bytes a failed `process()` call consumed and produced in `total_in` and `total_out` of `XzStream`,
+  `LzipStream`, `LzmaStream` and `Lzma2Stream`.
+- Reject unaligned stream padding at the end of the input in `XzReader`, like `XzStream` does.
+- Count XZ stream padding bytes in an u64 so the counter cannot overflow
 
 ## 0.23.0 - 2026-10-18
 
