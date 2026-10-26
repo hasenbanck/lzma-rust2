@@ -342,6 +342,31 @@ fn a_gap_between_the_blocks_and_the_index_is_rejected() {
 }
 
 #[test]
+fn trailing_stream_padding_is_accepted() {
+    let data = b"some data".repeat(100);
+    let compressed = compress_mt(&data);
+
+    for padding in [4, 8, 4096, 5000] {
+        let mut padded = compressed.clone();
+        padded.extend_from_slice(&vec![0; padding]);
+        assert!(
+            decode_mt(&padded).unwrap() == data,
+            "{padding} bytes of padding"
+        );
+    }
+
+    for padding in [1, 2, 3, 5] {
+        let mut padded = compressed.clone();
+        padded.extend_from_slice(&vec![0; padding]);
+        assert_eq!(
+            decode_mt(&padded).err().map(|error| error.kind()),
+            Some(std::io::ErrorKind::InvalidData),
+            "{padding} bytes of padding"
+        );
+    }
+}
+
+#[test]
 fn concatenated_streams_are_not_truncated() {
     let first = vec![b'A'; 100_000];
     let second = vec![b'B'; 100_000];

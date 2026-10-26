@@ -121,14 +121,21 @@ impl<R: Read + Seek> XzReaderMt<R> {
 
         let file_size = reader.seek(SeekFrom::End(0))?;
 
+        // The stream can be followed by Stream Padding: null bytes in multiples of four.
+        let padding = trailing_zero_bytes(&mut reader, file_size)?;
+        if padding % 4 != 0 {
+            return Err(error_invalid_data("stream padding size not multiple of 4"));
+        }
+        let stream_end = file_size - padding;
+
         // Minimum XZ file: 12 byte header + 12 byte footer + 8 byte minimum index.
-        if file_size < 32 {
+        if stream_end < 32 {
             return Err(error_invalid_data(
                 "File too small to contain a valid XZ stream",
             ));
         }
 
-        reader.seek(SeekFrom::End(-12))?;
+        reader.seek(SeekFrom::Start(stream_end - 12))?;
 
         let stream_footer = StreamFooter::parse(&mut reader)?;
 
@@ -140,7 +147,7 @@ impl<R: Read + Seek> XzReaderMt<R> {
             ));
         }
 
-        let (index_start_pos, _) = index_location(file_size, stream_footer.backward_size)?;
+        let (index_start_pos, _) = index_location(stream_end, stream_footer.backward_size)?;
 
         reader.seek(SeekFrom::Start(index_start_pos))?;
 
@@ -409,6 +416,23 @@ impl<R: Read + Seek> XzReaderMt<R> {
             }
         }
     }
+}
+
+/// Counts the null bytes at the end of the first `file_size` bytes of `reader`.
+fn trailing_zero_bytes<R: Read + Seek>(reader: &mut R, file_size: u64) -> io::Result<u64> {
+    let mut buffer = [0u8; 4096];
+    let mut end = file_size;
+    while end > 0 {
+        let len = end.min(buffer.len() as u64) as usize;
+        let start = end - len as u64;
+        reader.seek(SeekFrom::Start(start))?;
+        reader.read_exact(&mut buffer[..len])?;
+        if let Some(last) = buffer[..len].iter().rposition(|&byte| byte != 0) {
+            return Ok(file_size - (start + last as u64 + 1));
+        }
+        end = start;
+    }
+    Ok(file_size)
 }
 
 fn index_location(file_size: u64, backward_size: u32) -> io::Result<(u64, u64)> {
