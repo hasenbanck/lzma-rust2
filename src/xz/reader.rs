@@ -285,14 +285,9 @@ impl<R: Read> XzReader<R> {
         };
 
         let mut padding_buf = [0u8; 3];
+        self.reader.read_exact(&mut padding_buf[..padding_needed])?;
 
-        let bytes_read = self.reader.read(&mut padding_buf[..padding_needed])?;
-
-        if bytes_read != padding_needed {
-            return Err(error_invalid_data("incomplete XZ block padding"));
-        }
-
-        if !padding_buf[..bytes_read].iter().all(|&byte| byte == 0) {
+        if !padding_buf[..padding_needed].iter().all(|&byte| byte == 0) {
             return Err(error_invalid_data("invalid XZ block padding"));
         }
 

@@ -439,3 +439,56 @@ fn xz_reader_reads_many_empty_streams() {
     });
     assert_eq!(decoded.unwrap(), 0);
 }
+
+/// Returns at most one byte per call to `read`.
+struct OneByteReader<'a>(&'a [u8]);
+
+impl Read for OneByteReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let len = buf.len().min(self.0.len()).min(1);
+        buf[..len].copy_from_slice(&self.0[..len]);
+        self.0 = &self.0[len..];
+        Ok(len)
+    }
+}
+
+/// Each of these inputs is stored in a single uncompressed LZMA2 chunk of
+/// `len + 4` bytes, which needs 3, 2 and 1 bytes of block padding.
+#[test]
+fn xz_reader_reads_block_padding_in_short_reads() {
+    for len in 13..16 {
+        let data: Vec<u8> = (0..len as u8).map(|i| i.wrapping_mul(37)).collect();
+        for check_type in [
+            CheckType::None,
+            CheckType::Crc32,
+            CheckType::Crc64,
+            CheckType::Sha256,
+        ] {
+            let mut option = XzOptions::with_preset(1);
+            option.set_check_sum_type(check_type);
+            let mut writer = XzWriter::new(Vec::new(), option).unwrap();
+            writer.write_all(&data).unwrap();
+            let compressed = writer.finish().unwrap();
+            assert_eq!(compressed[24], 0x01, "expected a stored LZMA2 chunk");
+
+            let mut decoded = Vec::new();
+            XzReader::new(OneByteReader(&compressed), false)
+                .read_to_end(&mut decoded)
+                .unwrap();
+            assert_eq!(decoded, data);
+        }
+    }
+}
+
+#[test]
+fn xz_reader_reports_cut_block_padding_as_end_of_input() {
+    let data: Vec<u8> = (0..13u8).map(|i| i.wrapping_mul(37)).collect();
+    let compressed = compress(&data, None);
+    assert_eq!(compressed[24], 0x01, "expected a stored LZMA2 chunk");
+
+    let cut = &compressed[..42];
+    let error = XzReader::new(cut, false)
+        .read_to_end(&mut Vec::new())
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+}
