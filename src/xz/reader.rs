@@ -461,12 +461,13 @@ enum XzStreamState {
     BlockHeaderSize,
     BlockHeaderBody { header_size: usize },
     Lzma2Data,
-    BlockPadding,
+    BlockPadding { remaining: usize },
     BlockChecksum { remaining: usize },
     IndexCount,
     IndexRecordUnpadded { remaining: u64 },
     IndexRecordUncompressed { remaining: u64 },
-    IndexPaddingCrc,
+    IndexPadding { remaining: usize },
+    IndexCrc,
     StreamFooter,
     InterStreamPadding,
     Finished,
@@ -993,9 +994,11 @@ impl XzStream {
 
         let pad_needed = ((4 - (self.block_compressed_size % 4)) % 4) as usize;
         if pad_needed > 0 {
-            self.state = XzStreamState::BlockPadding;
+            self.state = XzStreamState::BlockPadding {
+                remaining: pad_needed,
+            };
             self.accum.clear();
-            self.accum_needed = pad_needed;
+            self.accum_needed = 1;
         } else {
             let check_size = self.check_type.map(|c| c.checksum_size()).unwrap_or(0) as usize;
             if check_size > 0 {
@@ -1030,7 +1033,7 @@ impl XzStream {
             XzStreamState::BlockHeaderBody { header_size } => {
                 self.process_block_header_body(header_size)
             }
-            XzStreamState::BlockPadding => self.process_block_padding(),
+            XzStreamState::BlockPadding { remaining } => self.process_block_padding(remaining),
             XzStreamState::BlockChecksum { remaining } => self.process_block_checksum(remaining),
             XzStreamState::IndexCount => self.process_index_count(),
             XzStreamState::IndexRecordUnpadded { remaining } => {
@@ -1039,7 +1042,8 @@ impl XzStream {
             XzStreamState::IndexRecordUncompressed { remaining } => {
                 self.process_index_record_uncompressed(remaining)
             }
-            XzStreamState::IndexPaddingCrc => self.process_index_padding_crc(),
+            XzStreamState::IndexPadding { remaining } => self.process_index_padding(remaining),
+            XzStreamState::IndexCrc => self.process_index_crc(),
             XzStreamState::StreamFooter => self.process_stream_footer(),
             XzStreamState::InterStreamPadding => self.process_inter_stream_padding(),
             _ => Ok(()),
@@ -1160,11 +1164,17 @@ impl XzStream {
         Ok(())
     }
 
-    fn process_block_padding(&mut self) -> Result<()> {
-        for &b in self.accum.iter() {
-            if b != 0 {
-                return Err(error_invalid_data("non-zero block padding"));
-            }
+    fn process_block_padding(&mut self, remaining: usize) -> Result<()> {
+        if self.accum[0] != 0 {
+            return Err(error_invalid_data("non-zero block padding"));
+        }
+
+        self.accum.clear();
+        let remaining = remaining - 1;
+        if remaining > 0 {
+            self.state = XzStreamState::BlockPadding { remaining };
+            self.accum_needed = 1;
+            return Ok(());
         }
 
         let check_size = self.check_type.map(|c| c.checksum_size()).unwrap_or(0) as usize;
@@ -1172,12 +1182,10 @@ impl XzStream {
             self.state = XzStreamState::BlockChecksum {
                 remaining: check_size,
             };
-            self.accum.clear();
             self.accum_needed = check_size;
         } else {
             self.push_index_record();
             self.state = XzStreamState::BlockHeaderSize;
-            self.accum.clear();
             self.accum_needed = 1;
         }
         Ok(())
@@ -1223,9 +1231,7 @@ impl XzStream {
             };
             self.accum_needed = 1;
         } else {
-            self.state = XzStreamState::IndexPaddingCrc;
-            let pad_needed = (4 - ((1 + self.index_size) % 4)) % 4;
-            self.accum_needed = pad_needed + 4;
+            self.start_index_padding();
         }
         Ok(())
     }
@@ -1272,34 +1278,45 @@ impl XzStream {
             self.state = XzStreamState::IndexRecordUnpadded { remaining };
             self.accum_needed = 1;
         } else {
-            self.state = XzStreamState::IndexPaddingCrc;
-            let pad_needed = (4 - ((1 + self.index_size) % 4)) % 4;
-            self.accum_needed = pad_needed + 4;
+            self.start_index_padding();
         }
         Ok(())
     }
 
-    fn process_index_padding_crc(&mut self) -> Result<()> {
+    fn start_index_padding(&mut self) {
         let pad_needed = (4 - ((1 + self.index_size) % 4)) % 4;
-        let total_needed = pad_needed + 4;
-        if self.accum.len() < total_needed {
-            self.accum_needed = total_needed;
-            return Ok(());
+        if pad_needed > 0 {
+            self.state = XzStreamState::IndexPadding {
+                remaining: pad_needed,
+            };
+            self.accum_needed = 1;
+        } else {
+            self.state = XzStreamState::IndexCrc;
+            self.accum_needed = 4;
         }
+    }
 
-        for &b in &self.accum[..pad_needed] {
-            if b != 0 {
-                return Err(error_invalid_data("non-zero index padding"));
-            }
+    fn process_index_padding(&mut self, remaining: usize) -> Result<()> {
+        if self.accum[0] != 0 {
+            return Err(error_invalid_data("non-zero index padding"));
         }
-        self.index_crc.update(&self.accum[..pad_needed]);
+        self.index_crc.update(&[0x00]);
 
-        let expected_crc = u32::from_le_bytes([
-            self.accum[pad_needed],
-            self.accum[pad_needed + 1],
-            self.accum[pad_needed + 2],
-            self.accum[pad_needed + 3],
-        ]);
+        self.accum.clear();
+        let remaining = remaining - 1;
+        if remaining > 0 {
+            self.state = XzStreamState::IndexPadding { remaining };
+            self.accum_needed = 1;
+        } else {
+            self.state = XzStreamState::IndexCrc;
+            self.accum_needed = 4;
+        }
+        Ok(())
+    }
+
+    fn process_index_crc(&mut self) -> Result<()> {
+        let expected_crc =
+            u32::from_le_bytes([self.accum[0], self.accum[1], self.accum[2], self.accum[3]]);
 
         let actual_crc = core::mem::replace(&mut self.index_crc, Crc32::new()).finalize();
         if actual_crc != expected_crc {
