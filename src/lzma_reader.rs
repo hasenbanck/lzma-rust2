@@ -148,9 +148,13 @@ impl<R: Read> ReaderInput<R> {
     #[cfg(not(feature = "std"))]
     fn refill(&mut self) -> crate::Result<usize> {
         self.grow();
-        match self.reader.read(&mut self.buffer)? {
-            0 => Err(error_eof("unexpected end of LZMA input")),
-            count => Ok(count),
+        loop {
+            match self.reader.read(&mut self.buffer) {
+                Ok(0) => return Err(error_eof("unexpected end of LZMA input")),
+                Ok(count) => return Ok(count),
+                Err(crate::Error::Interrupted) => continue,
+                Err(error) => return Err(error),
+            }
         }
     }
 
@@ -1946,5 +1950,47 @@ mod tests {
         let mut out = [0u8; 13];
         assert_eq!(lz.flush_partial(&mut out), 13);
         assert_eq!(&out, b"Hello, world!");
+    }
+
+    /// Returns `Interrupted` before every byte it hands out.
+    struct InterruptingReader<'a> {
+        data: &'a [u8],
+        interrupt: bool,
+    }
+
+    impl Read for InterruptingReader<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> crate::Result<usize> {
+            self.interrupt = !self.interrupt;
+            if self.interrupt && !self.data.is_empty() {
+                #[cfg(feature = "std")]
+                return Err(std::io::ErrorKind::Interrupted.into());
+                #[cfg(not(feature = "std"))]
+                return Err(crate::Error::Interrupted);
+            }
+            let len = buf.len().min(self.data.len()).min(1);
+            buf[..len].copy_from_slice(&self.data[..len]);
+            self.data = &self.data[len..];
+            Ok(len)
+        }
+    }
+
+    #[test]
+    fn interrupted_reads_are_retried() {
+        let reader = InterruptingReader {
+            data: &RAW,
+            interrupt: false,
+        };
+        let mut reader = LzmaReader::new(reader, u64::MAX, 3, 0, 2, 0x0080_0000, None).unwrap();
+
+        let mut out = [0u8; 13];
+        let mut filled = 0;
+        for _ in 0..100 {
+            match reader.read(&mut out[filled..]) {
+                Ok(0) => break,
+                Ok(count) => filled += count,
+                Err(error) => panic!("read failed: {error:?}"),
+            }
+        }
+        assert_eq!(&out[..filled], b"Hello, world!");
     }
 }

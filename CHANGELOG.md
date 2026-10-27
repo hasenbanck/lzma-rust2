@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Accept stream padding after the end of the stream in `XzReaderMt`, like `XzReader` and `XzStream` do.
 - Accept a valid stream in `XzReader` when the inner reader returns the block padding in more than one read.
 - Retry an interrupted read in `XzReader` while it reads the stream padding and magic bytes of a following stream.
+- Retry an interrupted read in `LzmaReader` and `LzipReader` in `no_std` builds, like the `std` builds do.
 
 ## 0.24.0 - 2026-10-25
 
