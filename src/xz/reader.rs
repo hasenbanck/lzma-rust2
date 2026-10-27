@@ -10,6 +10,7 @@ use crate::{
     error_eof, error_invalid_data, error_invalid_input, error_out_of_memory, error_unsupported,
     filter::{FilterConfig, FilterType, StreamFilter, bcj::BcjReader, delta::DeltaReader},
     lzma2_reader::{Lzma2Stream, get_memory_usage, get_stream_memory_usage},
+    read_some,
     stream::{Action, Status, StreamResult},
 };
 
@@ -339,7 +340,7 @@ impl<R: Read> XzReader<R> {
 
         loop {
             let mut byte_buffer = [0u8; 1];
-            let read = self.reader.read(&mut byte_buffer)?;
+            let read = read_some(&mut self.reader, &mut byte_buffer)?;
             if read == 0 {
                 // EOF reached, no more streams.
                 if padding_bytes % 4 != 0 {
@@ -362,20 +363,10 @@ impl<R: Read> XzReader<R> {
             }
 
             buffer[0] = byte;
-            let mut buffer_pos = 1;
 
             // Read the rest of the magic bytes.
-            while buffer_pos < 6 {
-                match self.reader.read(&mut byte_buffer)? {
-                    0 => {
-                        return Err(error_invalid_data("incomplete XZ magic bytes"));
-                    }
-                    1 => {
-                        buffer[buffer_pos] = byte_buffer[0];
-                        buffer_pos += 1;
-                    }
-                    _ => unreachable!(),
-                }
+            if read_some(&mut self.reader, &mut buffer[1..])? != buffer.len() - 1 {
+                return Err(error_invalid_data("incomplete XZ magic bytes"));
             }
 
             if buffer != XZ_MAGIC {

@@ -66,32 +66,6 @@ impl LzipHeader {
     }
 }
 
-/// Reads until `buffer` is full or the source has nothing left to give, and
-/// returns the number of bytes read. A count of zero means that the source
-/// ended where the read started.
-pub(crate) fn read_some<R: Read>(reader: &mut R, buffer: &mut [u8]) -> Result<usize> {
-    let mut filled = 0;
-    while filled < buffer.len() {
-        match reader.read(&mut buffer[filled..]) {
-            Ok(0) => break,
-            Ok(count) => filled += count,
-            Err(error) if is_interrupted(&error) => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(filled)
-}
-
-#[cfg(feature = "std")]
-fn is_interrupted(error: &crate::Error) -> bool {
-    error.kind() == std::io::ErrorKind::Interrupted
-}
-
-#[cfg(not(feature = "std"))]
-fn is_interrupted(error: &crate::Error) -> bool {
-    matches!(error, crate::Error::Interrupted)
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct LzipTrailer {
     crc32: u32,

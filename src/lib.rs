@@ -526,6 +526,33 @@ fn copy_error(error: &Error) -> Error {
     *error
 }
 
+/// Reads until `buffer` is full or the source has nothing left to give, and
+/// returns the number of bytes read. A count of zero means that the source
+/// ended where the read started.
+#[cfg(any(feature = "lzip", feature = "xz"))]
+fn read_some<R: Read>(reader: &mut R, buffer: &mut [u8]) -> Result<usize> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        match reader.read(&mut buffer[filled..]) {
+            Ok(0) => break,
+            Ok(count) => filled += count,
+            Err(error) if is_interrupted(&error) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(filled)
+}
+
+#[cfg(all(feature = "std", any(feature = "lzip", feature = "xz")))]
+fn is_interrupted(error: &crate::Error) -> bool {
+    error.kind() == std::io::ErrorKind::Interrupted
+}
+
+#[cfg(all(not(feature = "std"), any(feature = "lzip", feature = "xz")))]
+fn is_interrupted(error: &crate::Error) -> bool {
+    matches!(error, crate::Error::Interrupted)
+}
+
 /// A read error that every later call has to report again.
 ///
 /// It keeps the parts of the error rather than the error itself. A
