@@ -922,3 +922,87 @@ fn a_cut_compressed_chunk_is_counted_before_the_error() {
     assert_totals_cover_the_cut(&decoder, cut, &output, data);
     assert!(decoder.total_out() > 0, "no chunk arrived whole");
 }
+
+/// A single `Finish` call over all of `input`, which has to fail. Returns why.
+fn finish_error(input: &[u8]) -> std::io::Error {
+    let mut output = [0u8; 4096];
+    XzStream::new(false)
+        .process(input, &mut output, Action::Finish)
+        .expect_err("the stream was accepted")
+}
+
+/// A stream without blocks. Its index is the indicator, a record count of
+/// zero, two padding bytes and the CRC32, right behind the stream header.
+fn stream_without_blocks() -> Vec<u8> {
+    let stream = encode_xz(b"", 6);
+    assert_eq!(stream.len(), 12 + 8 + 12);
+    assert_eq!(stream[12..16], [0, 0, 0, 0]);
+    stream
+}
+
+/// Padding has one valid value. A wrong byte is corruption on its own, no
+/// matter what else is still missing. The reader says so; the push decoder has
+/// to say so on the call that sees the byte, instead of asking for the rest.
+#[test]
+fn damaged_index_padding_is_corrupt_before_the_index_crc_arrives() {
+    let mut cut = stream_without_blocks()[..17].to_vec();
+    cut[14] = 0x01;
+    cut[15] = 0x01;
+
+    assert_eq!(finish_error(&cut).kind(), ErrorKind::InvalidData);
+    assert_eq!(reader_error(&cut).kind(), ErrorKind::InvalidData);
+}
+
+/// The same with the input ending right behind the damaged byte.
+#[test]
+fn damaged_index_padding_is_corrupt_at_the_end_of_the_input() {
+    let mut cut = stream_without_blocks()[..15].to_vec();
+    cut[14] = 0x01;
+
+    assert_eq!(finish_error(&cut).kind(), ErrorKind::InvalidData);
+}
+
+/// A stream whose single block is a stored chunk of 13 bytes: 0x01, two size
+/// bytes, the data and the 0x00 that ends the LZMA2 data, 17 bytes behind the
+/// 12 + 12 byte headers, so three padding bytes follow at offset 41.
+fn stream_with_block_padding() -> Vec<u8> {
+    let stream = encode_xz(b"Hello, world!", 1);
+    assert_eq!(stream[24], 0x01, "expected a stored LZMA2 chunk");
+    assert_eq!(stream[41..44], [0, 0, 0]);
+    stream
+}
+
+/// The same rule for block padding.
+#[test]
+fn damaged_block_padding_is_corrupt_at_the_end_of_the_input() {
+    let mut cut = stream_with_block_padding()[..42].to_vec();
+    cut[41] = 0x01;
+
+    assert_eq!(finish_error(&cut).kind(), ErrorKind::InvalidData);
+}
+
+/// One byte per call, so every state sees its input arrive in pieces.
+fn decode_byte_at_a_time(data: &[u8]) -> Vec<u8> {
+    let mut decoder = XzStream::new(false);
+    let mut decompressed = Vec::new();
+    let mut output_buf = [0u8; 4096];
+
+    for (pos, byte) in data.iter().enumerate() {
+        let action = if pos == data.len() - 1 {
+            Action::Finish
+        } else {
+            Action::Run
+        };
+        let result = decoder.process(&[*byte], &mut output_buf, action).unwrap();
+        decompressed.extend_from_slice(&output_buf[..result.bytes_produced]);
+        assert_eq!(result.bytes_consumed, 1);
+        assert_eq!(result.status == Status::StreamEnd, pos == data.len() - 1);
+    }
+    decompressed
+}
+
+#[test]
+fn padding_is_accepted_byte_by_byte() {
+    assert!(decode_byte_at_a_time(&stream_without_blocks()).is_empty());
+    assert!(decode_byte_at_a_time(&stream_with_block_padding()) == b"Hello, world!");
+}
