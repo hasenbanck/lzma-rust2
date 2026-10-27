@@ -1,8 +1,9 @@
 use alloc::vec::Vec;
 
-use super::{HEADER_SIZE, LzipHeader, LzipTrailer, TRAILER_SIZE, read_some};
+use super::{HEADER_SIZE, LzipHeader, LzipTrailer, TRAILER_SIZE};
 use crate::{
     CountingReader, LzmaReader, Read, Result, StickyError, crc::Crc32, error_invalid_data,
+    read_some,
 };
 
 /// A single-threaded LZIP decompressor.

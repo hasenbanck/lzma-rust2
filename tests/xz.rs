@@ -492,3 +492,40 @@ fn xz_reader_reports_cut_block_padding_as_end_of_input() {
         .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
 }
+
+/// Returns `Interrupted` before every byte it hands out.
+struct InterruptingReader<'a> {
+    data: &'a [u8],
+    interrupt: bool,
+}
+
+impl Read for InterruptingReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.interrupt = !self.interrupt;
+        if self.interrupt && !self.data.is_empty() {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
+        let len = buf.len().min(self.data.len()).min(1);
+        buf[..len].copy_from_slice(&self.data[..len]);
+        self.data = &self.data[len..];
+        Ok(len)
+    }
+}
+
+#[test]
+fn xz_reader_retries_interrupted_reads_between_streams() {
+    let mut compressed = compress(b"first", None);
+    compressed.extend_from_slice(&[0; 8]);
+    compressed.extend_from_slice(&compress(b"second", None));
+    compressed.extend_from_slice(&[0; 4]);
+
+    let reader = InterruptingReader {
+        data: &compressed,
+        interrupt: false,
+    };
+    let mut decoded = Vec::new();
+    XzReader::new(reader, true)
+        .read_to_end(&mut decoded)
+        .unwrap();
+    assert_eq!(decoded, b"firstsecond");
+}
