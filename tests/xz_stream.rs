@@ -666,6 +666,62 @@ fn memory_limit_matches_the_dictionary_in_the_block_header() {
     assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
 }
 
+/// Hands all of `data` over, and under `Finish` goes on until the stream ends.
+/// Returns the status of the last call.
+fn feed(decoder: &mut XzStream, data: &[u8], action: Action) -> std::io::Result<Status> {
+    let mut output_buf = [0u8; 4096];
+    let mut pos = 0;
+    loop {
+        let result = decoder.process(&data[pos..], &mut output_buf, action)?;
+        pos += result.bytes_consumed;
+        if result.status == Status::StreamEnd || (action == Action::Run && pos == data.len()) {
+            return Ok(result.status);
+        }
+    }
+}
+
+#[test]
+fn memory_usage_follows_the_block_header() {
+    // Preset 0 uses a 256 KiB dictionary, preset 1 a 1 MiB one.
+    let small = encode_xz(b"Hello, world!", 0);
+    let large = encode_xz(b"Hello, world!", 1);
+    let mut output_buf = [0u8; 4096];
+
+    let mut decoder = XzStream::new(true);
+    assert_eq!(decoder.memory_usage(), None);
+
+    // The stream header says nothing about what a block needs.
+    feed(&mut decoder, &small[..12], Action::Run).unwrap();
+    assert_eq!(decoder.memory_usage(), None);
+
+    feed(&mut decoder, &small[12..], Action::Run).unwrap();
+    let needed = decoder.memory_usage().expect("the block header was parsed");
+
+    // The next stream's block has a bigger dictionary.
+    assert_eq!(
+        feed(&mut decoder, &large, Action::Finish).unwrap(),
+        Status::StreamEnd
+    );
+    let later = decoder
+        .memory_usage()
+        .expect("the second block header was parsed");
+    assert!(later > needed);
+
+    // The figure is the one the limit is checked against.
+    let mut decoder = XzStream::new_mem_limit(false, needed);
+    assert_eq!(
+        feed(&mut decoder, &small, Action::Finish).unwrap(),
+        Status::StreamEnd
+    );
+
+    let mut decoder = XzStream::new_mem_limit(false, needed - 1);
+    let error = decoder
+        .process(&small, &mut output_buf, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+    assert_eq!(decoder.memory_usage(), Some(needed));
+}
+
 /// Decodes until the stream fails, and returns why. Panics if it is accepted.
 fn stream_error(data: &[u8]) -> std::io::Error {
     let mut decoder = XzStream::new(false);

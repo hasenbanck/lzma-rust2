@@ -393,6 +393,17 @@ impl Lzma2Stream {
         self.total_out
     }
 
+    /// Memory the decoder needs, in KiB.
+    ///
+    /// This is the figure checked against the limit given to
+    /// [`new_mem_limit()`]. It follows from the dictionary size, so it is
+    /// known from construction.
+    ///
+    /// [`new_mem_limit()`]: Lzma2Stream::new_mem_limit
+    pub fn memory_usage(&self) -> Option<u32> {
+        Some(self.mem_need_kb)
+    }
+
     /// Returns true if the LZMA2 stream has been fully decoded.
     pub fn is_finished(&self) -> bool {
         matches!(self.state, Lzma2State::Finished)

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Add `memory_usage` to `XzStream`, `LzmaStream`, `LzipStream` and `Lzma2Stream` to read the memory the decoder needs.
+
 ### Fixed
 
 - Accept stream padding after the end of the stream in `XzReaderMt`, like `XzReader` and `XzStream` do.

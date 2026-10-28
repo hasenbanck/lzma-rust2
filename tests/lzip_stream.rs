@@ -736,6 +736,62 @@ fn memory_limit_includes_speculation() {
     assert_eq!(error.kind(), ErrorKind::OutOfMemory);
 }
 
+/// Hands all of `data` over, and under `Finish` goes on until the stream ends.
+/// Returns the status of the last call.
+fn feed(stream: &mut LzipStream, data: &[u8], action: Action) -> std::io::Result<Status> {
+    let mut output = [0u8; 4096];
+    let mut pos = 0;
+    loop {
+        let result = stream.process(&data[pos..], &mut output, action)?;
+        pos += result.bytes_consumed;
+        if result.status == Status::StreamEnd || (action == Action::Run && pos == data.len()) {
+            return Ok(result.status);
+        }
+    }
+}
+
+#[test]
+fn memory_usage_follows_the_member_header() {
+    // Preset 0 uses a 256 KiB dictionary, preset 1 a 1 MiB one.
+    let small = compress(b"Hello, world!", 0, None);
+    let large = compress(b"Hello, world!", 1, None);
+    let mut output = [0u8; 4096];
+
+    let mut stream = LzipStream::new(true);
+    assert_eq!(stream.memory_usage(), None);
+
+    // Short of a whole header there is nothing to go by.
+    feed(&mut stream, &small[..HEADER_SIZE - 1], Action::Run).unwrap();
+    assert_eq!(stream.memory_usage(), None);
+
+    feed(&mut stream, &small[HEADER_SIZE - 1..], Action::Run).unwrap();
+    let needed = stream.memory_usage().expect("the member header was parsed");
+
+    // The next member has a bigger dictionary.
+    assert_eq!(
+        feed(&mut stream, &large, Action::Finish).unwrap(),
+        Status::StreamEnd
+    );
+    let later = stream
+        .memory_usage()
+        .expect("the second member header was parsed");
+    assert!(later > needed);
+
+    // The figure is the one the limit is checked against.
+    let mut stream = LzipStream::new_mem_limit(true, needed);
+    assert_eq!(
+        feed(&mut stream, &small, Action::Finish).unwrap(),
+        Status::StreamEnd
+    );
+
+    let mut stream = LzipStream::new_mem_limit(true, needed - 1);
+    let error = stream
+        .process(&small, &mut output, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+    assert_eq!(stream.memory_usage(), Some(needed));
+}
+
 /// A member cut short, with more data than the dictionary holds. The part that
 /// was handed over before the cut was noticed still has to be counted.
 #[test]
