@@ -498,6 +498,8 @@ pub struct XzStream {
     streams_started: usize,
     /// Memory usage limit in KiB. `u32::MAX` means no limit.
     mem_limit_kb: u32,
+    /// What the current block needs, in KiB. `None` before the first block header.
+    mem_need_kb: Option<u32>,
     /// Set once `process()` has returned an error. A failed stream stays failed.
     failed: bool,
     total_in: u64,
@@ -531,6 +533,7 @@ impl XzStream {
             stop_after_stream_header: false,
             streams_started: 0,
             mem_limit_kb: u32::MAX,
+            mem_need_kb: None,
             failed: false,
             total_in: 0,
             total_out: 0,
@@ -583,6 +586,18 @@ impl XzStream {
     /// Number of stream headers parsed so far.
     pub fn streams_started(&self) -> usize {
         self.streams_started
+    }
+
+    /// Memory the decoder needs for the current block, in KiB.
+    ///
+    /// This is the figure checked against the limit given to
+    /// [`new_mem_limit()`]. It is read from each block header, so it changes
+    /// from one block to the next. Returns `None` before the first block
+    /// header has been parsed.
+    ///
+    /// [`new_mem_limit()`]: XzStream::new_mem_limit
+    pub fn memory_usage(&self) -> Option<u32> {
+        self.mem_need_kb
     }
 
     /// Return from [`process()`] right after each stream header is parsed.
@@ -1133,6 +1148,7 @@ impl XzStream {
 
         // Check the memory limit before allocating anything.
         let need_mem = get_stream_memory_usage(lzma2_dict_size);
+        self.mem_need_kb = Some(need_mem);
         if self.mem_limit_kb < need_mem {
             return Err(error_out_of_memory(
                 "needed memory too big for mem_limit_kb",

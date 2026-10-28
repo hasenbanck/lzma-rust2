@@ -884,6 +884,27 @@ fn memory_limit_does_not_count_a_range_decoder_buffer() {
 }
 
 #[test]
+fn memory_usage_is_known_from_construction() {
+    let mut output = [0u8; 64];
+    let needed = Lzma2Stream::new(4096)
+        .memory_usage()
+        .expect("known from the dictionary size");
+    assert!(Lzma2Stream::new(1 << 20).memory_usage() > Some(needed));
+
+    // The figure is the one the limit is checked against.
+    let stream = Lzma2Stream::new_mem_limit(4096, needed);
+    assert_eq!(stream.memory_usage(), Some(needed));
+    assert!(decode(stream, HELLO, ENTIRE, 4096).unwrap() == b"Hello, world!");
+
+    let mut stream = Lzma2Stream::new_mem_limit(4096, needed - 1);
+    let error = stream
+        .process(HELLO, &mut output, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+    assert_eq!(stream.memory_usage(), Some(needed));
+}
+
+#[test]
 fn a_stream_that_broke_the_limit_stays_broken() {
     let mut output = [0u8; 64];
     let mut stream = Lzma2Stream::new_mem_limit(4096, 1);

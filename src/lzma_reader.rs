@@ -1208,6 +1208,8 @@ pub struct LzmaStream {
     /// How much of `filter_buf` the caller has been handed already.
     filter_pos: usize,
     mem_limit_kb: u32,
+    /// What the stream needs, in KiB. `None` until the header has been parsed.
+    mem_need_kb: Option<u32>,
     preset_dict: Option<Vec<u8>>,
     /// Set once a speculative tail decode has come to nothing, so that it is not
     /// tried again on the same bytes. Cleared by fresh input.
@@ -1248,6 +1250,7 @@ impl LzmaStream {
             filter_buf: Vec::new(),
             filter_pos: 0,
             mem_limit_kb,
+            mem_need_kb: None,
             preset_dict: preset_dict.map(|dict| dict.to_vec()),
             spec_blocked: false,
             failed: false,
@@ -1369,6 +1372,17 @@ impl LzmaStream {
     /// Total bytes produced to output across all `process()` calls.
     pub fn total_out(&self) -> u64 {
         self.total_out
+    }
+
+    /// Memory the decoder needs, in KiB.
+    ///
+    /// This is the figure checked against the limit given to
+    /// [`new_mem_limit()`]. Returns `None` before the header has been parsed,
+    /// and always for a raw stream, which has no header.
+    ///
+    /// [`new_mem_limit()`]: LzmaStream::new_mem_limit
+    pub fn memory_usage(&self) -> Option<u32> {
+        self.mem_need_kb
     }
 
     /// Returns true if the LZMA stream has been fully decoded.
@@ -1741,6 +1755,7 @@ impl LzmaStream {
         // Check the memory limit before allocating anything.
         let need_mem = get_memory_usage_by_props(dict_size, props)?
             + speculation_memory_usage(lc as u32, lp as u32);
+        self.mem_need_kb = Some(need_mem);
         if self.mem_limit_kb < need_mem {
             return Err(error_out_of_memory(
                 "needed memory too big for mem_limit_kb",

@@ -100,6 +100,8 @@ pub struct LzipStream {
     members: usize,
     allow_multiple_members: bool,
     mem_limit_kb: u32,
+    /// What the current member needs, in KiB. `None` before the first member header.
+    mem_need_kb: Option<u32>,
     /// Bytes that belong to no member. Filled in once the stream ends.
     leftover: Vec<u8>,
     total_in: u64,
@@ -150,6 +152,7 @@ impl LzipStream {
             members: 0,
             allow_multiple_members,
             mem_limit_kb,
+            mem_need_kb: None,
             leftover: Vec::new(),
             total_in: 0,
             total_out: 0,
@@ -183,6 +186,18 @@ impl LzipStream {
     /// Number of members that have been decoded and verified so far.
     pub fn member_count(&self) -> usize {
         self.members
+    }
+
+    /// Memory the decoder needs for the current member, in KiB.
+    ///
+    /// This is the figure checked against the limit given to
+    /// [`new_mem_limit()`]. It is read from each member header, so it changes
+    /// from one member to the next. Returns `None` before the first member
+    /// header has been parsed.
+    ///
+    /// [`new_mem_limit()`]: LzipStream::new_mem_limit
+    pub fn memory_usage(&self) -> Option<u32> {
+        self.mem_need_kb
     }
 
     /// Bytes that were absorbed from the caller but turned out not to belong to
@@ -323,6 +338,7 @@ impl LzipStream {
     fn start_member(&mut self, dict_size: u32) -> Result<()> {
         // Check the memory limit before allocating anything.
         let need_mem = get_memory_usage(dict_size, 3, 0)? + speculation_memory_usage(3, 0);
+        self.mem_need_kb = Some(need_mem);
         if self.mem_limit_kb < need_mem {
             return Err(error_out_of_memory(
                 "needed memory too big for mem_limit_kb",
