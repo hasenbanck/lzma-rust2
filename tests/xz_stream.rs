@@ -960,6 +960,7 @@ fn damaged_index_padding_is_corrupt_at_the_end_of_the_input() {
     cut[14] = 0x01;
 
     assert_eq!(finish_error(&cut).kind(), ErrorKind::InvalidData);
+    assert_eq!(reader_error(&cut).kind(), ErrorKind::InvalidData);
 }
 
 /// A stream whose single block is a stored chunk of 13 bytes: 0x01, two size
