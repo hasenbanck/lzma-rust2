@@ -980,6 +980,7 @@ fn damaged_block_padding_is_corrupt_at_the_end_of_the_input() {
     cut[41] = 0x01;
 
     assert_eq!(finish_error(&cut).kind(), ErrorKind::InvalidData);
+    assert_eq!(reader_error(&cut).kind(), ErrorKind::InvalidData);
 }
 
 /// One byte per call, so every state sees its input arrive in pieces.
