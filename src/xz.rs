@@ -782,12 +782,12 @@ fn parse_index<R: Read>(
     }
 
     let padding_needed = ((4 - size % 4) % 4) as usize;
-    let mut padding = [0u8; 3];
-    reader.read_exact(&mut padding[..padding_needed])?;
-    if padding[..padding_needed].iter().any(|&byte| byte != 0) {
-        return Err(error_invalid_data("invalid index padding"));
+    for _ in 0..padding_needed {
+        if reader.read_u8()? != 0 {
+            return Err(error_invalid_data("invalid index padding"));
+        }
+        crc.update(&[0]);
     }
-    crc.update(&padding[..padding_needed]);
 
     if reader.read_u32()? != crc.finalize() {
         return Err(error_invalid_data("index CRC32 mismatch"));
