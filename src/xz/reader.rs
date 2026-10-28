@@ -5,7 +5,7 @@ use super::{
     XZ_FOOTER_MAGIC, XZ_MAGIC, count_multibyte_integer_size, parse_index, parse_multibyte_integer,
 };
 use crate::{
-    CountingReader, Lzma2Reader, Read, Result,
+    ByteReader, CountingReader, Lzma2Reader, Read, Result,
     crc::Crc32,
     error_eof, error_invalid_data, error_invalid_input, error_out_of_memory, error_unsupported,
     filter::{FilterConfig, FilterType, StreamFilter, bcj::BcjReader, delta::DeltaReader},
@@ -280,16 +280,11 @@ impl<R: Read> XzReader<R> {
     }
 
     fn consume_padding(&mut self, compressed_bytes: u64) -> Result<()> {
-        let padding_needed = match (4 - (compressed_bytes % 4)) % 4 {
-            0 => return Ok(()),
-            n => n as usize,
-        };
-
-        let mut padding_buf = [0u8; 3];
-        self.reader.read_exact(&mut padding_buf[..padding_needed])?;
-
-        if !padding_buf[..padding_needed].iter().all(|&byte| byte == 0) {
-            return Err(error_invalid_data("invalid XZ block padding"));
+        let padding_needed = (4 - (compressed_bytes % 4)) % 4;
+        for _ in 0..padding_needed {
+            if self.reader.read_u8()? != 0 {
+                return Err(error_invalid_data("invalid XZ block padding"));
+            }
         }
 
         Ok(())
