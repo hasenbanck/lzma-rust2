@@ -792,6 +792,31 @@ fn memory_usage_follows_the_member_header() {
     assert_eq!(stream.memory_usage(), Some(needed));
 }
 
+#[test]
+fn memory_limit_can_be_raised_after_the_error() {
+    let compressed = compress(b"Hello, world!", 0, None);
+    let needed = member_memory(1 << 18);
+    let mut output = [0u8; 4096];
+
+    let mut stream = LzipStream::new_mem_limit(true, needed - 1);
+    let error = stream
+        .process(&compressed, &mut output, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+    let consumed = stream.total_in() as usize;
+
+    // Asking again under the same limit takes nothing more.
+    let error = stream
+        .process(&compressed[consumed..], &mut output, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+    assert_eq!(stream.total_in() as usize, consumed);
+
+    stream.set_mem_limit(needed);
+    let decompressed = decode(&mut stream, &compressed[consumed..], ENTIRE, 4096).unwrap();
+    assert!(decompressed == b"Hello, world!");
+}
+
 /// A member cut short, with more data than the dictionary holds. The part that
 /// was handed over before the cut was noticed still has to be counted.
 #[test]

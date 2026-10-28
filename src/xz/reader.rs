@@ -9,6 +9,7 @@ use crate::{
     crc::Crc32,
     error_eof, error_invalid_data, error_invalid_input, error_out_of_memory, error_unsupported,
     filter::{FilterConfig, FilterType, StreamFilter, bcj::BcjReader, delta::DeltaReader},
+    is_out_of_memory,
     lzma2_reader::{Lzma2Stream, get_memory_usage, get_stream_memory_usage},
     read_some,
     stream::{Action, Status, StreamResult},
@@ -500,7 +501,8 @@ pub struct XzStream {
     mem_limit_kb: u32,
     /// What the current block needs, in KiB. `None` before the first block header.
     mem_need_kb: Option<u32>,
-    /// Set once `process()` has returned an error. A failed stream stays failed.
+    /// Set once `process()` has returned an error other than a memory limit
+    /// error. A failed stream stays failed.
     failed: bool,
     total_in: u64,
     total_out: u64,
@@ -600,6 +602,24 @@ impl XzStream {
         self.mem_need_kb
     }
 
+    /// The memory usage limit in KiB. `u32::MAX` means no limit.
+    pub fn mem_limit(&self) -> u32 {
+        self.mem_limit_kb
+    }
+
+    /// Changes the memory usage limit. `u32::MAX` means no limit.
+    ///
+    /// A limit error from [`process()`] does not fail the stream. Raising the
+    /// limit and calling [`process()`] again continues where it stopped.
+    ///
+    /// [`process()`]: XzStream::process
+    pub fn set_mem_limit(&mut self, mem_limit_kb: u32) {
+        self.mem_limit_kb = mem_limit_kb;
+        if let Some(lzma2) = self.lzma2.as_mut() {
+            lzma2.set_mem_limit(mem_limit_kb);
+        }
+    }
+
     /// Return from [`process()`] right after each stream header is parsed.
     ///
     /// At that point [`check_type()`] belongs to the stream that just started
@@ -636,8 +656,8 @@ impl XzStream {
         }
 
         let result = self.process_inner(input, output, action);
-        if result.is_err() {
-            self.failed = true;
+        if let Err(error) = &result {
+            self.failed = !is_out_of_memory(error);
         }
         result
     }

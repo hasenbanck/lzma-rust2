@@ -200,6 +200,21 @@ impl LzipStream {
         self.mem_need_kb
     }
 
+    /// The memory usage limit in KiB. `u32::MAX` means no limit.
+    pub fn mem_limit(&self) -> u32 {
+        self.mem_limit_kb
+    }
+
+    /// Changes the memory usage limit. `u32::MAX` means no limit.
+    ///
+    /// A limit error from [`process()`] does not fail the stream. Raising the
+    /// limit and calling [`process()`] again continues where it stopped.
+    ///
+    /// [`process()`]: LzipStream::process
+    pub fn set_mem_limit(&mut self, mem_limit_kb: u32) {
+        self.mem_limit_kb = mem_limit_kb;
+    }
+
     /// Bytes that were absorbed from the caller but turned out not to belong to
     /// any member.
     ///

@@ -5,6 +5,7 @@ use crate::{
     decoder::LzmaDecoder,
     error_eof, error_invalid_data, error_invalid_input, error_out_of_memory, error_unsupported,
     filter::{FilterConfig, StreamFilter},
+    is_out_of_memory,
     lz::LzDecoder,
     range_dec::{RangeCoderState, RangeDecoder, SliceRangeReader},
     stream::{Action, Status, StreamResult},
@@ -1214,7 +1215,8 @@ pub struct LzmaStream {
     /// Set once a speculative tail decode has come to nothing, so that it is not
     /// tried again on the same bytes. Cleared by fresh input.
     spec_blocked: bool,
-    /// Set once `process()` has returned an error. A failed stream stays failed.
+    /// Set once `process()` has returned an error other than a memory limit
+    /// error. A failed stream stays failed.
     failed: bool,
     total_in: u64,
     total_out: u64,
@@ -1385,6 +1387,21 @@ impl LzmaStream {
         self.mem_need_kb
     }
 
+    /// The memory usage limit in KiB. `u32::MAX` means no limit.
+    pub fn mem_limit(&self) -> u32 {
+        self.mem_limit_kb
+    }
+
+    /// Changes the memory usage limit. `u32::MAX` means no limit.
+    ///
+    /// A limit error from [`process()`] does not fail the stream. Raising the
+    /// limit and calling [`process()`] again continues where it stopped.
+    ///
+    /// [`process()`]: LzmaStream::process
+    pub fn set_mem_limit(&mut self, mem_limit_kb: u32) {
+        self.mem_limit_kb = mem_limit_kb;
+    }
+
     /// Returns true if the LZMA stream has been fully decoded.
     pub fn is_finished(&self) -> bool {
         self.state == LzmaState::Finished
@@ -1428,8 +1445,8 @@ impl LzmaStream {
         }
 
         let result = self.process_inner(input, output, action);
-        if result.is_err() {
-            self.failed = true;
+        if let Err(error) = &result {
+            self.failed = !is_out_of_memory(error);
         }
         result
     }
