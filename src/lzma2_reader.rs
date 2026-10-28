@@ -10,6 +10,7 @@ use super::{
 use crate::{
     ByteReader, DICT_SIZE_MIN,
     filter::{FilterConfig, StreamFilter},
+    is_out_of_memory,
     lzma_reader::{InputEnd, Limits, LzmaCore, RC_INIT_SIZE},
     stream::{Action, Status, StreamResult},
 };
@@ -305,7 +306,8 @@ pub struct Lzma2Stream {
     mem_limit_kb: u32,
     /// What the dictionary this stream was built for needs, in KiB.
     mem_need_kb: u32,
-    /// Set once `process()` has returned an error. A failed stream stays failed.
+    /// Set once `process()` has returned an error other than a memory limit
+    /// error. A failed stream stays failed.
     failed: bool,
     total_in: u64,
     total_out: u64,
@@ -404,6 +406,21 @@ impl Lzma2Stream {
         Some(self.mem_need_kb)
     }
 
+    /// The memory usage limit in KiB. `u32::MAX` means no limit.
+    pub fn mem_limit(&self) -> u32 {
+        self.mem_limit_kb
+    }
+
+    /// Changes the memory usage limit. `u32::MAX` means no limit.
+    ///
+    /// A limit error from [`process()`] does not fail the stream. Raising the
+    /// limit and calling [`process()`] again continues where it stopped.
+    ///
+    /// [`process()`]: Lzma2Stream::process
+    pub fn set_mem_limit(&mut self, mem_limit_kb: u32) {
+        self.mem_limit_kb = mem_limit_kb;
+    }
+
     /// Returns true if the LZMA2 stream has been fully decoded.
     pub fn is_finished(&self) -> bool {
         matches!(self.state, Lzma2State::Finished)
@@ -426,8 +443,8 @@ impl Lzma2Stream {
         }
 
         let result = self.process_inner(input, output, action);
-        if result.is_err() {
-            self.failed = true;
+        if let Err(error) = &result {
+            self.failed = !is_out_of_memory(error);
         }
         result
     }

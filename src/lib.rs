@@ -553,6 +553,16 @@ fn is_interrupted(error: &crate::Error) -> bool {
     matches!(error, crate::Error::Interrupted)
 }
 
+#[cfg(feature = "std")]
+fn is_out_of_memory(error: &crate::Error) -> bool {
+    error.kind() == std::io::ErrorKind::OutOfMemory
+}
+
+#[cfg(not(feature = "std"))]
+fn is_out_of_memory(error: &crate::Error) -> bool {
+    matches!(error, crate::Error::OutOfMemory(_))
+}
+
 /// A read error that every later call has to report again.
 ///
 /// It keeps the parts of the error rather than the error itself. A

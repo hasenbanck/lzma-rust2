@@ -722,6 +722,43 @@ fn memory_usage_follows_the_block_header() {
     assert_eq!(decoder.memory_usage(), Some(needed));
 }
 
+#[test]
+fn memory_limit_can_be_raised_after_the_error() {
+    let dict_size = XzOptions::with_preset(6).lzma_options.dict_size;
+    let compressed = encode_xz(b"Hello, world!", 6);
+    let needed = block_memory(dict_size);
+    let mut output_buf = [0u8; 4096];
+
+    let mut decoder = XzStream::new_mem_limit(false, needed - 1);
+    let error = decoder
+        .process(&compressed, &mut output_buf, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+    let consumed = decoder.total_in() as usize;
+
+    // Asking again under the same limit takes nothing more.
+    let error = decoder
+        .process(&compressed[consumed..], &mut output_buf, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+    assert_eq!(decoder.total_in() as usize, consumed);
+
+    decoder.set_mem_limit(needed);
+    let mut decompressed = Vec::new();
+    let mut pos = consumed;
+    loop {
+        let result = decoder
+            .process(&compressed[pos..], &mut output_buf, Action::Finish)
+            .unwrap();
+        pos += result.bytes_consumed;
+        decompressed.extend_from_slice(&output_buf[..result.bytes_produced]);
+        if result.status == Status::StreamEnd {
+            break;
+        }
+    }
+    assert!(decompressed == b"Hello, world!");
+}
+
 /// Decodes until the stream fails, and returns why. Panics if it is accepted.
 fn stream_error(data: &[u8]) -> std::io::Error {
     let mut decoder = XzStream::new(false);

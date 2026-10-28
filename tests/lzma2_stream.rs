@@ -905,7 +905,7 @@ fn memory_usage_is_known_from_construction() {
 }
 
 #[test]
-fn a_stream_that_broke_the_limit_stays_broken() {
+fn a_stream_that_broke_the_limit_can_try_again() {
     let mut output = [0u8; 64];
     let mut stream = Lzma2Stream::new_mem_limit(4096, 1);
 
@@ -917,7 +917,11 @@ fn a_stream_that_broke_the_limit_stays_broken() {
     let error = stream
         .process(HELLO, &mut output, Action::Finish)
         .unwrap_err();
-    assert!(error.to_string().contains("already failed"));
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+    assert_eq!(stream.total_in(), 0);
+
+    stream.set_mem_limit(u32::MAX);
+    assert!(decode(stream, HELLO, ENTIRE, 4096).unwrap() == b"Hello, world!");
 }
 
 /// A truncated stream is the end of the input, not bad data. The blocking

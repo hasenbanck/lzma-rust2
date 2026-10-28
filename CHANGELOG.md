@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add `memory_usage` to `XzStream`, `LzmaStream`, `LzipStream` and `Lzma2Stream` to read the memory the decoder needs.
+- Add `mem_limit` and `set_mem_limit` to `XzStream`, `LzmaStream`, `LzipStream` and `Lzma2Stream`. A memory limit error no longer fails the stream, so raising the limit and calling `process` again continues.
 
 ### Fixed
 

@@ -735,6 +735,36 @@ fn memory_usage_follows_the_header() {
     assert_eq!(stream.memory_usage(), Some(needed));
 }
 
+#[test]
+fn memory_limit_can_be_raised_after_the_error() {
+    let compressed = compress_header(b"Hello, world!", 6, true);
+    let mut output = [0u8; 4096];
+
+    let mut stream = LzmaStream::new_mem_limit(u32::MAX, None);
+    stream
+        .process(&compressed, &mut output, Action::Finish)
+        .unwrap();
+    let needed = stream.memory_usage().expect("the header was parsed");
+
+    let mut stream = LzmaStream::new_mem_limit(needed - 1, None);
+    let error = stream
+        .process(&compressed, &mut output, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+    let consumed = stream.total_in() as usize;
+
+    // Asking again under the same limit takes nothing more.
+    let error = stream
+        .process(&compressed[consumed..], &mut output, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+    assert_eq!(stream.total_in() as usize, consumed);
+
+    stream.set_mem_limit(needed);
+    let decompressed = decode(stream, &compressed[consumed..], ENTIRE, 4096).unwrap();
+    assert!(decompressed == b"Hello, world!");
+}
+
 /// Feeds `input` and returns the decoded bytes plus everything the stream did
 /// not use up.
 fn decode_recovering_tail(
