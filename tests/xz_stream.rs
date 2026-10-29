@@ -1101,3 +1101,33 @@ fn padding_is_accepted_byte_by_byte() {
     assert!(decode_byte_at_a_time(&stream_without_blocks()).is_empty());
     assert!(decode_byte_at_a_time(&stream_with_block_padding()) == b"Hello, world!");
 }
+
+#[test]
+fn a_memory_limit_error_reports_the_output_of_the_stream_before() {
+    let first: Vec<u8> = (0..1000u32).map(|i| (i * 37) as u8).collect();
+    let mut compressed = encode_xz(&first, 0);
+    compressed.extend(encode_xz(b"second", 1));
+    let small = block_memory(XzOptions::with_preset(0).lzma_options.dict_size);
+    let large = block_memory(XzOptions::with_preset(1).lzma_options.dict_size);
+    let mut output_buf = [0u8; 4096];
+
+    let mut decoder = XzStream::new_mem_limit(true, small);
+    let result = decoder
+        .process(&compressed, &mut output_buf, Action::Finish)
+        .unwrap();
+    assert!(output_buf[..result.bytes_produced] == first[..]);
+
+    let pos = result.bytes_consumed;
+    let error = decoder
+        .process(&compressed[pos..], &mut output_buf, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+    assert_eq!(decoder.memory_usage(), Some(large));
+
+    decoder.set_mem_limit(large);
+    let result = decoder
+        .process(&compressed[pos..], &mut output_buf, Action::Finish)
+        .unwrap();
+    assert_eq!(result.status, Status::StreamEnd);
+    assert_eq!(&output_buf[..result.bytes_produced], b"second");
+}

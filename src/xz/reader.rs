@@ -745,7 +745,16 @@ impl XzStream {
                     }
 
                     let streams_started = self.streams_started;
-                    self.process_accumulated()?;
+                    if let Err(error) = self.process_accumulated() {
+                        if is_out_of_memory(&error) && out_pos > 0 {
+                            return Ok(StreamResult {
+                                bytes_consumed: in_pos,
+                                bytes_produced: out_pos,
+                                status: Status::Ok,
+                            });
+                        }
+                        return Err(error);
+                    }
                     if self.stop_after_stream_header && self.streams_started != streams_started {
                         return Ok(StreamResult {
                             bytes_consumed: in_pos,

@@ -4,7 +4,7 @@ use super::{HEADER_SIZE, LZIP_MAGIC, LZIP_VERSION, TRAILER_SIZE, decode_dict_siz
 use crate::{
     Action, LzmaStream, Result, Status, StreamResult,
     crc::Crc32,
-    error_eof, error_invalid_data, error_out_of_memory,
+    error_eof, error_invalid_data, error_out_of_memory, is_out_of_memory,
     lzma_reader::{get_memory_usage, speculation_memory_usage},
 };
 
@@ -275,7 +275,16 @@ impl LzipStream {
                         }
                     };
 
-                    self.start_member(dict_size)?;
+                    if let Err(error) = self.start_member(dict_size) {
+                        if is_out_of_memory(&error) && out_pos > 0 {
+                            return Ok(StreamResult {
+                                bytes_consumed: in_pos,
+                                bytes_produced: out_pos,
+                                status: Status::Ok,
+                            });
+                        }
+                        return Err(error);
+                    }
                 }
 
                 LzipState::LzmaData => {

@@ -843,3 +843,31 @@ fn a_cut_member_is_counted_before_the_error() {
         "output was written past total_out {produced}"
     );
 }
+
+#[test]
+fn a_memory_limit_error_reports_the_output_of_the_member_before() {
+    let first: Vec<u8> = (0..1000u32).map(|i| (i * 37) as u8).collect();
+    let mut compressed = compress(&first, 0, None);
+    compressed.extend(compress(b"second", 1, None));
+    let mut output = [0u8; 4096];
+
+    let mut stream = LzipStream::new_mem_limit(true, member_memory(1 << 18));
+    let result = stream
+        .process(&compressed, &mut output, Action::Finish)
+        .unwrap();
+    assert!(output[..result.bytes_produced] == first[..]);
+
+    let pos = result.bytes_consumed;
+    let error = stream
+        .process(&compressed[pos..], &mut output, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+    assert_eq!(stream.memory_usage(), Some(member_memory(1 << 20)));
+
+    stream.set_mem_limit(member_memory(1 << 20));
+    let result = stream
+        .process(&compressed[pos..], &mut output, Action::Finish)
+        .unwrap();
+    assert_eq!(result.status, Status::StreamEnd);
+    assert_eq!(&output[..result.bytes_produced], b"second");
+}
