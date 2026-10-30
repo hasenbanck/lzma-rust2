@@ -877,22 +877,31 @@ fn chunk_declaring_too_much_output_is_corrupt_not_truncated() {
 
 /// The contrast to the test above: a stream that really was cut short still
 /// reports `UnexpectedEof`, which is what the caller needs to tell the two
-/// apart.
+/// apart. Two bytes short cuts the byte the range coder still needs after the
+/// last symbol: the chunk has produced all its output by then, but it is cut
+/// short all the same.
 #[test]
 fn a_cut_short_stream_still_reports_eof() {
     let data = std::fs::read(INPUT_HTML).unwrap();
-    let (compressed, dict_size) = compress(&data, 6);
+    for prefix in [data.len(), 1000] {
+        let (compressed, dict_size) = compress(&data[..prefix], 6);
 
-    for missing in [1usize, 20, 100] {
-        let truncated = &compressed[..compressed.len() - missing];
-        let error = decode(Lzma2Stream::new(dict_size), truncated, ENTIRE, 4096)
-            .expect_err("a truncated stream must be rejected");
-        assert_eq!(
-            error.kind(),
-            std::io::ErrorKind::UnexpectedEof,
-            "missing {missing} bytes: truncated stream reported as {:?}",
-            error.kind()
-        );
+        for missing in [1usize, 2, 3, 20, 100] {
+            let truncated = &compressed[..compressed.len() - missing];
+            for (name, drive) in [
+                ("finish with the last slice", decode as fn(_, _, _, _) -> _),
+                ("finish on its own", decode_run_then_finish),
+            ] {
+                let error = drive(Lzma2Stream::new(dict_size), truncated, ENTIRE, 4096)
+                    .expect_err("a truncated stream must be rejected");
+                assert_eq!(
+                    error.kind(),
+                    std::io::ErrorKind::UnexpectedEof,
+                    "{prefix} bytes, missing {missing}, {name}: truncated stream reported as {:?}",
+                    error.kind()
+                );
+            }
+        }
     }
 }
 
