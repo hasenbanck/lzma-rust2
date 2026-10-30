@@ -779,6 +779,7 @@ impl Lzma2Stream {
         if self.limits.compressed_left != Some(0)
             || !self.core.unused_input().is_empty()
             || !self.core.rc_finished()
+            || self.core.rc_wants_byte()
             || self.lz.has_pending()
         {
             return Err(error_invalid_input("rc not finished or lz has pending"));

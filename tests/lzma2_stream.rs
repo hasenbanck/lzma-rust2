@@ -832,6 +832,50 @@ fn chunk_declaring_bytes_past_the_end_is_corrupt_not_truncated() {
     }
 }
 
+/// Lowers the compressed size the first chunk declares by one, leaving every
+/// other byte alone. The chunk's last byte then reads as the next control byte.
+fn shrink_first_chunk_size_by_one(compressed: &[u8]) -> Vec<u8> {
+    let mut out = compressed.to_vec();
+    assert!(out[0] >= 0x80, "first chunk is not an LZMA chunk");
+    let declared = u16::from_be_bytes([out[3], out[4]]);
+    let shrunk = declared - 1;
+    out[3] = (shrunk >> 8) as u8;
+    out[4] = shrunk as u8;
+    out
+}
+
+/// A chunk whose compressed size ends one byte before the range coder is done
+/// is corrupt: the byte it still wants belongs to the next chunk header. When
+/// that byte happens to be the end of stream marker the chunk must not pass
+/// as complete just because its output did.
+#[test]
+fn chunk_ending_before_the_range_coder_is_done_is_rejected() {
+    let data = &std::fs::read(INPUT_HTML).unwrap()[..1000];
+    let (compressed, dict_size) = compress(data, 6);
+    assert_eq!(compressed[compressed.len() - 2..], [0x00, 0x00]);
+
+    let corrupt = shrink_first_chunk_size_by_one(&compressed);
+    for &chunk in CHUNK_SIZES {
+        for &out_size in OUTPUT_SIZES {
+            for (name, drive) in [
+                ("finish with the last slice", decode as fn(_, _, _, _) -> _),
+                ("finish on its own", decode_run_then_finish),
+            ] {
+                let error = drive(Lzma2Stream::new(dict_size), &corrupt, chunk, out_size)
+                    .expect_err(
+                        "a chunk that ends before the range coder is done must be rejected",
+                    );
+                assert_eq!(
+                    error.kind(),
+                    ErrorKind::InvalidInput,
+                    "chunk {chunk} out {out_size}, {name}: {:?}",
+                    error.kind()
+                );
+            }
+        }
+    }
+}
+
 /// Raises the uncompressed size a chunk header declares, leaving every other
 /// byte alone. The stream stays complete; it just disagrees with itself.
 fn raise_first_chunk_size(compressed: &[u8], extra: u32) -> Vec<u8> {
