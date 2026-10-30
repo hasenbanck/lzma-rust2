@@ -687,6 +687,10 @@ impl Lzma2Stream {
                     }
                 };
 
+                if self.limits.end_reached {
+                    return self.finish_chunk();
+                }
+
                 if produced > 0 {
                     self.state = Lzma2State::DrainCompressed;
                     return Ok(None);
@@ -750,27 +754,31 @@ impl Lzma2Stream {
         }
 
         if self.limits.end_reached {
-            // The chunk produced everything it declared, so its compressed size
-            // must be used up and the range coder must have ended on zero.
-            //
-            // A used up budget is not enough on its own: the budget counts bytes
-            // taken in, and the last few of those may still be sitting in the
-            // carry unread. The buffered decoder compared the range coder's read
-            // position against the chunk length, so it rejected a chunk that
-            // declared more bytes than any symbol reached. Checking the carry is
-            // empty is how that is said here.
-            if self.limits.compressed_left != Some(0)
-                || !self.core.unused_input().is_empty()
-                || !self.core.rc_finished()
-                || self.lz.has_pending()
-            {
-                return Err(error_invalid_input("rc not finished or lz has pending"));
-            }
-            self.state = Lzma2State::DrainOutput;
-        } else {
-            self.state = Lzma2State::DrainCompressed;
+            return self.finish_chunk();
         }
 
+        self.state = Lzma2State::DrainCompressed;
+        Ok(None)
+    }
+
+    /// The chunk produced everything it declared, so its compressed size must
+    /// be used up and the range coder must have ended on zero.
+    ///
+    /// A used up budget is not enough on its own: the budget counts bytes
+    /// taken in, and the last few of those may still be sitting in the carry
+    /// unread. The buffered decoder compared the range coder's read position
+    /// against the chunk length, so it rejected a chunk that declared more
+    /// bytes than any symbol reached. Checking the carry is empty is how that
+    /// is said here.
+    fn finish_chunk(&mut self) -> crate::Result<Option<StreamResult>> {
+        if self.limits.compressed_left != Some(0)
+            || !self.core.unused_input().is_empty()
+            || !self.core.rc_finished()
+            || self.lz.has_pending()
+        {
+            return Err(error_invalid_input("rc not finished or lz has pending"));
+        }
+        self.state = Lzma2State::DrainOutput;
         Ok(None)
     }
 

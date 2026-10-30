@@ -472,6 +472,42 @@ fn decode(
     }
 }
 
+/// Like `decode`, but every slice goes in with `Action::Run` and
+/// `Action::Finish` comes on its own once the input is used up.
+fn decode_run_then_finish(
+    mut stream: Lzma2Stream,
+    compressed: &[u8],
+    chunk: usize,
+    out_size: usize,
+) -> std::io::Result<Vec<u8>> {
+    let mut decompressed = Vec::new();
+    let mut output = vec![0u8; out_size];
+    let mut pos = 0usize;
+
+    loop {
+        let end = pos.saturating_add(chunk).min(compressed.len());
+        let action = if pos < compressed.len() {
+            Action::Run
+        } else {
+            Action::Finish
+        };
+
+        let result = stream.process(&compressed[pos..end], &mut output, action)?;
+        pos += result.bytes_consumed;
+        decompressed.extend_from_slice(&output[..result.bytes_produced]);
+
+        if result.status == Status::StreamEnd {
+            return Ok(decompressed);
+        }
+        assert!(
+            result.bytes_consumed != 0 || result.bytes_produced != 0,
+            "stalled at input {pos}/{} after {} bytes of output",
+            compressed.len(),
+            decompressed.len()
+        );
+    }
+}
+
 fn test_chunk_matrix(data: &[u8], preset: u32) {
     let (compressed, dict_size) = compress(data, preset);
     for &chunk in CHUNK_SIZES {
@@ -740,6 +776,56 @@ fn chunk_declaring_unread_bytes_is_rejected() {
                     result.is_err(),
                     "junk {junk} chunk {chunk} out {out_size}: accepted a chunk \
                      with {junk} bytes the decoder never read"
+                );
+            }
+        }
+    }
+}
+
+/// Raises the compressed size the first chunk declares past the end of the
+/// stream, leaving every other byte alone.
+fn declare_compressed_bytes_past_the_end(compressed: &[u8]) -> Vec<u8> {
+    let mut out = compressed.to_vec();
+    assert!(out[0] >= 0x80, "first chunk is not an LZMA chunk");
+    assert!(
+        out.len() <= u16::MAX as usize,
+        "the stream itself fills the size field"
+    );
+    out[3] = 0xFF;
+    out[4] = 0xFF;
+    out
+}
+
+/// A chunk whose declared compressed size runs past the end of the stream,
+/// while its symbols all fit in the bytes that are there and the range coder
+/// wants nothing more, is corrupt, not truncated: the chunk produced every
+/// byte it declared. The verdict must be the same whether the last byte
+/// arrives with `Action::Finish` or `Action::Finish` comes on its own after
+/// `Action::Run` took everything.
+#[test]
+fn chunk_declaring_bytes_past_the_end_is_corrupt_not_truncated() {
+    let data = &std::fs::read(INPUT_HTML).unwrap()[..1000];
+    let (compressed, dict_size) = compress(data, 6);
+
+    // The untouched stream has to decode, or the rest proves nothing.
+    decode(Lzma2Stream::new(dict_size), &compressed, ENTIRE, 4096).unwrap();
+
+    let corrupt = declare_compressed_bytes_past_the_end(&compressed);
+    for &chunk in CHUNK_SIZES {
+        for &out_size in OUTPUT_SIZES {
+            for (name, drive) in [
+                ("finish with the last slice", decode as fn(_, _, _, _) -> _),
+                ("finish on its own", decode_run_then_finish),
+            ] {
+                let error = drive(Lzma2Stream::new(dict_size), &corrupt, chunk, out_size)
+                    .expect_err(
+                        "a chunk that declares bytes the stream does not hold must be rejected",
+                    );
+                assert_eq!(
+                    error.kind(),
+                    ErrorKind::InvalidInput,
+                    "chunk {chunk} out {out_size}, {name}: {:?}",
+                    error.kind()
                 );
             }
         }

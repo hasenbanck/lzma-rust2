@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Accept a valid stream in `XzReader` when the inner reader returns the block padding in more than one read.
 - Retry an interrupted read in `XzReader` while it reads the stream padding and magic bytes of a following stream.
 - Retry an interrupted read in `LzmaReader` and `LzipReader` in `no_std` builds, like the `std` builds do.
+- Make `Lzma2Stream` report a chunk that produced all its output without using up its compressed size as corrupt data consistently, also when `Action::Finish` comes on its own after the input was taken.
 
 ## 0.24.0 - 2026-10-25
 
