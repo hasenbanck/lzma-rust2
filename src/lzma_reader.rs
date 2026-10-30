@@ -756,6 +756,11 @@ impl LzmaCore {
         self.rc.code == 0
     }
 
+    /// Whether the range coder still needs a byte to normalize.
+    pub(crate) fn rc_wants_byte(&self) -> bool {
+        self.rc.wants_byte()
+    }
+
     /// Bytes that were taken in but never decoded. Never more than 40.
     pub(crate) fn unused_input(&self) -> &[u8] {
         &self.carry[..self.carry_len]
