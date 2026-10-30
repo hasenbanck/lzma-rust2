@@ -772,8 +772,8 @@ impl Lzma2Stream {
     /// is said here.
     fn finish_chunk(&mut self) -> crate::Result<Option<StreamResult>> {
         // The byte the range coder still wants is the next byte of input, so
-        // when the budget has room for it the stream was cut short.
-        if self.limits.compressed_left != Some(0) && self.core.rc_wants_byte() {
+        // when the budget holds exactly that byte the stream was cut short.
+        if self.limits.compressed_left == Some(1) && self.core.rc_wants_byte() {
             return Err(error_eof("unexpected end of LZMA2 stream"));
         }
         if self.limits.compressed_left != Some(0)

@@ -832,6 +832,48 @@ fn chunk_declaring_bytes_past_the_end_is_corrupt_not_truncated() {
     }
 }
 
+/// The range coder wants one byte after the last symbol. A chunk that still
+/// declares two or more bytes at that point is corrupt: the byte after the
+/// range coder's last one is never read, whatever the stream holds there.
+#[test]
+fn chunk_declaring_bytes_past_the_owed_byte_is_corrupt_not_truncated() {
+    let data = &std::fs::read(INPUT_HTML).unwrap()[..1000];
+    let (compressed, dict_size) = compress(data, 6);
+
+    // Without the range coder's last byte and the end of stream marker the
+    // chunk owes exactly one byte, and the stream is truncated.
+    let cut = &compressed[..compressed.len() - 2];
+    let error = decode(Lzma2Stream::new(dict_size), cut, ENTIRE, 4096)
+        .expect_err("a truncated stream must be rejected");
+    assert_eq!(error.kind(), ErrorKind::UnexpectedEof);
+
+    let declared = u16::from_be_bytes([compressed[3], compressed[4]]);
+    for extra in [1u16, 2, 10, u16::MAX - declared] {
+        let mut corrupt = cut.to_vec();
+        let grown = declared + extra;
+        corrupt[3] = (grown >> 8) as u8;
+        corrupt[4] = grown as u8;
+
+        for &chunk in CHUNK_SIZES {
+            for &out_size in OUTPUT_SIZES {
+                for (name, drive) in [
+                    ("finish with the last slice", decode as fn(_, _, _, _) -> _),
+                    ("finish on its own", decode_run_then_finish),
+                ] {
+                    let error = drive(Lzma2Stream::new(dict_size), &corrupt, chunk, out_size)
+                        .expect_err("a chunk that declares bytes no symbol reads must be rejected");
+                    assert_eq!(
+                        error.kind(),
+                        ErrorKind::InvalidInput,
+                        "extra {extra} chunk {chunk} out {out_size}, {name}: {:?}",
+                        error.kind()
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Lowers the compressed size the first chunk declares by one, leaving every
 /// other byte alone. The chunk's last byte then reads as the next control byte.
 fn shrink_first_chunk_size_by_one(compressed: &[u8]) -> Vec<u8> {
