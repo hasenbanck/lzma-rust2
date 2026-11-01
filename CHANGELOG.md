@@ -7,20 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.25.0 - 2026-11-01
+
 ### Added
 
 - Add `memory_usage` to `XzStream`, `LzmaStream`, `LzipStream` and `Lzma2Stream` to read the memory the decoder needs.
-- Add `mem_limit` and `set_mem_limit` to `XzStream`, `LzmaStream`, `LzipStream` and `Lzma2Stream`. A memory limit error no longer fails the stream, so raising the limit and calling `process` again continues.
+- Add `mem_limit` and `set_mem_limit` to `XzStream`, `LzmaStream`, `LzipStream` and `Lzma2Stream`. A memory limit error
+  no longer fails the stream, so raising the limit and calling `process` again continues.
 
 ### Fixed
 
 - Accept stream padding after the end of the stream in `XzReaderMt`, like `XzReader` and `XzStream` do.
-- Report non-zero block and index padding as corrupt data in `XzStream` as soon as the byte arrives, like `XzReader` does.
+- Report non-zero block and index padding as corrupt data in `XzStream` as soon as the byte arrives, like `XzReader`
+  does.
 - Accept a valid stream in `XzReader` when the inner reader returns the block padding in more than one read.
 - Retry an interrupted read in `XzReader` while it reads the stream padding and magic bytes of a following stream.
 - Retry an interrupted read in `LzmaReader` and `LzipReader` in `no_std` builds, like the `std` builds do.
-- Make `Lzma2Stream` report a chunk that produced all its output without using up its compressed size as corrupt data consistently, also when `Action::Finish` comes on its own after the input was taken.
-- Report a stream cut short of the byte its range coder still needs after the last symbol as truncated in `Lzma2Stream`, not as corrupt data.
+- Make `Lzma2Stream` report a chunk that produced all its output without using up its compressed size as corrupt data
+  consistently, also when `Action::Finish` comes on its own after the input was taken.
+- Report a stream cut short of the byte its range coder still needs after the last symbol as truncated in `Lzma2Stream`,
+  not as corrupt data.
 - Reject a chunk whose compressed size ends before its range coder is done in `Lzma2Stream`, like `Lzma2Reader` does.
 
 ## 0.24.0 - 2026-10-25
