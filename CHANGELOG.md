@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Reject an LZMA2 chunk that may not follow the one before it as soon as its control byte arrives in `Lzma2Stream` and
   `Lzma2Reader`, instead of reporting a stream cut short inside that chunk's header as truncated.
+- Decode the last symbols of an LZMA stream whose end nothing announces in `LzmaStream` and `LzipStream`: a raw stream
+  without an end marker, decoded without its size, now yields every byte its input holds under `Action::Run`, and a
+  stream cut short yields what its bytes decode to before `Action::Finish` reports the cut, instead of withholding up to
+  the last nineteen input bytes' worth of output.
 
 ## 0.25.0 - 2026-11-01
 

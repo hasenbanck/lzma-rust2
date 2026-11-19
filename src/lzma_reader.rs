@@ -6,7 +6,7 @@ use crate::{
     error_eof, error_invalid_data, error_invalid_input, error_out_of_memory, error_unsupported,
     filter::{FilterConfig, StreamFilter},
     is_out_of_memory,
-    lz::LzDecoder,
+    lz::{LzDecoder, LzSpeculation},
     range_dec::{RangeCoderState, RangeDecoder, SliceRangeReader},
     stream::{Action, Status, StreamResult},
 };
@@ -640,6 +640,58 @@ enum Speculation {
     /// change that answer.
     Failed,
     Produced(usize),
+    /// The attempt decoded what the bytes held and stopped at a symbol only
+    /// more input can finish, so asking again before then is pointless.
+    Partial(usize),
+}
+
+/// What the finish tail made of the carry.
+enum Tail {
+    /// Every symbol the carry holds is decoded, or the stream has ended, and
+    /// this many bytes went into the dictionary.
+    Done(usize),
+    /// The next symbol wants bytes that are not here. The symbols before it
+    /// put this many bytes into the dictionary.
+    Short(usize),
+}
+
+/// Everything a finish tail changes, kept so that the tail can be undone.
+struct TailSave {
+    lzma: LzmaDecoder,
+    spec: LzSpeculation,
+    rc: RangeCoderState,
+    remaining_size: u64,
+}
+
+impl TailSave {
+    fn take(
+        core: &LzmaCore,
+        lz: &mut LzDecoder,
+        lzma: &LzmaDecoder,
+        limits: &Limits,
+    ) -> crate::Result<Self> {
+        Ok(Self {
+            lzma: lzma.try_clone()?,
+            spec: lz.begin_speculation(SPEC_OUTPUT_MAX)?,
+            rc: core.rc,
+            remaining_size: limits.remaining_size,
+        })
+    }
+
+    fn restore(
+        self,
+        core: &mut LzmaCore,
+        lz: &mut LzDecoder,
+        lzma: &mut LzmaDecoder,
+        limits: &mut Limits,
+    ) {
+        lz.rollback_speculation(self.spec);
+        *lzma = self.lzma;
+        core.rc = self.rc;
+        limits.remaining_size = self.remaining_size;
+        // False on the way in: the callers see to that.
+        limits.end_reached = false;
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -814,8 +866,13 @@ impl LzmaCore {
             scratch[carry_len..filled].copy_from_slice(&input[in_pos..in_pos + m]);
 
             let symbol_limit = filled.saturating_sub(IN_REQUIRED - 1);
-            let (pos, decoded) =
-                self.run(lz, lzma, limits, &scratch[..filled], filled, symbol_limit);
+            let (pos, decoded) = self.run(
+                lz,
+                lzma,
+                limits,
+                SliceRangeReader::new(&scratch[..filled], filled, symbol_limit),
+                None,
+            );
             match decoded {
                 Ok(decoded) => produced += decoded,
                 Err(error) => return (pos.saturating_sub(carry_len), Err(error)),
@@ -845,8 +902,13 @@ impl LzmaCore {
                 // A symbol may start only while `pos + IN_REQUIRED <= avail`,
                 // that is while `pos < avail - (IN_REQUIRED - 1)`.
                 let symbol_limit = avail - (IN_REQUIRED - 1);
-                let (pos, decoded) =
-                    self.run(lz, lzma, limits, &input[in_pos..], avail, symbol_limit);
+                let (pos, decoded) = self.run(
+                    lz,
+                    lzma,
+                    limits,
+                    SliceRangeReader::new(&input[in_pos..], avail, symbol_limit),
+                    None,
+                );
                 match decoded {
                     Ok(decoded) => produced += decoded,
                     Err(error) => return (in_pos + pos, Err(error)),
@@ -873,31 +935,31 @@ impl LzmaCore {
             *left -= in_pos as u64;
         }
 
-        // Decode the carry against zero padding and require the stream to end
-        // inside the real bytes.
+        // Decode the carry against zero padding. The symbols that end inside
+        // the real bytes stand; one that runs past them means something,
+        // depending on who said where the end was.
         if input_ends_here && !limits.end_reached && in_pos >= input.len() {
-            let (read_padding, result) = self.decode_finish_tail(lz, lzma, limits);
-
-            if read_padding {
-                // The decoder had to read padding to get here, so a symbol runs
-                // past the end of the input. What that means depends on who said
-                // where the end was.
-                let error = match input_end {
-                    // A length field in the stream. Everything it declared is
-                    // here, and the data inside it does not fit, so the data is
-                    // wrong rather than missing.
-                    InputEnd::Length => {
-                        error_invalid_data("LZMA symbol runs past the compressed size")
-                    }
-                    // The caller. More bytes would have finished the symbol, so
-                    // the stream was cut short.
-                    _ => error_eof("truncated LZMA stream"),
-                };
-                return (in_pos, Err(error));
-            }
-
-            match result {
-                Ok(decoded) => produced += decoded,
+            match self.decode_finish_tail(lz, lzma, limits, false) {
+                Ok(Tail::Done(decoded)) => produced += decoded,
+                // The caller said the input ends here. More bytes would have
+                // finished the symbol, so the stream was cut short. What the
+                // bytes before it decoded to goes out first; the next pass,
+                // with nothing left to decode, reports the cut.
+                Ok(Tail::Short(decoded)) if input_end == InputEnd::Caller && decoded > 0 => {
+                    produced += decoded
+                }
+                Ok(Tail::Short(_)) => {
+                    let error = match input_end {
+                        // A length field in the stream. Everything it declared
+                        // is here, and the data inside it does not fit, so the
+                        // data is wrong rather than missing.
+                        InputEnd::Length => {
+                            error_invalid_data("LZMA symbol runs past the compressed size")
+                        }
+                        _ => error_eof("truncated LZMA stream"),
+                    };
+                    return (in_pos, Err(error));
+                }
                 Err(error) => return (in_pos, Err(error)),
             }
         }
@@ -908,21 +970,33 @@ impl LzmaCore {
     /// Decodes what is left of the carry with padding zeros behind it, so the
     /// decoder still sees the 20 bytes it needs to start one more symbol.
     ///
-    /// Returns whether the decode read any of that padding, along with either
-    /// the bytes decoded into the dictionary or why the decode failed.
+    /// Nothing in an LZMA1 stream says where its last symbol ends, so the
+    /// symbols are decoded one at a time, and the first to reach into the
+    /// padding is undone: it was not decoded from the stream, and only more
+    /// input can tell what it is. The symbols before it stand, as the bytes
+    /// they came from are all here.
+    ///
+    /// `tentative` says more input may still come. The decode is then also
+    /// undone when the stream reached its declared end still owed a byte: the
+    /// last normalisation of a pass is skipped when the input has nothing left
+    /// to read it from, which under [`Action::Finish`] is the truth and here
+    /// only the truth so far.
     ///
     /// The carry bytes were counted as consumed when they were taken in, so this
     /// adds nothing to `bytes_consumed`.
+    ///
+    /// [`Action::Finish`]: crate::Action
     fn decode_finish_tail(
         &mut self,
         lz: &mut LzDecoder,
         lzma: &mut LzmaDecoder,
         limits: &mut Limits,
-    ) -> (bool, crate::Result<usize>) {
+        tentative: bool,
+    ) -> crate::Result<Tail> {
         if room_for(lz, limits.remaining_size) == 0 {
             // No output space, so we cannot yet tell whether the stream really
             // ends here. The caller has to drain first.
-            return (false, Ok(0));
+            return Ok(Tail::Done(0));
         }
 
         let carry_len = self.carry_len;
@@ -932,34 +1006,113 @@ impl LzmaCore {
         let mut scratch = [0u8; CARRY_CAP + IN_REQUIRED + 1];
         scratch[..carry_len].copy_from_slice(&self.carry[..carry_len]);
         let padded_len = carry_len + IN_REQUIRED + 1;
-        let (pos, result) = self.run(
+
+        // An LZMA2 chunk states its compressed size, so its last symbol ends
+        // where that size says and nothing has to be tried.
+        if limits.compressed_left.is_some() {
+            let (pos, result) = self.run(
+                lz,
+                lzma,
+                limits,
+                SliceRangeReader::new(&scratch[..padded_len], carry_len, carry_len + 1),
+                None,
+            );
+            if pos > carry_len {
+                return Ok(Tail::Short(0));
+            }
+            let produced = result?;
+            self.take_carry(pos);
+            return Ok(Tail::Done(produced));
+        }
+
+        // The repeat an earlier pass cut short is settled output, not part of
+        // the attempt: it goes out first, and may use up the room by itself.
+        let flushed = self.flush_pending(lz, lzma, limits)?;
+        if room_for(lz, limits.remaining_size) == 0 {
+            return Ok(Tail::Done(flushed));
+        }
+
+        let saved = TailSave::take(self, lz, lzma, limits)?;
+
+        let mut pos = 0;
+        let mut symbols = 0;
+        let mut produced = 0;
+        let short = loop {
+            let (step, result) = self.run(
+                lz,
+                lzma,
+                limits,
+                SliceRangeReader::new(
+                    &scratch[pos..padded_len],
+                    carry_len - pos,
+                    carry_len - pos + 1,
+                ),
+                Some(1),
+            );
+            if pos + step > carry_len {
+                break true;
+            }
+            pos += step;
+            let decoded = match result {
+                Ok(decoded) => decoded,
+                Err(error) => {
+                    saved.restore(self, lz, lzma, limits);
+                    return Err(error);
+                }
+            };
+            // Only the end of payload marker decodes into nothing, and that
+            // ends the stream; a pass that made nothing had no room.
+            if decoded == 0 {
+                break false;
+            }
+            produced += decoded;
+            symbols += 1;
+            if limits.end_reached || !lz.has_space() {
+                break false;
+            }
+        };
+
+        if !short {
+            if tentative && limits.end_reached && self.rc.wants_byte() {
+                saved.restore(self, lz, lzma, limits);
+                return Ok(Tail::Short(flushed));
+            }
+            lz.commit_speculation(saved.spec);
+            self.take_carry(pos);
+            return Ok(Tail::Done(flushed + produced));
+        }
+
+        saved.restore(self, lz, lzma, limits);
+        if symbols == 0 {
+            return Ok(Tail::Short(flushed));
+        }
+
+        // Decode the symbols that fit once more, with the same room as before
+        // so that they end where they ended.
+        let spec = lz.begin_speculation(SPEC_OUTPUT_MAX)?;
+        let (pos_again, result) = self.run(
             lz,
             lzma,
             limits,
-            &scratch[..padded_len],
-            carry_len,
-            carry_len + 1,
+            SliceRangeReader::new(&scratch[..padded_len], carry_len, carry_len + 1),
+            Some(symbols),
         );
+        debug_assert_eq!(pos_again, pos);
+        let produced = result?;
+        lz.commit_speculation(spec);
+        self.take_carry(pos_again);
+        Ok(Tail::Short(flushed + produced))
+    }
 
-        if pos > carry_len {
-            return (true, result);
-        }
-
-        let produced = match result {
-            Ok(produced) => produced,
-            Err(error) => return (false, Err(error)),
-        };
-
-        // Padding bytes must never be written back into the carry.
-        self.carry.copy_within(pos..carry_len, 0);
-        self.carry_len = carry_len - pos;
-
-        (false, Ok(produced))
+    /// Drops the first `pos` bytes of the carry, which have been decoded.
+    fn take_carry(&mut self, pos: usize) {
+        self.carry.copy_within(pos..self.carry_len, 0);
+        self.carry_len -= pos;
     }
 
     /// Tries to finish the stream from the bytes already carried, as if the
-    /// caller had said that this was the last of the input, and undoes the
-    /// attempt when it turns out to want bytes that are not there.
+    /// caller had said that this was the last of the input, keeping what those
+    /// bytes decode to and undoing the symbol that wants bytes not there.
     ///
     /// Nothing in an LZMA1 stream says how long its payload is, so its last
     /// nineteen or fewer bytes can only be decoded against padding, and only
@@ -986,42 +1139,11 @@ impl LzmaCore {
             return Ok(Speculation::NotAttempted);
         }
 
-        let lzma_saved = lzma.try_clone()?;
-        let spec = lz.begin_speculation(SPEC_OUTPUT_MAX)?;
-        let rc_saved = self.rc;
-        let carry_saved = self.carry;
-        let carry_len_saved = self.carry_len;
-        let remaining_saved = limits.remaining_size;
-
-        let (read_padding, outcome) = self.decode_finish_tail(lz, lzma, limits);
-
-        // A stream that ends here must not still be owed a byte. The last
-        // normalisation of a pass is skipped when the input has nothing left to
-        // read it from, which under `Action::Finish` is the truth and here only
-        // the truth so far: the byte may still be on its way.
-        let owes_a_byte = limits.end_reached && self.rc.wants_byte();
-
-        match outcome {
-            Ok(produced) if !read_padding && !owes_a_byte => {
-                lz.commit_speculation(spec);
-                Ok(Speculation::Produced(produced))
-            }
-            outcome => {
-                lz.rollback_speculation(spec);
-                *lzma = lzma_saved;
-                self.carry = carry_saved;
-                self.carry_len = carry_len_saved;
-                self.rc = rc_saved;
-                limits.remaining_size = remaining_saved;
-                // False on the way in: the early return above saw to that.
-                limits.end_reached = false;
-
-                match outcome {
-                    Err(error) if !read_padding => Err(error),
-                    _ => Ok(Speculation::Failed),
-                }
-            }
-        }
+        Ok(match self.decode_finish_tail(lz, lzma, limits, true)? {
+            Tail::Done(produced) => Speculation::Produced(produced),
+            Tail::Short(0) => Speculation::Failed,
+            Tail::Short(produced) => Speculation::Partial(produced),
+        })
     }
 
     /// Puts out what is left of a repeat that an earlier pass had to cut short.
@@ -1049,7 +1171,7 @@ impl LzmaCore {
         }
 
         let rc_saved = self.rc;
-        let (pos, result) = self.run(lz, lzma, limits, &[0], 0, 0);
+        let (pos, result) = self.run(lz, lzma, limits, SliceRangeReader::new(&[0], 0, 0), None);
 
         if pos > 0 {
             // Only padding is there to normalise from, so the byte stays owed.
@@ -1077,19 +1199,20 @@ impl LzmaCore {
         Some(1)
     }
 
-    /// Decodes as much as fits from `buf`, returning the read position and
-    /// either the bytes decoded into the dictionary or why the decode failed.
+    /// Decodes as much as fits from `reader`, or `max_symbols` symbols when
+    /// given, returning the read position and either the bytes decoded into
+    /// the dictionary or why the decode failed.
     ///
     /// The position comes back even when the decode failed. A caller that
-    /// padded `buf` can then tell whether the padding was reached.
+    /// padded the reader's buffer can then tell whether the padding was
+    /// reached.
     fn run(
         &mut self,
         lz: &mut LzDecoder,
         lzma: &mut LzmaDecoder,
         limits: &mut Limits,
-        buf: &[u8],
-        real_len: usize,
-        symbol_limit: usize,
+        reader: SliceRangeReader<'_>,
+        max_symbols: Option<usize>,
     ) -> (usize, crate::Result<usize>) {
         let room = room_for(lz, limits.remaining_size);
         if room == 0 {
@@ -1101,9 +1224,12 @@ impl LzmaCore {
             return (0, Err(error));
         }
 
-        let mut rc =
-            RangeDecoder::from_parts(SliceRangeReader::new(buf, real_len, symbol_limit), self.rc);
-        let decode_result = lzma.decode(lz, &mut rc);
+        let buf_len = reader.len();
+        let mut rc = RangeDecoder::from_parts(reader, self.rc);
+        let decode_result = match max_symbols {
+            None => lzma.decode(lz, &mut rc),
+            Some(max_symbols) => lzma.decode_at_most(lz, &mut rc, max_symbols),
+        };
 
         // Must be read before anything can flush: `flush_partial` wraps `pos`
         // back to zero once the dictionary is full and fully drained.
@@ -1135,7 +1261,7 @@ impl LzmaCore {
         // The reported position is only ever compared against buffer bounds:
         // the assembly `decode_direct_bits` advances `pos` past what a symbol
         // logically needed and clamps its reads instead of signalling.
-        let pos = rc.inner().pos().min(buf.len());
+        let pos = rc.inner().pos().min(buf_len);
         self.rc = rc.state();
 
         if let Some(error) = error {
@@ -1884,6 +2010,10 @@ impl LzmaStream {
             if !*spec_blocked {
                 match core.speculate_finish_tail(lz, lzma, limits)? {
                     Speculation::Produced(decoded) => produced += decoded,
+                    Speculation::Partial(decoded) => {
+                        produced += decoded;
+                        *spec_blocked = true;
+                    }
                     Speculation::Failed => *spec_blocked = true,
                     Speculation::NotAttempted => {}
                 }

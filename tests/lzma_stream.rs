@@ -1648,3 +1648,96 @@ fn a_cut_stream_is_counted_before_the_error() {
         "output was written past total_out {produced}"
     );
 }
+
+/// A raw stream written without an end marker, decoded by a caller that does
+/// not know its size either. Nothing in the input says where it ends, so it
+/// never reaches `StreamEnd`, yet every byte it holds decodes: the last symbol
+/// is the last one that fits in the bytes that are there.
+#[test]
+fn a_stream_with_neither_end_marker_nor_size_decodes_in_full() {
+    let apache2 = std::fs::read(APACHE2).unwrap();
+    let repetitive = vec![b'x'; 20_000];
+    let inputs: [&[u8]; 3] = [b"Hello, world!\n", &apache2, &repetitive];
+
+    for data in inputs {
+        for preset in [0, 6] {
+            let (compressed, raw) = compress_raw(data, preset, false);
+            let unknown = RawProps {
+                uncomp_size: u64::MAX,
+                ..raw
+            };
+
+            for &chunk in CHUNK_SIZES {
+                for &out_size in OUTPUT_SIZES {
+                    let mut stream = raw_stream(unknown);
+                    let run =
+                        decode_run_only_chunked(&mut stream, &compressed, chunk, out_size).unwrap();
+                    assert!(
+                        run.unused.is_none(),
+                        "{} bytes, preset {preset}, chunk {chunk}, out {out_size}: ended",
+                        data.len()
+                    );
+                    assert!(
+                        run.decompressed == data,
+                        "{} bytes, preset {preset}, chunk {chunk}, out {out_size}: got {} bytes",
+                        data.len(),
+                        run.decompressed.len()
+                    );
+                }
+            }
+
+            // `Action::Finish` reports such a stream as cut short, since nothing
+            // in it says that it ended, but only once everything it holds has
+            // gone out.
+            let mut stream = raw_stream(unknown);
+            let mut output = vec![0u8; data.len() + 1];
+            let error = stream
+                .process(&compressed, &mut output, Action::Finish)
+                .expect_err("a stream that says nothing about its end must not end");
+            assert_eq!(error.kind(), ErrorKind::UnexpectedEof, "{error}");
+            assert_eq!(
+                stream.total_out() as usize,
+                data.len(),
+                "{} bytes, preset {preset}: finish",
+                data.len()
+            );
+            assert!(output[..data.len()] == *data);
+        }
+    }
+}
+
+/// The bytes a stream cut short does hold decode the same under `Action::Run`
+/// as under `Action::Finish`, and the same as the whole stream does.
+#[test]
+fn a_cut_stream_yields_the_same_output_under_run_and_finish() {
+    let data = std::fs::read(APACHE2).unwrap();
+    let (compressed, raw) = compress_raw(&data, 6, true);
+
+    for cut in (1..compressed.len()).step_by(37) {
+        let truncated = &compressed[..cut];
+
+        let mut stream = raw_stream(raw);
+        let run = decode_run_only_chunked(&mut stream, truncated, ENTIRE, 4096).unwrap();
+        assert!(run.unused.is_none(), "cut {cut}: ended on a partial stream");
+        let from_run = run.decompressed;
+
+        let mut stream = raw_stream(raw);
+        let mut output = vec![0u8; data.len()];
+        let error = stream
+            .process(truncated, &mut output, Action::Finish)
+            .expect_err("a cut stream must be rejected");
+        assert_eq!(error.kind(), ErrorKind::UnexpectedEof, "cut {cut}: {error}");
+        let from_finish = &output[..stream.total_out() as usize];
+
+        assert!(
+            data.starts_with(&from_run),
+            "cut {cut}: wrong output under Run"
+        );
+        assert!(
+            from_run == from_finish,
+            "cut {cut}: {} bytes under Run, {} under Finish",
+            from_run.len(),
+            from_finish.len()
+        );
+    }
+}
