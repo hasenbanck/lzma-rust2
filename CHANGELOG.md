@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Reject an LZMA2 chunk that may not follow the one before it as soon as its control byte arrives in `Lzma2Stream` and
+  `Lzma2Reader`, instead of reporting a stream cut short inside that chunk's header as truncated.
+
 ## 0.25.0 - 2026-11-01
 
 ### Added

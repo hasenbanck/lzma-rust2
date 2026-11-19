@@ -1022,6 +1022,111 @@ fn failed_stream_stays_failed() {
     assert!(!stream.is_finished());
 }
 
+/// Control bytes that may not follow an uncompressed chunk that reset the
+/// dictionary: an LZMA chunk that keeps properties nobody has set yet.
+static NEEDS_PROPS: &[u8] = &[0x80, 0x9F, 0xA0, 0xBF];
+
+/// Control bytes that may not open a stream: chunks that keep a dictionary
+/// nobody has reset yet.
+static NEEDS_DICT_RESET: &[u8] = &[0x02, 0x80, 0xA0, 0xC0, 0xDF];
+
+/// A chunk that may not follow what came before it is corrupt data, and the
+/// control byte alone says so. The verdict must not wait for the rest of the
+/// header: when the stream is cut short inside it, waiting turns corrupt data
+/// into a stream that merely ended early, and a caller that retries on
+/// `UnexpectedEof` waits for bytes that would not help.
+#[test]
+fn a_chunk_that_may_not_follow_is_rejected_on_its_control_byte() {
+    let after_reset = &HELLO[..HELLO.len() - 1];
+    let cases = NEEDS_PROPS
+        .iter()
+        .map(|&control| (after_reset, control))
+        .chain(NEEDS_DICT_RESET.iter().map(|&control| (&[][..], control)));
+
+    for (prefix, control) in cases {
+        // Up to the whole header minus its last byte, so the decoder never
+        // holds a complete header.
+        let header_len = if control >= 0xC0 {
+            6
+        } else if control >= 0x80 {
+            5
+        } else {
+            3
+        };
+        for cut in 1..header_len {
+            let stream = [prefix, &[control][..], &[0u8; 6][..cut - 1]].concat();
+
+            for action in [Action::Run, Action::Finish] {
+                let error = decode_with(Lzma2Stream::new(4096), &stream, action)
+                    .expect_err("a chunk that may not follow must be rejected");
+                assert_eq!(
+                    error.kind(),
+                    ErrorKind::InvalidInput,
+                    "control {control:#04x}, {cut} header bytes, {action:?}: reported as {:?}",
+                    error.kind()
+                );
+            }
+
+            // The same bytes one at a time: the error comes with the control
+            // byte, not with the byte after it.
+            let mut byte_by_byte = Lzma2Stream::new(4096);
+            let mut output = [0u8; 64];
+            let mut error = None;
+            for (pos, byte) in stream.iter().enumerate() {
+                match byte_by_byte.process(&[*byte], &mut output, Action::Run) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        assert_eq!(pos, prefix.len(), "control {control:#04x}: rejected late");
+                        error = Some(e);
+                        break;
+                    }
+                }
+            }
+            assert_eq!(
+                error.map(|e| e.kind()),
+                Some(ErrorKind::InvalidInput),
+                "control {control:#04x}, {cut} header bytes, byte by byte"
+            );
+
+            // The blocking reader reaches the same verdict on the same bytes.
+            let reader_error = Lzma2Reader::new(&stream[..], 4096, None)
+                .read_to_end(&mut Vec::new())
+                .expect_err("a chunk that may not follow must be rejected");
+            assert_eq!(
+                reader_error.kind(),
+                ErrorKind::InvalidInput,
+                "control {control:#04x}, {cut} header bytes, reader: reported as {:?}",
+                reader_error.kind()
+            );
+        }
+    }
+}
+
+/// Hands `compressed` over in one call with `action`, then keeps calling with
+/// no input until the stream ends or fails.
+fn decode_with(
+    mut stream: Lzma2Stream,
+    compressed: &[u8],
+    action: Action,
+) -> std::io::Result<Vec<u8>> {
+    let mut decompressed = Vec::new();
+    let mut output = [0u8; 64];
+    let mut input = compressed;
+
+    loop {
+        let result = stream.process(input, &mut output, action)?;
+        input = &input[result.bytes_consumed..];
+        decompressed.extend_from_slice(&output[..result.bytes_produced]);
+
+        if result.status == Status::StreamEnd {
+            return Ok(decompressed);
+        }
+        if result.bytes_consumed == 0 && result.bytes_produced == 0 {
+            return Err(std::io::Error::other("stalled"));
+        }
+    }
+}
+
 /// What a stream with the given dictionary size needs, in KiB: the decoder
 /// state plus the dictionary, and no range decoder buffer.
 fn stream_memory(dict_size: u32) -> u32 {
