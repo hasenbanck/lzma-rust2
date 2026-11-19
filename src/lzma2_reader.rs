@@ -182,6 +182,9 @@ impl<R: Read> Lzma2Reader<R> {
             return Err(error_invalid_input("corrupted input data (LZMA2:0)"));
         }
         if control >= 0x80 {
+            if control < 0xC0 && self.need_props {
+                return Err(error_invalid_input("corrupted input data (LZMA2:1)"));
+            }
             self.is_lzma_chunk = true;
             self.uncompressed_size = ((control & 0x1F) as usize) << 16;
             self.uncompressed_size += self.inner.read_u16_be()? as usize + 1;
@@ -191,8 +194,6 @@ impl<R: Read> Lzma2Reader<R> {
                 // Reset props and state (by re-creating it)
                 self.need_props = false;
                 self.decode_props()?;
-            } else if self.need_props {
-                return Err(error_invalid_input("corrupted input data (LZMA2:1)"));
             } else if control >= 0xA0 {
                 // Reset state
                 if let Some(l) = self.lzma.as_mut() {
@@ -924,6 +925,16 @@ impl Lzma2Stream {
     }
 
     fn process_compressed_chunk_header(&mut self, control: u8) -> crate::Result<()> {
+        // The control byte alone says whether the chunk may follow what came
+        // before it, so a chunk that may not is rejected before the rest of its
+        // header is waited for.
+        if control < 0xE0 && self.need_dict_reset {
+            return Err(error_invalid_input("corrupted input data (LZMA2:0)"));
+        }
+        if control < 0xC0 && self.need_props {
+            return Err(error_invalid_input("corrupted input data (LZMA2:1)"));
+        }
+
         let needed = if control >= 0xC0 { 6 } else { 5 };
         if self.accum.len() < needed {
             self.accum_needed = needed;
@@ -934,8 +945,6 @@ impl Lzma2Stream {
             self.need_props = true;
             self.need_dict_reset = false;
             self.lz.reset();
-        } else if self.need_dict_reset {
-            return Err(error_invalid_input("corrupted input data (LZMA2:0)"));
         }
 
         let mut uncompressed_size = ((control & 0x1F) as usize) << 16;
@@ -946,8 +955,6 @@ impl Lzma2Stream {
         if control >= 0xC0 {
             self.need_props = false;
             self.lzma = Some(decode_lzma2_props(self.accum[5])?);
-        } else if self.need_props {
-            return Err(error_invalid_input("corrupted input data (LZMA2:1)"));
         } else if control >= 0xA0 {
             if let Some(l) = self.lzma.as_mut() {
                 l.reset();
@@ -984,6 +991,10 @@ impl Lzma2Stream {
     }
 
     fn process_uncompressed_chunk_header(&mut self, control: u8) -> crate::Result<()> {
+        if control != 0x01 && self.need_dict_reset {
+            return Err(error_invalid_input("corrupted input data (LZMA2:0)"));
+        }
+
         if self.accum.len() < 3 {
             self.accum_needed = 3;
             return Ok(());
@@ -993,8 +1004,6 @@ impl Lzma2Stream {
             self.need_props = true;
             self.need_dict_reset = false;
             self.lz.reset();
-        } else if self.need_dict_reset {
-            return Err(error_invalid_input("corrupted input data (LZMA2:0)"));
         }
 
         let uncompressed_size = u16::from_be_bytes([self.accum[1], self.accum[2]]) as usize + 1;
