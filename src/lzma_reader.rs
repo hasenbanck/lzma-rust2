@@ -1049,10 +1049,10 @@ impl LzmaCore {
                 ),
                 Some(1),
             );
-            if pos + step > carry_len {
+            let end = pos + step;
+            if end > carry_len {
                 break true;
             }
-            pos += step;
             let decoded = match result {
                 Ok(decoded) => decoded,
                 Err(error) => {
@@ -1063,8 +1063,17 @@ impl LzmaCore {
             // Only the end of payload marker decodes into nothing, and that
             // ends the stream; a pass that made nothing had no room.
             if decoded == 0 {
+                pos = end;
                 break false;
             }
+            // A symbol stands only once the byte its range coder is owed is in
+            // hand. The encoder writes that byte right after the symbol, before
+            // the bytes that flush the coder, so every symbol of the stream has
+            // one; a symbol decoded from the flush alone need not.
+            if !limits.end_reached && self.rc.wants_byte() && end >= carry_len {
+                break true;
+            }
+            pos = end;
             produced += decoded;
             symbols += 1;
             if limits.end_reached || !lz.has_space() {

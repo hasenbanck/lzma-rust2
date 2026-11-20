@@ -1657,7 +1657,8 @@ fn a_cut_stream_is_counted_before_the_error() {
 fn a_stream_with_neither_end_marker_nor_size_decodes_in_full() {
     let apache2 = std::fs::read(APACHE2).unwrap();
     let repetitive = vec![b'x'; 20_000];
-    let inputs: [&[u8]; 3] = [b"Hello, world!\n", &apache2, &repetitive];
+    let mixed: Vec<u8> = (0..39u32).map(|i| (i * 37) as u8).collect();
+    let inputs: [&[u8]; 4] = [b"Hello, world!\n", &apache2, &repetitive, &mixed];
 
     for data in inputs {
         for preset in [0, 6] {
@@ -1739,5 +1740,72 @@ fn a_cut_stream_yields_the_same_output_under_run_and_finish() {
             from_run.len(),
             from_finish.len()
         );
+    }
+}
+
+#[test]
+fn a_stream_without_end_marker_and_size_gains_no_bytes() {
+    let data: Vec<u8> = (0..39u32).map(|i| (i * 37) as u8).collect();
+    let (compressed, raw) = compress_raw(&data, 6, false);
+    let unknown = RawProps {
+        uncomp_size: u64::MAX,
+        ..raw
+    };
+
+    let mut stream = raw_stream(unknown);
+    let mut output = [0u8; 100];
+    let result = stream
+        .process(&compressed, &mut output, Action::Run)
+        .unwrap();
+    assert!(
+        result.bytes_produced <= data.len(),
+        "{} bytes in, {} bytes out, extra: {:?}",
+        data.len(),
+        result.bytes_produced,
+        &output[data.len()..result.bytes_produced]
+    );
+}
+
+/// What tells the stream of `data` from the stream of `data` plus one more
+/// byte is the byte the range coder is owed after the extra literal: the
+/// encoder writes it right after the symbol, before the flush. The decoder
+/// keeps a tail symbol only once that byte is in hand, so each stream decodes
+/// to its own input and neither gains nor loses a byte.
+#[test]
+fn a_stream_without_end_marker_and_size_ends_where_its_bytes_do() {
+    let data: Vec<u8> = (0..39u32).map(|i| (i * 37) as u8).collect();
+    let mut longer = data.clone();
+    longer.push(0);
+
+    for preset in [0, 6] {
+        let (compressed, raw) = compress_raw(&data, preset, false);
+        let (compressed_longer, _) = compress_raw(&longer, preset, false);
+        assert!(
+            compressed_longer.starts_with(&compressed)
+                && compressed_longer.len() == compressed.len() + 1,
+            "preset {preset}: the two streams were expected to differ by one trailing byte"
+        );
+
+        for (input, expected) in [(&compressed, &data), (&compressed_longer, &longer)] {
+            let unknown = RawProps {
+                uncomp_size: u64::MAX,
+                ..raw
+            };
+            for &chunk in CHUNK_SIZES {
+                let mut stream = raw_stream(unknown);
+                let run = decode_run_only_chunked(&mut stream, input, chunk, 4096).unwrap();
+                assert!(
+                    run.unused.is_none(),
+                    "preset {preset}, chunk {chunk}: ended"
+                );
+                assert!(
+                    run.decompressed == *expected,
+                    "preset {preset}, chunk {chunk}: {} bytes in, {} bytes out for {} encoded",
+                    input.len(),
+                    run.decompressed.len(),
+                    expected.len()
+                );
+            }
+        }
     }
 }
