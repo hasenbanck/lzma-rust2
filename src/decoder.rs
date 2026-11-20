@@ -65,21 +65,7 @@ impl LzmaDecoder {
     ) -> crate::Result<()> {
         lz.repeat_pending()?;
         while lz.has_space() && rc.can_start_symbol() {
-            let pos_state = lz.get_pos() as u32 & self.coder.pos_mask;
-            let i = self.coder.state.get() as usize;
-            let probs = &mut self.coder.is_match[i];
-            let bit = rc.decode_bit(&mut probs[pos_state as usize]);
-            if bit == 0 {
-                self.literal_decoder.decode(&mut self.coder, lz, rc)?;
-            } else {
-                let index = self.coder.state.get() as usize;
-                let len = if rc.decode_bit(&mut self.coder.is_rep[index]) == 0 {
-                    self.decode_match(pos_state, rc)
-                } else {
-                    self.decode_rep_match(pos_state, rc)
-                };
-                lz.repeat(self.coder.reps[0] as _, len as _)?;
-            }
+            self.decode_symbol(lz, rc)?;
         }
         // Normalise only if we stopped because the output is full. If we
         // stopped because the input ran out, `rc` has to stay as it is, so that
@@ -88,6 +74,49 @@ impl LzmaDecoder {
         // branch, just like before.
         if !lz.has_space() && rc.can_normalize() {
             rc.normalize();
+        }
+        Ok(())
+    }
+
+    /// Like [`Self::decode`], but stops after `max_symbols` symbols.
+    pub(crate) fn decode_at_most<R: RangeReader>(
+        &mut self,
+        lz: &mut LzDecoder,
+        rc: &mut RangeDecoder<R>,
+        max_symbols: usize,
+    ) -> crate::Result<()> {
+        lz.repeat_pending()?;
+        let mut left = max_symbols;
+        while left > 0 && lz.has_space() && rc.can_start_symbol() {
+            self.decode_symbol(lz, rc)?;
+            left -= 1;
+        }
+        if !lz.has_space() && rc.can_normalize() {
+            rc.normalize();
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn decode_symbol<R: RangeReader>(
+        &mut self,
+        lz: &mut LzDecoder,
+        rc: &mut RangeDecoder<R>,
+    ) -> crate::Result<()> {
+        let pos_state = lz.get_pos() as u32 & self.coder.pos_mask;
+        let i = self.coder.state.get() as usize;
+        let probs = &mut self.coder.is_match[i];
+        let bit = rc.decode_bit(&mut probs[pos_state as usize]);
+        if bit == 0 {
+            self.literal_decoder.decode(&mut self.coder, lz, rc)?;
+        } else {
+            let index = self.coder.state.get() as usize;
+            let len = if rc.decode_bit(&mut self.coder.is_rep[index]) == 0 {
+                self.decode_match(pos_state, rc)
+            } else {
+                self.decode_rep_match(pos_state, rc)
+            };
+            lz.repeat(self.coder.reps[0] as _, len as _)?;
         }
         Ok(())
     }

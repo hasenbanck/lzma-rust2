@@ -513,6 +513,11 @@ impl<'a> SliceRangeReader<'a> {
     pub(crate) fn pos(&self) -> usize {
         self.pos
     }
+
+    /// The length of the buffer, padding included.
+    pub(crate) fn len(&self) -> usize {
+        self.buf.len()
+    }
 }
 
 impl RangeReader for SliceRangeReader<'_> {

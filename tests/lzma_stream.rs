@@ -1648,3 +1648,164 @@ fn a_cut_stream_is_counted_before_the_error() {
         "output was written past total_out {produced}"
     );
 }
+
+/// A raw stream written without an end marker, decoded by a caller that does
+/// not know its size either. Nothing in the input says where it ends, so it
+/// never reaches `StreamEnd`, yet every byte it holds decodes: the last symbol
+/// is the last one that fits in the bytes that are there.
+#[test]
+fn a_stream_with_neither_end_marker_nor_size_decodes_in_full() {
+    let apache2 = std::fs::read(APACHE2).unwrap();
+    let repetitive = vec![b'x'; 20_000];
+    let mixed: Vec<u8> = (0..39u32).map(|i| (i * 37) as u8).collect();
+    let inputs: [&[u8]; 4] = [b"Hello, world!\n", &apache2, &repetitive, &mixed];
+
+    for data in inputs {
+        for preset in [0, 6] {
+            let (compressed, raw) = compress_raw(data, preset, false);
+            let unknown = RawProps {
+                uncomp_size: u64::MAX,
+                ..raw
+            };
+
+            for &chunk in CHUNK_SIZES {
+                for &out_size in OUTPUT_SIZES {
+                    let mut stream = raw_stream(unknown);
+                    let run =
+                        decode_run_only_chunked(&mut stream, &compressed, chunk, out_size).unwrap();
+                    assert!(
+                        run.unused.is_none(),
+                        "{} bytes, preset {preset}, chunk {chunk}, out {out_size}: ended",
+                        data.len()
+                    );
+                    assert!(
+                        run.decompressed == data,
+                        "{} bytes, preset {preset}, chunk {chunk}, out {out_size}: got {} bytes",
+                        data.len(),
+                        run.decompressed.len()
+                    );
+                }
+            }
+
+            // `Action::Finish` reports such a stream as cut short, since nothing
+            // in it says that it ended, but only once everything it holds has
+            // gone out.
+            let mut stream = raw_stream(unknown);
+            let mut output = vec![0u8; data.len() + 1];
+            let error = stream
+                .process(&compressed, &mut output, Action::Finish)
+                .expect_err("a stream that says nothing about its end must not end");
+            assert_eq!(error.kind(), ErrorKind::UnexpectedEof, "{error}");
+            assert_eq!(
+                stream.total_out() as usize,
+                data.len(),
+                "{} bytes, preset {preset}: finish",
+                data.len()
+            );
+            assert!(output[..data.len()] == *data);
+        }
+    }
+}
+
+/// The bytes a stream cut short does hold decode the same under `Action::Run`
+/// as under `Action::Finish`, and the same as the whole stream does.
+#[test]
+fn a_cut_stream_yields_the_same_output_under_run_and_finish() {
+    let data = std::fs::read(APACHE2).unwrap();
+    let (compressed, raw) = compress_raw(&data, 6, true);
+
+    for cut in (1..compressed.len()).step_by(37) {
+        let truncated = &compressed[..cut];
+
+        let mut stream = raw_stream(raw);
+        let run = decode_run_only_chunked(&mut stream, truncated, ENTIRE, 4096).unwrap();
+        assert!(run.unused.is_none(), "cut {cut}: ended on a partial stream");
+        let from_run = run.decompressed;
+
+        let mut stream = raw_stream(raw);
+        let mut output = vec![0u8; data.len()];
+        let error = stream
+            .process(truncated, &mut output, Action::Finish)
+            .expect_err("a cut stream must be rejected");
+        assert_eq!(error.kind(), ErrorKind::UnexpectedEof, "cut {cut}: {error}");
+        let from_finish = &output[..stream.total_out() as usize];
+
+        assert!(
+            data.starts_with(&from_run),
+            "cut {cut}: wrong output under Run"
+        );
+        assert!(
+            from_run == from_finish,
+            "cut {cut}: {} bytes under Run, {} under Finish",
+            from_run.len(),
+            from_finish.len()
+        );
+    }
+}
+
+#[test]
+fn a_stream_without_end_marker_and_size_gains_no_bytes() {
+    let data: Vec<u8> = (0..39u32).map(|i| (i * 37) as u8).collect();
+    let (compressed, raw) = compress_raw(&data, 6, false);
+    let unknown = RawProps {
+        uncomp_size: u64::MAX,
+        ..raw
+    };
+
+    let mut stream = raw_stream(unknown);
+    let mut output = [0u8; 100];
+    let result = stream
+        .process(&compressed, &mut output, Action::Run)
+        .unwrap();
+    assert!(
+        result.bytes_produced <= data.len(),
+        "{} bytes in, {} bytes out, extra: {:?}",
+        data.len(),
+        result.bytes_produced,
+        &output[data.len()..result.bytes_produced]
+    );
+}
+
+/// What tells the stream of `data` from the stream of `data` plus one more
+/// byte is the byte the range coder is owed after the extra literal: the
+/// encoder writes it right after the symbol, before the flush. The decoder
+/// keeps a tail symbol only once that byte is in hand, so each stream decodes
+/// to its own input and neither gains nor loses a byte.
+#[test]
+fn a_stream_without_end_marker_and_size_ends_where_its_bytes_do() {
+    let data: Vec<u8> = (0..39u32).map(|i| (i * 37) as u8).collect();
+    let mut longer = data.clone();
+    longer.push(0);
+
+    for preset in [0, 6] {
+        let (compressed, raw) = compress_raw(&data, preset, false);
+        let (compressed_longer, _) = compress_raw(&longer, preset, false);
+        assert!(
+            compressed_longer.starts_with(&compressed)
+                && compressed_longer.len() == compressed.len() + 1,
+            "preset {preset}: the two streams were expected to differ by one trailing byte"
+        );
+
+        for (input, expected) in [(&compressed, &data), (&compressed_longer, &longer)] {
+            let unknown = RawProps {
+                uncomp_size: u64::MAX,
+                ..raw
+            };
+            for &chunk in CHUNK_SIZES {
+                let mut stream = raw_stream(unknown);
+                let run = decode_run_only_chunked(&mut stream, input, chunk, 4096).unwrap();
+                assert!(
+                    run.unused.is_none(),
+                    "preset {preset}, chunk {chunk}: ended"
+                );
+                assert!(
+                    run.decompressed == *expected,
+                    "preset {preset}, chunk {chunk}: {} bytes in, {} bytes out for {} encoded",
+                    input.len(),
+                    run.decompressed.len(),
+                    expected.len()
+                );
+            }
+        }
+    }
+}
