@@ -2,7 +2,7 @@ use std::{
     io::{self, Write},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
         mpsc::SyncSender,
     },
 };
@@ -21,6 +21,7 @@ struct WorkUnit {
     data: Vec<u8>,
     options: Lzma2Options,
     cancellation: Option<Arc<AtomicBool>>,
+    progress: Option<Arc<AtomicUsize>>,
 }
 
 /// A multi-threaded LZMA2 compressor.
@@ -31,6 +32,7 @@ pub struct Lzma2WriterMt<W: Write> {
     current_work_unit: Vec<u8>,
     work_pool: WorkPool<WorkUnit, Vec<u8>>,
     cancellation: Option<Arc<AtomicBool>>,
+    progress: Option<Arc<AtomicUsize>>,
 }
 
 impl<W: Write> Lzma2WriterMt<W> {
@@ -63,6 +65,7 @@ impl<W: Write> Lzma2WriterMt<W> {
                 worker_thread_logic,
             ),
             cancellation: None,
+            progress: None,
         })
     }
 
@@ -81,6 +84,24 @@ impl<W: Write> Lzma2WriterMt<W> {
         }
         self.work_pool.set_cancellation(Arc::clone(&flag));
         self.cancellation = Some(flag);
+        Ok(())
+    }
+
+    /// Sets a shared counter of the uncompressed bytes the workers have compressed so far.
+    ///
+    /// Input is buffered in chunks before the workers compress it, so the bytes passed to `write`
+    /// run ahead of the actual work. The workers add to this counter as they encode instead, and
+    /// it reaches the total input once `finish` returns. On 32-bit targets it wraps after 4 GiB.
+    ///
+    /// The counter can be replaced before writing input. Calling this method after
+    /// writing input returns [`io::ErrorKind::InvalidInput`] and keeps the existing counter.
+    pub fn set_progress(&mut self, counter: Arc<AtomicUsize>) -> io::Result<()> {
+        if !self.current_work_unit.is_empty() || self.work_pool.next_index_to_dispatch() != 0 {
+            return Err(error_invalid_input(
+                "progress must be configured before writing input",
+            ));
+        }
+        self.progress = Some(counter);
         Ok(())
     }
 
@@ -116,6 +137,7 @@ impl<W: Write> Lzma2WriterMt<W> {
                 data,
                 options: single_chunk_options.clone(),
                 cancellation: self.cancellation.clone(),
+                progress: self.progress.clone(),
             })
         })?;
 
@@ -263,6 +285,7 @@ fn encode_work_unit<W: Write>(
         data,
         options,
         cancellation,
+        progress,
     } = work_unit;
 
     let should_continue = || {
@@ -286,6 +309,9 @@ fn encode_work_unit<W: Write>(
             return Ok(None);
         }
         writer.write_all(chunk)?;
+        if let Some(progress) = &progress {
+            progress.fetch_add(chunk.len(), Ordering::Relaxed);
+        }
     }
     if !writer.flush_with_check(should_continue)? {
         return Ok(None);
@@ -462,6 +488,7 @@ mod tests {
             data,
             options,
             cancellation,
+            progress: None,
         }
     }
 

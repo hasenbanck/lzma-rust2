@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Add `set_progress` to `Lzma2WriterMt` to count the uncompressed bytes its workers have compressed.
+- Add `set_progress` to `XzWriterMt` to count the uncompressed bytes its workers have compressed.
+
 ### Fixed
 
 - Reject an LZMA2 chunk that may not follow the one before it as soon as its control byte arrives in `Lzma2Stream` and

@@ -2,7 +2,7 @@ use std::{
     io::{self, Write},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
         mpsc::SyncSender,
     },
 };
@@ -27,6 +27,7 @@ struct WorkUnit {
     uncompressed_data: Vec<u8>,
     lzma_options: LzmaOptions,
     check_type: CheckType,
+    progress: Option<Arc<AtomicUsize>>,
 }
 
 /// A result unit from a worker thread.
@@ -48,6 +49,7 @@ pub struct XzWriterMt<W: Write> {
     checksum_calculator: ChecksumCalculator,
     header_written: bool,
     total_uncompressed_pos: u64,
+    progress: Option<Arc<AtomicUsize>>,
 }
 
 impl<W: Write> XzWriterMt<W> {
@@ -91,7 +93,26 @@ impl<W: Write> XzWriterMt<W> {
             checksum_calculator,
             header_written: false,
             total_uncompressed_pos: 0,
+            progress: None,
         })
+    }
+
+    /// Sets a shared counter of the uncompressed bytes the workers have compressed so far.
+    ///
+    /// Input is buffered in blocks before the workers compress it, so the bytes passed to `write`
+    /// run ahead of the actual work. The workers add to this counter as they encode instead, and
+    /// it reaches the total input once `finish` returns. On 32-bit targets it wraps after 4 GiB.
+    ///
+    /// The counter can be replaced before writing input. Calling this method after
+    /// writing input returns [`io::ErrorKind::InvalidInput`] and keeps the existing counter.
+    pub fn set_progress(&mut self, counter: Arc<AtomicUsize>) -> Result<()> {
+        if !self.current_work_unit.is_empty() || self.work_pool.next_index_to_dispatch() != 0 {
+            return Err(error_invalid_input(
+                "progress must be configured before writing input",
+            ));
+        }
+        self.progress = Some(counter);
+        Ok(())
     }
 
     fn write_stream_header(&mut self) -> Result<()> {
@@ -152,6 +173,7 @@ impl<W: Write> XzWriterMt<W> {
                 uncompressed_data: data,
                 lzma_options: self.options.lzma_options.clone(),
                 check_type: self.options.check_type,
+                progress: self.progress.clone(),
             })
         })?;
 
@@ -340,7 +362,17 @@ fn worker_thread_logic(
         };
 
         let mut writer = Lzma2Writer::new(&mut compressed_buffer, options);
-        let result = match writer.write_all(&work_unit.uncompressed_data) {
+        // Feed the encoder 64 KiB at a time, like `Lzma2WriterMt`, so that progress rises
+        // while the block is encoded. The compressed output is the same as a single write.
+        let mut chunks = work_unit.uncompressed_data.chunks(64 * 1024);
+        let write_result = chunks.try_for_each(|chunk| -> Result<()> {
+            writer.write_all(chunk)?;
+            if let Some(progress) = &work_unit.progress {
+                progress.fetch_add(chunk.len(), Ordering::Relaxed);
+            }
+            Ok(())
+        });
+        let result = match write_result {
             Ok(_) => match writer.finish() {
                 Ok(_) => ResultUnit {
                     compressed_data: compressed_buffer,

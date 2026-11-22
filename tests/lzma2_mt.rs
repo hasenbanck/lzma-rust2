@@ -1,7 +1,10 @@
 use std::{
     io::{Cursor, Read, Write},
     num::{NonZero, NonZeroU64},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use lzma_rust2::{Lzma2Options, Lzma2Reader, Lzma2ReaderMt, Lzma2WriterMt};
@@ -279,4 +282,24 @@ fn empty_input_decodes_to_nothing() {
         .recv_timeout(std::time::Duration::from_secs(10))
         .expect("the reader did not finish");
     assert_eq!(result.unwrap(), 0);
+}
+
+#[test]
+fn progress_counts_every_input_byte() {
+    let data = &std::fs::read(PG100).unwrap()[..1024 * 1024];
+    let mut options = Lzma2Options::with_preset(1);
+    options.lzma_options.dict_size = 64 * 1024;
+    options.set_chunk_size(NonZeroU64::new(64 * 1024));
+
+    let progress = Arc::new(AtomicUsize::new(0));
+    let mut writer = Lzma2WriterMt::new(Vec::new(), options.clone(), 4).unwrap();
+    writer.set_progress(Arc::clone(&progress)).unwrap();
+    writer.write_all(data).unwrap();
+    let with_progress = writer.finish().unwrap();
+    assert_eq!(progress.load(Ordering::Relaxed), data.len());
+
+    // Counting must not change the compressed output.
+    let mut writer = Lzma2WriterMt::new(Vec::new(), options, 4).unwrap();
+    writer.write_all(data).unwrap();
+    assert!(writer.finish().unwrap() == with_progress);
 }
