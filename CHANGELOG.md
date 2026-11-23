@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Add `set_progress` to `Lzma2WriterMt`, `XzWriterMt` and `LzipWriterMt` to count the uncompressed bytes passed
+  to the encoder, on targets with 64-bit atomics.
+
 ### Fixed
 
 - Reject an LZMA2 chunk that may not follow the one before it as soon as its control byte arrives in `Lzma2Stream` and
