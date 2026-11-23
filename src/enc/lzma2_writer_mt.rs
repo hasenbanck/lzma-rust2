@@ -1,8 +1,10 @@
+#[cfg(target_has_atomic = "64")]
+use std::sync::atomic::AtomicU64;
 use std::{
     io::{self, Write},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::SyncSender,
     },
 };
@@ -21,7 +23,8 @@ struct WorkUnit {
     data: Vec<u8>,
     options: Lzma2Options,
     cancellation: Option<Arc<AtomicBool>>,
-    progress: Option<Arc<AtomicUsize>>,
+    #[cfg(target_has_atomic = "64")]
+    progress: Option<Arc<AtomicU64>>,
 }
 
 /// A multi-threaded LZMA2 compressor.
@@ -32,7 +35,8 @@ pub struct Lzma2WriterMt<W: Write> {
     current_work_unit: Vec<u8>,
     work_pool: WorkPool<WorkUnit, Vec<u8>>,
     cancellation: Option<Arc<AtomicBool>>,
-    progress: Option<Arc<AtomicUsize>>,
+    #[cfg(target_has_atomic = "64")]
+    progress: Option<Arc<AtomicU64>>,
 }
 
 impl<W: Write> Lzma2WriterMt<W> {
@@ -65,6 +69,7 @@ impl<W: Write> Lzma2WriterMt<W> {
                 worker_thread_logic,
             ),
             cancellation: None,
+            #[cfg(target_has_atomic = "64")]
             progress: None,
         })
     }
@@ -87,15 +92,14 @@ impl<W: Write> Lzma2WriterMt<W> {
         Ok(())
     }
 
-    /// Sets a shared counter of the uncompressed bytes the workers have compressed so far.
+    /// Sets a shared counter for the uncompressed bytes passed to the encoder.
     ///
-    /// Input is buffered in chunks before the workers compress it, so the bytes passed to `write`
-    /// run ahead of the actual work. The workers add to this counter as they encode instead, and
-    /// it reaches the total input once `finish` returns. On 32-bit targets it wraps after 4 GiB.
+    /// The writer only adds to the counter. It equals the total input after a successful `finish`.
     ///
-    /// The counter can be replaced before writing input. Calling this method after
+    /// The counter should be replaced before writing input. Calling this method after
     /// writing input returns [`io::ErrorKind::InvalidInput`] and keeps the existing counter.
-    pub fn set_progress(&mut self, counter: Arc<AtomicUsize>) -> io::Result<()> {
+    #[cfg(target_has_atomic = "64")]
+    pub fn set_progress(&mut self, counter: Arc<AtomicU64>) -> io::Result<()> {
         if !self.current_work_unit.is_empty() || self.work_pool.next_index_to_dispatch() != 0 {
             return Err(error_invalid_input(
                 "progress must be configured before writing input",
@@ -137,6 +141,7 @@ impl<W: Write> Lzma2WriterMt<W> {
                 data,
                 options: single_chunk_options.clone(),
                 cancellation: self.cancellation.clone(),
+                #[cfg(target_has_atomic = "64")]
                 progress: self.progress.clone(),
             })
         })?;
@@ -285,6 +290,7 @@ fn encode_work_unit<W: Write>(
         data,
         options,
         cancellation,
+        #[cfg(target_has_atomic = "64")]
         progress,
     } = work_unit;
 
@@ -309,8 +315,9 @@ fn encode_work_unit<W: Write>(
             return Ok(None);
         }
         writer.write_all(chunk)?;
+        #[cfg(target_has_atomic = "64")]
         if let Some(progress) = &progress {
-            progress.fetch_add(chunk.len(), Ordering::Relaxed);
+            progress.fetch_add(chunk.len() as u64, Ordering::Relaxed);
         }
     }
     if !writer.flush_with_check(should_continue)? {
@@ -488,6 +495,7 @@ mod tests {
             data,
             options,
             cancellation,
+            #[cfg(target_has_atomic = "64")]
             progress: None,
         }
     }

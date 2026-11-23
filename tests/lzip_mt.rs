@@ -372,3 +372,41 @@ fn round_trip_pg6800_8() {
 fn round_trip_pg6800_9() {
     test_round_trip(PG6800, 9);
 }
+
+#[cfg(target_has_atomic = "64")]
+#[test]
+fn progress_counts_every_input_byte() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let data = &std::fs::read(PG100).unwrap()[..1024 * 1024];
+    let mut options = LzipOptions::with_preset(1);
+    options.lzma_options.dict_size = 64 * 1024;
+    options.set_member_size(NonZeroU64::new(64 * 1024));
+
+    let progress = Arc::new(AtomicU64::new(0));
+    let mut writer = LzipWriterMt::new(Vec::new(), options.clone(), 4).unwrap();
+    writer.set_progress(Arc::clone(&progress)).unwrap();
+    writer.write_all(data).unwrap();
+    let with_progress = writer.finish().unwrap();
+    assert_eq!(progress.load(Ordering::Relaxed), data.len() as u64);
+
+    // Counting must not change the compressed output.
+    let mut writer = LzipWriterMt::new(Vec::new(), options, 4).unwrap();
+    writer.write_all(data).unwrap();
+    assert!(writer.finish().unwrap() == with_progress);
+}
+
+#[cfg(target_has_atomic = "64")]
+#[test]
+fn progress_cannot_be_set_after_writing_input() {
+    use std::sync::atomic::AtomicU64;
+
+    let mut options = LzipOptions::with_preset(1);
+    options.set_member_size(NonZeroU64::new(64 * 1024));
+    let mut writer = LzipWriterMt::new(Vec::new(), options, 1).unwrap();
+    writer.write_all(b"input").unwrap();
+    let error = writer
+        .set_progress(Arc::new(AtomicU64::new(0)))
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}

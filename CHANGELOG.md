@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add `set_progress` to `Lzma2WriterMt` to count the uncompressed bytes its workers have compressed.
-- Add `set_progress` to `XzWriterMt` to count the uncompressed bytes its workers have compressed.
+- Add `set_progress` to `Lzma2WriterMt`, `XzWriterMt` and `LzipWriterMt` to count the uncompressed bytes passed
+  to the encoder, on targets with 64-bit atomics.
 
 ### Fixed
 

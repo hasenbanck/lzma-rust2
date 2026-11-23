@@ -1,3 +1,5 @@
+#[cfg(target_has_atomic = "64")]
+use std::sync::atomic::AtomicU64;
 use std::{
     io::{self, Cursor, Write},
     sync::{
@@ -19,6 +21,8 @@ use crate::{
 struct WorkUnit {
     data: Vec<u8>,
     options: LzipOptions,
+    #[cfg(target_has_atomic = "64")]
+    progress: Option<Arc<AtomicU64>>,
 }
 
 /// A multi-threaded LZIP compressor.
@@ -30,6 +34,8 @@ pub struct LzipWriterMt<W: Write> {
     work_pool: WorkPool<WorkUnit, Vec<u8>>,
     current_chunk: Cursor<Vec<u8>>,
     pending_write_data: Vec<u8>,
+    #[cfg(target_has_atomic = "64")]
+    progress: Option<Arc<AtomicU64>>,
 }
 
 impl<W: Write> LzipWriterMt<W> {
@@ -63,7 +69,26 @@ impl<W: Write> LzipWriterMt<W> {
             ),
             current_chunk: Cursor::new(Vec::new()),
             pending_write_data: Vec::new(),
+            #[cfg(target_has_atomic = "64")]
+            progress: None,
         })
+    }
+
+    /// Sets a shared counter for the uncompressed bytes passed to the encoder.
+    ///
+    /// The writer only adds to the counter. It equals the total input after a successful `finish`.
+    ///
+    /// The counter should be replaced before writing input. Calling this method after
+    /// writing input returns [`io::ErrorKind::InvalidInput`] and keeps the existing counter.
+    #[cfg(target_has_atomic = "64")]
+    pub fn set_progress(&mut self, counter: Arc<AtomicU64>) -> io::Result<()> {
+        if !self.current_work_unit.is_empty() || self.work_pool.next_index_to_dispatch() != 0 {
+            return Err(error_invalid_input(
+                "progress must be configured before writing input",
+            ));
+        }
+        self.progress = Some(counter);
+        Ok(())
     }
 
     /// Sends the current work unit to the workers, writing any available results.
@@ -93,6 +118,8 @@ impl<W: Write> LzipWriterMt<W> {
             Ok(WorkUnit {
                 data,
                 options: single_member_options.clone(),
+                #[cfg(target_has_atomic = "64")]
+                progress: self.progress.clone(),
             })
         })?;
 
@@ -216,7 +243,18 @@ fn worker_thread_logic(
         let mut compressed_buffer = Vec::new();
 
         let mut writer = LzipWriter::new(&mut compressed_buffer, work_unit.options);
-        let result = match writer.write_all(&work_unit.data) {
+        // Feed the encoder 64 KiB at a time, like `Lzma2WriterMt`, so that progress rises
+        // while the work unit is encoded. The compressed output is the same as a single write.
+        let mut chunks = work_unit.data.chunks(64 * 1024);
+        let write_result = chunks.try_for_each(|chunk| -> io::Result<()> {
+            writer.write_all(chunk)?;
+            #[cfg(target_has_atomic = "64")]
+            if let Some(progress) = &work_unit.progress {
+                progress.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            }
+            Ok(())
+        });
+        let result = match write_result {
             Ok(_) => match writer.finish() {
                 Ok(_) => compressed_buffer,
                 Err(error) => {
