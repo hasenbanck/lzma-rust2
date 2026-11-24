@@ -413,7 +413,7 @@ fn progress_cannot_be_set_after_writing_input() {
 
 #[test]
 fn round_trip_custom_dictionary() {
-    let data = std::fs::read("tests/data/pg100.txt").unwrap();
+    let data = std::fs::read(PG100).unwrap();
     let mut options = LzipOptions::with_preset(0);
     options.lzma_options.dict_size = 5119;
     options.member_size = NonZeroU64::new(data.len() as u64);

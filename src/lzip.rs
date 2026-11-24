@@ -158,18 +158,8 @@ fn encode_dict_size(dict_size: u32) -> Result<u8> {
         let diff = base_size - dict_size;
         let fraction_unit = base_size >> 4; // 1/16 of base_size
 
-        if fraction_unit > 0 {
-            // Round up.
-            fraction_num = diff.div_ceil(fraction_unit);
-            if fraction_num > 7 {
-                // Need to use a larger base.
-                base_log2 += 1;
-                if base_log2 > 29 {
-                    return Err(error_invalid_input("dictionary size too large"));
-                }
-                fraction_num = 0;
-            }
-        }
+        // Round down so the encoded dictionary is at least dict_size.
+        fraction_num = diff / fraction_unit;
     }
 
     Ok(((fraction_num << 5) | (base_log2 & 0x1F)) as u8)
