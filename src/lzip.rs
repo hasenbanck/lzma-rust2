@@ -284,5 +284,22 @@ mod tests {
 
         assert!(encode_dict_size(1024).is_err());
         assert!(encode_dict_size(1024 * 1024 * 1024).is_err());
+
+        for dict_size in MIN_DICT_SIZE..=MAX_DICT_SIZE {
+            let encoded = encode_dict_size(dict_size).unwrap_or_else(|error| {
+                panic!("cannot encode dictionary size {dict_size}: {error}")
+            });
+            let decoded = decode_dict_size(encoded).unwrap();
+            assert!(
+                decoded >= dict_size,
+                "header dictionary {decoded} is smaller than requested {dict_size}"
+            );
+        }
+
+        for encoded in 0..=u8::MAX {
+            if let Ok(dict_size) = decode_dict_size(encoded) {
+                assert_eq!(encode_dict_size(dict_size).unwrap(), encoded);
+            }
+        }
     }
 }

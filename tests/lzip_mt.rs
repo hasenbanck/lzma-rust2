@@ -410,3 +410,38 @@ fn progress_cannot_be_set_after_writing_input() {
         .unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 }
+
+#[test]
+fn round_trip_custom_dictionary() {
+    let data = std::fs::read("tests/data/pg100.txt").unwrap();
+    let mut options = LzipOptions::with_preset(0);
+    options.lzma_options.dict_size = 5119;
+    options.member_size = NonZeroU64::new(data.len() as u64);
+
+    let mut writer = LzipWriter::new(Vec::new(), options.clone());
+    writer.write_all(&data).unwrap();
+    let single = writer.finish().unwrap();
+
+    let mut writer = LzipWriterMt::new(Vec::new(), options, 2).unwrap();
+    writer.write_all(&data).unwrap();
+    let multi = writer.finish().unwrap();
+
+    for compressed in [single, multi] {
+        let mut output = Vec::new();
+        let result = LzipReader::new(compressed.as_slice()).read_to_end(&mut output);
+        assert!(
+            result.is_ok(),
+            "single-threaded custom dictionary decode failed: {result:?}"
+        );
+        assert!(output == data);
+
+        output.clear();
+        let mut reader = LzipReaderMt::new(Cursor::new(compressed), 2).unwrap();
+        let result = reader.read_to_end(&mut output);
+        assert!(
+            result.is_ok(),
+            "multi-threaded custom dictionary decode failed: {result:?}"
+        );
+        assert!(output == data);
+    }
+}
