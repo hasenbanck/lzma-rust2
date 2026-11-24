@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use lzma_rust2::{XzOptions, XzReader, XzReaderMt, XzWriterMt};
+use lzma_rust2::{CheckType, XzOptions, XzReader, XzReaderMt, XzWriter, XzWriterMt};
 
 static EXECUTABLE: &str = "tests/data/executable.exe";
 static PG100: &str = "tests/data/pg100.txt";
@@ -316,6 +316,53 @@ fn decode_mt(compressed: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut uncompressed = Vec::new();
     reader.read_to_end(&mut uncompressed)?;
     Ok(uncompressed)
+}
+
+#[test]
+fn block_checksums_are_verified() {
+    for (check_type, checksum_size) in [
+        (CheckType::None, 0),
+        (CheckType::Crc32, 4),
+        (CheckType::Crc64, 8),
+        (CheckType::Sha256, 32),
+    ] {
+        for data in [b"Hello, world!".as_slice(), b"0123456789abcdef"] {
+            let mut options = XzOptions::with_preset(1);
+            options.set_check_sum_type(check_type);
+            let mut writer = XzWriter::new(Vec::new(), options).unwrap();
+            writer.write_all(data).unwrap();
+            let compressed = writer.finish().unwrap();
+            assert_eq!(decode_mt(&compressed).unwrap(), data);
+
+            let header_end = 12 + (compressed[12] as usize + 1) * 4;
+            assert_eq!(compressed[header_end], 0x01, "expected a stored chunk");
+            let mut damaged = compressed.clone();
+            damaged[header_end + 3] ^= 1;
+            if check_type == CheckType::None {
+                let mut expected = data.to_vec();
+                expected[0] ^= 1;
+                assert_eq!(decode_mt(&damaged).unwrap(), expected);
+                continue;
+            }
+
+            let footer = &compressed[compressed.len() - 12..];
+            let index_size =
+                (u32::from_le_bytes(footer[4..8].try_into().unwrap()) as usize + 1) * 4;
+            let checksum_start = compressed.len() - 12 - index_size - checksum_size;
+            let mut bad_checksum = compressed.clone();
+            bad_checksum[checksum_start] ^= 1;
+
+            for broken in [&damaged, &bad_checksum] {
+                let mut output = Vec::new();
+                let st_error = XzReader::new(broken.as_slice(), false)
+                    .read_to_end(&mut output)
+                    .unwrap_err();
+                let mt_error = decode_mt(broken).unwrap_err();
+                assert_eq!(st_error.kind(), std::io::ErrorKind::InvalidData);
+                assert_eq!(mt_error.kind(), st_error.kind(), "{check_type:?}");
+            }
+        }
+    }
 }
 
 #[test]
