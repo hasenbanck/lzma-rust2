@@ -13,7 +13,10 @@ use std::{
 /// Interval for checking worker errors while waiting for results.
 const ERROR_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
-use super::{BlockHeader, CheckType, StreamFooter, StreamHeader, create_filter_chain, parse_index};
+use super::{
+    BlockHeader, CheckType, ChecksumCalculator, StreamFooter, StreamHeader, create_filter_chain,
+    parse_index,
+};
 use crate::{
     ByteReader, Read, error_invalid_data, error_out_of_memory, set_error,
     work_queue::{WorkStealingQueue, WorkerHandle},
@@ -538,6 +541,12 @@ fn decompress_xz_block(
         return Err(error_invalid_data(
             "XZ block decompresses to a size other than the index records",
         ));
+    }
+
+    let mut checksum_calculator = ChecksumCalculator::new(check_type);
+    checksum_calculator.update(&decompressed_data);
+    if !checksum_calculator.verify(&block_data[block_data.len() - checksum_size..]) {
+        return Err(error_invalid_data("invalid block checksum"));
     }
 
     Ok(decompressed_data)
