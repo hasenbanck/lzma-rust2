@@ -7,10 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.26.0 - 2026-11-25
+
 ### Added
 
 - Add `set_progress` to `Lzma2WriterMt`, `XzWriterMt` and `LzipWriterMt` to count the uncompressed bytes passed
-  to the encoder, on targets with 64-bit atomics.
+  to the encoder, on targets with 64-bit atomics. Thanks @leehunz (#151)
 
 ### Fixed
 
@@ -21,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add `memory_usage` to `XzStream`, `LzmaStream`, `LzipStream` and `Lzma2Stream` to read the memory the decoder needs.
+- Add `memory_usage` to `XzStream`, `LzmaStream`, `LzipStrteam` and `Lzma2Stream` to read the memory the decoder needs.
 - Add `mem_limit` and `set_mem_limit` to `XzStream`, `LzmaStream`, `LzipStream` and `Lzma2Stream`. A memory limit error
   no longer fails the stream, so raising the limit and calling `process` again continues.
 
