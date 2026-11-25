@@ -275,21 +275,30 @@ mod tests {
         assert!(encode_dict_size(1024).is_err());
         assert!(encode_dict_size(1024 * 1024 * 1024).is_err());
 
-        for dict_size in MIN_DICT_SIZE..=MAX_DICT_SIZE {
-            let encoded = encode_dict_size(dict_size).unwrap_or_else(|error| {
-                panic!("cannot encode dictionary size {dict_size}: {error}")
-            });
-            let decoded = decode_dict_size(encoded).unwrap();
-            assert!(
-                decoded >= dict_size,
-                "header dictionary {decoded} is smaller than requested {dict_size}"
-            );
+        let mut sizes: alloc::vec::Vec<_> = (0..=u8::MAX)
+            .filter_map(|encoded| decode_dict_size(encoded).ok().map(|size| (size, encoded)))
+            .collect();
+        sizes.sort_unstable();
+
+        let mut prev = MIN_DICT_SIZE - 1;
+        for &(curr, _) in &sizes {
+            for dict_size in [prev + 1, curr - 1, curr, curr + 1] {
+                if !(MIN_DICT_SIZE..=MAX_DICT_SIZE).contains(&dict_size) {
+                    assert!(encode_dict_size(dict_size).is_err());
+                    continue;
+                }
+                let &(_, expected_byte) =
+                    sizes.iter().find(|&&(size, _)| size >= dict_size).unwrap();
+                let encoded = encode_dict_size(dict_size).unwrap_or_else(|error| {
+                    panic!("cannot encode dictionary size {dict_size}: {error:?}")
+                });
+                assert_eq!(encoded, expected_byte, "dictionary size {dict_size}");
+            }
+            prev = curr;
         }
 
-        for encoded in 0..=u8::MAX {
-            if let Ok(dict_size) = decode_dict_size(encoded) {
-                assert_eq!(encode_dict_size(dict_size).unwrap(), encoded);
-            }
+        for dict_size in [0, MIN_DICT_SIZE - 1, MAX_DICT_SIZE + 1, u32::MAX] {
+            assert!(encode_dict_size(dict_size).is_err());
         }
     }
 }
